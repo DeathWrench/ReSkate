@@ -457,4 +457,4 @@ void save_cosmetic_hook(std::uintptr_t manager, void* record, const char* raw_id
         else cosmetic_diagnostic("save", "unchanged", id);
     } catch (...) { dingosdk::logging::event(dingosdk::logging::Channel::customization, "{\"event\":\"local_cosmetic_loadout_save_failed\"}"); }
 }
-}
+
