@@ -80,11 +80,8 @@ struct PlacementRecord {
 PlacementRecord read_placements(const fs::path& file);
 void write_placements(const fs::path& file, const PlacementRecord& record);
 
-// `storeKnown`: the content cache that says what the game's store sells is
-// installed, so the mods were checked for copies of store items; a patch built
-// without it is built again once it is there.
 std::string merge_fingerprint(const Catalog& catalog, const std::vector<const Mod*>& mods,
-                              const std::map<const Mod*, RelativeFiles>& modFiles, bool storeKnown);
+                              const std::map<const Mod*, RelativeFiles>& modFiles);
 inline constexpr wchar_t stamp_file[] = L"reskate-merge.stamp";
 std::optional<MergeReport> previous_merge(const fs::path& output, const std::string& fingerprint);
 void write_stamp(const fs::path& output, const std::string& fingerprint, const MergeReport& report);
