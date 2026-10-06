@@ -80,8 +80,11 @@ struct PlacementRecord {
 PlacementRecord read_placements(const fs::path& file);
 void write_placements(const fs::path& file, const PlacementRecord& record);
 
+// `storeKnown`: the content cache that says what the game's store sells is
+// installed, so the mods were checked for copies of store items; a patch built
+// without it is built again once it is there.
 std::string merge_fingerprint(const Catalog& catalog, const std::vector<const Mod*>& mods,
-                              const std::map<const Mod*, RelativeFiles>& modFiles);
+                              const std::map<const Mod*, RelativeFiles>& modFiles, bool storeKnown);
 inline constexpr wchar_t stamp_file[] = L"reskate-merge.stamp";
 std::optional<MergeReport> previous_merge(const fs::path& output, const std::string& fingerprint);
 void write_stamp(const fs::path& output, const std::string& fingerprint, const MergeReport& report);
@@ -177,13 +180,19 @@ struct AssetOverride {
     // Present for a Lua resource replacement: its identity and metadata must
     // travel with the script bytes, including source and bytecode sizes.
     std::optional<fb::BundleAsset> resource;
+    // The documents the changed EBX refers to that its mod added to the bundle it
+    // made the change in, by their guids. They go wherever the change goes: the
+    // game keeps a list in more bundles than one, each with what the list names.
+    std::set<fb::Guid> names;
 };
 inline constexpr std::uint32_t luaScriptResourceType = 0xEC383B87;
 // An EBX asset a mod added to one of the game's bundles, or a resource it added
 // under the same name as such an asset (a wave's sound-bank). Maps carry their own
 // copy of a bundle like bam_coregameassets, and that copy loads instead of the
 // game's on their levels; an edit to a list there (the master music playlist)
-// propagates as a change, so the asset it now names has to come along too.
+// propagates as a change, so the asset it now names has to come along too. The
+// game also keeps such a list in more bundles than the one the mod put its
+// assets in, and a copy of any of those takes the change the same way.
 struct AssetAddition {
     std::string mod;
     fb::BundleAsset asset;
@@ -192,6 +201,10 @@ struct AssetAddition {
     // bundle in that same TOC merges with the mod's own bundle and already has the asset;
     // only copies in other superbundles (a map's level TOC) need it carried.
     std::string toc;
+    // For an EBX: its document's guid, which is what a list names it by, and the
+    // guids of the documents it refers to in turn (a song names its wave).
+    fb::Guid file;
+    std::vector<fb::Guid> names;
 };
 struct AssetOverrides {
     // By lower-case asset name, then the game's sha1 the change replaces.
