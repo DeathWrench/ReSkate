@@ -230,7 +230,7 @@ std::optional<std::uint64_t> parse_scoring(std::string_view text) {
 }
 std::string config_error(const ServerConfig &c) {
     using namespace multiplayer;
-    if (c.name.empty() || c.name.size() > 64 || !valid_member_name(c.name)) return "name must be 1 to 64 characters.";
+    if (!valid_server_name(c.name)) return std::string("name must be ") + server_name_rule + ".";
     if (c.map.empty() || !valid_map_destination(map_destination(c.map)))
         return "map \"" + c.map + "\" is not a known map. Use a name like \"San Vansterdam\", or put the map's mod "
                "folder in Mods next to the server.";
