@@ -340,7 +340,12 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                 Source source;
                 source.root = mod->directory;
                 source.placement = &placements[mod];
-                source.toc = fb::read_toc(read_file(mod->directory / fs::path(relative)));
+                try {
+                    source.toc = fb::read_toc(read_file(mod->directory / fs::path(relative)));
+                } catch (const std::exception& failure) { // the mod's problem: the catalog merges again without it
+                    report.problems[mod->name].push_back(relative + " could not be read: " + failure.what());
+                    continue;
+                }
                 sources.push_back(std::move(source));
             }
             auto merged = combine(baseRoot / fs::path(relative), baseRoot, sources, report,
