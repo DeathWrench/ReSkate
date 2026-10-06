@@ -1,5 +1,6 @@
 #include "server_config.h"
 #include "Engine/Core/Json/json.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "Extension/Multiplayer/Net/protocol.h"
 #include "Engine/Game/World/world_names.h"
 #include <algorithm>
@@ -207,7 +208,7 @@ void save_config(const ServerConfig &c) {
     {
         std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
         out << to_json(c).dump(2) << '\n';
-        if (!out) throw std::runtime_error("Cannot write " + temporary.string());
+        if (!out) throw std::runtime_error("Cannot write " + path_utf8(temporary));
     }
     std::filesystem::rename(temporary, c.file);
 }
