@@ -238,6 +238,11 @@ login name.
 To turn it off, untick **Send crash reports** in the launcher's Settings (ADVANCED), or set the
 environment variable `RESKATE_CRASH_REPORTING=0`.
 
+ReSkate also keeps the game off EA's online services: the game's own crash reports, telemetry and
+remote configuration requests are turned off and blocked. Fast-travel artwork still comes from EA's
+image CDN (`dingo-dev-assets.akamaized.net`), which only downloads images.
+[contrib/ea-watch.ps1](contrib/ea-watch.ps1) shows what the game connects to, if you want to check.
+
 ## Third-party code
 
 ReSkate uses Dear ImGui, Microsoft Detours, RapidJSON, spdlog, SQLite, LZ4, Zstandard, miniz, bcdec and

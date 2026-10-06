@@ -6,6 +6,7 @@
 #include "Extension/Boot/steam_restart_guard.h"
 #include "Extension/Boot/user_data_redirect.h"
 #include "Extension/Boot/ea_app_block.h"
+#include "Extension/Boot/ea_service_block.h"
 #include "Extension/Assets/native_patch_support.h"
 #include "Extension/Assets/mod_layers.h"
 #include "Extension/Assets/loose_files.h"
@@ -61,6 +62,8 @@ bool initialize_bootstrap(std::uintptr_t base) {
     if (!stage(Channel::runtime, "Separate game user data", ready, error)) return false;
     error.clear(); ready = start_ea_app_block(error);
     if (!stage(Channel::runtime, "EA app launch block", ready, error)) return false;
+    error.clear(); ready = start_ea_service_block(error);
+    if (!stage(Channel::runtime, "EA online services block", ready, error)) return false;
     error.clear(); ready = start_steam_restart_guard(error);
     return stage(Channel::runtime, launcher::offline_mode() ? "Offline Steam" : "Steam restart guard", ready, error);
 }
