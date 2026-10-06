@@ -29,7 +29,6 @@ constexpr std::string_view root_level = "win32/levels/game/dingolevel_root/dingo
 // installed while the game runs has a mounted copy to replace in memory
 // (Extension/Assets/live_mods.cpp) and one disabled can be swapped back out.
 constexpr std::array<std::string_view, 2> launch_superbundles{"Win32/globals.toc", "Win32/items.toc"};
-<<<<<<< HEAD
 
 // Each enabled mod that adds copies of items the game's store sells
 // (mod_store_copies.h) gets a problem; true when any does. The problem says no
@@ -45,8 +44,6 @@ bool store_copy_problems(const Catalog& catalog, MergeReport& report) {
     for (const auto& source : found.mods) report.problems[source.mod].emplace_back(store_copies_problem);
     return !found.mods.empty();
 }
-=======
->>>>>>> parent of de631ad (leave out mods that copy store items, chat badge check)
 } // namespace
 
 MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, const MergeOptions& options) noexcept {
