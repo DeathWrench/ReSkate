@@ -399,12 +399,20 @@ void special_page(SkateMenu &menu, const Model &model, const CallbacksV3 &) {
         ImGui::PushID(item);
         begin_card(menu, title.c_str(), title.c_str());
         // The options in the order shown; a style's mode is 0 what the list gives, 1 off, 2 a
-        // gradient between the player's two colours, 3 their one colour.
-        static constexpr std::array<int, 4> modes{0, 2, 3, 1};
-        int option = static_cast<int>(std::find(modes.begin(), modes.end(), style.mode) - modes.begin()) % 4;
+        // gradient between the player's two colours, 3 their one colour, 4 the rainbow (the
+        // staff's to pick).
         field(menu, "Color");
-        if (choice(menu, "mode", option, {mp.identity_animation.c_str(), "GRADIENT", "SOLID", "OFF"}, shown))
-            send(modes[static_cast<std::size_t>(option)], style.speed);
+        if (mp.identity_rainbow) {
+            static constexpr std::array<int, 5> modes{0, 4, 2, 3, 1};
+            int option = static_cast<int>(std::find(modes.begin(), modes.end(), style.mode) - modes.begin()) % 5;
+            if (choice(menu, "mode", option, {mp.identity_animation.c_str(), "RAINBOW", "GRADIENT", "SOLID", "OFF"}, shown))
+                send(modes[static_cast<std::size_t>(option)], style.speed);
+        } else {
+            static constexpr std::array<int, 4> modes{0, 2, 3, 1};
+            int option = static_cast<int>(std::find(modes.begin(), modes.end(), style.mode) - modes.begin()) % 4;
+            if (choice(menu, "mode", option, {mp.identity_animation.c_str(), "GRADIENT", "SOLID", "OFF"}, shown))
+                send(modes[static_cast<std::size_t>(option)], style.speed);
+        }
         if (style.mode == 2 || style.mode == 3) {
             const bool gradient = style.mode == 2;
             field(menu, gradient ? "Colors" : "Pick", gradient ? "The two colors it moves between. Click one to change it."
@@ -436,7 +444,7 @@ void special_page(SkateMenu &menu, const Model &model, const CallbacksV3 &) {
             }
         }
         // A colour that stands still has no speed.
-        if (style.mode == 0 || style.mode == 2) {
+        if (style.mode == 0 || style.mode == 2 || style.mode == 4) {
             int speed = style.speed;
             field(menu, "Speed");
             if (choice(menu, "speed", speed, {"NORMAL", "SLOW", "FAST"}, shown)) send(style.mode, speed);

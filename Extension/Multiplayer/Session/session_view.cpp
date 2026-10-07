@@ -177,18 +177,22 @@ void publish(Session &s, const NativeFrame *local) {
             std::tie(view.identity_tag_colour, view.identity_tag) = mark_role(*mark);
             view.identity_animation =
                 *mark == IdentityList::developer ? "RAINBOW" : *mark == IdentityList::content_creator ? "RED" :
-                *mark == IdentityList::centrix ? "BLUE" : "GOLD";
+                *mark == IdentityList::centrix ? "BLUE" : *mark == IdentityList::staff ? "GREEN" : "GOLD";
+            // A developer's standard is the rainbow already.
+            view.identity_rainbow = *mark == IdentityList::staff;
             const auto styles = developer_hoodie_detail::own_styles.load();
             const auto standard = developer_hoodie_detail::standard_picks(*mark);
             view.identity_styles.resize(styles.size());
             for (std::size_t i = 0; i < styles.size(); ++i) {
                 // A cosmetic never given colours shows its list's own in the pickers.
-                const bool picked = styles[i].mode == MarkMode::gradient || styles[i].mode == MarkMode::solid ||
-                                    styles[i].from != styles[i].to || styles[i].from != std::array<std::uint8_t, 3>{};
+                // The rainbow has no colours of its own to show either.
+                const bool rainbow = view.identity_rainbow && rainbow_style(styles[i]);
+                const bool picked = !rainbow && (styles[i].mode == MarkMode::gradient || styles[i].mode == MarkMode::solid ||
+                                                 styles[i].from != styles[i].to || styles[i].from != std::array<std::uint8_t, 3>{});
                 const auto &from = picked ? styles[i].from : standard.first, &to = picked ? styles[i].to : standard.second;
                 auto &shown = view.identity_styles[i];
                 shown.name = mark_item_names[i];
-                shown.mode = static_cast<int>(styles[i].mode);
+                shown.mode = rainbow ? 4 : static_cast<int>(styles[i].mode);
                 shown.speed = styles[i].speed;
                 for (std::size_t part = 0; part < 3; ++part)
                     shown.from[part] = static_cast<float>(from[part]) / 255.f, shown.to[part] = static_cast<float>(to[part]) / 255.f;
@@ -261,7 +265,16 @@ void publish(Session &s, const NativeFrame *local) {
     view.browser_status = lobby.browser;
     // Dedicated servers first: they are always up and never a stranger's own session.
     view.lobbies = s.servers.rows();
+    // Looked up as the list is shown: the team's list can arrive, or change, after a server was found.
+    for (auto &server : view.lobbies) server.official = official_server(server.id);
     view.lobbies.insert(view.lobbies.end(), lobby.rows.begin(), lobby.rows.end());
+    // Steam friends by the public server or lobby their game says they are in.
+    if (const auto social = steam_social_snapshot())
+        for (const auto &player : social->friends) {
+            if (!player.session) continue;
+            const auto row = std::find_if(view.lobbies.begin(), view.lobbies.end(), [&](const auto &entry) { return entry.id == player.session; });
+            if (row != view.lobbies.end() && row->friends.size() < 16) row->friends.push_back(player.name.empty() ? std::string("A friend") : player.name);
+        }
     view.status = s.status;
     view.native_status = s.native_status;
     view.audio_captured = captured_audio_frames();
@@ -540,6 +553,7 @@ std::pair<std::uint32_t, std::string> mark_role(IdentityList list) {
     case IdentityList::developer: return {nametag_developer, "Dev"};
     case IdentityList::content_creator: return {nametag_creator, "Creator"};
     case IdentityList::centrix: return {nametag_centrix, "Centrix"};
+    case IdentityList::staff: return {nametag_staff, "Staff"};
     default: return {nametag_homie, "Homie"};
     }
 }

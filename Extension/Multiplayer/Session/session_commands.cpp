@@ -1,4 +1,5 @@
 #include "session_internal.h"
+#include "Extension/Multiplayer/Steam/steam_social.h"
 #include "Extension/Multiplayer/Hud/native_indicators.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
 #include "Extension/Multiplayer/Hud/custom_nametags.h"
@@ -350,19 +351,28 @@ std::string edit_own_items(Session &, std::string_view argument) {
 std::string edit_mark_style(Session &, std::string_view argument) {
     std::istringstream in{std::string(argument)};
     unsigned item{}, mode{}, from{}, to{}, speed{};
-    if (!(in >> item >> mode >> std::hex >> from >> to >> std::dec >> speed) || item >= mark_items || mode > 3 ||
+    if (!(in >> item >> mode >> std::hex >> from >> to >> std::dec >> speed) || item >= mark_items || mode > 4 ||
         from > 0xffffff || to > 0xffffff || speed > 2)
         return "That is not a cosmetic style.";
+    // Mode 4, the rainbow, is the staff's to pick (a developer's standard is it already). It is
+    // kept, and sent, as a solid colour older builds can show (rainbow_style).
+    const auto social = steam_social_snapshot();
+    const auto mark = social ? identity_mark(social->local.id) : std::nullopt;
+    if (mode == 4 && mark != IdentityList::staff) return "The rainbow is not one of your styles.";
     const auto colour = [](unsigned value) {
         return std::array<std::uint8_t, 3>{static_cast<std::uint8_t>(value >> 16), static_cast<std::uint8_t>(value >> 8),
                                            static_cast<std::uint8_t>(value)};
     };
     auto styles = developer_hoodie_detail::own_styles.load();
-    styles[item] = {static_cast<MarkMode>(mode), colour(from), colour(to), static_cast<std::uint8_t>(speed)};
+    styles[item] = {static_cast<MarkMode>(mode == 4 ? 3 : mode), colour(from), colour(to), static_cast<std::uint8_t>(speed)};
+    if (mode == 4) styles[item].from = developer_hoodie_detail::standard_picks(*mark).first, styles[item].to = rainbow_marker;
+    // A solid colour whose unused second colour happens to be the rainbow's marker is not one.
+    else if (rainbow_style(styles[item])) styles[item].to[2] ^= 1;
     developer_hoodie_detail::own_styles.store(styles);
     profile_runtime::set_local_values({{"IdentityStyles", Json(developer_hoodie_detail::mark_styles_text(styles))}});
     return std::string(mark_item_names[item]) +
-           (mode == 1 ? ": off." : mode == 2 ? ": your gradient." : mode == 3 ? ": your color." : ": back to the usual.");
+           (mode == 1 ? ": off." : mode == 2 ? ": your gradient." : mode == 3 ? ": your color." : mode == 4 ? ": rainbow."
+                                                                                                            : ": back to the usual.");
 }
 // Hidden chat still receives lines, so showing it again brings back the conversation.
 std::string edit_chat_visible(Session &s, std::string_view argument) {
@@ -759,8 +769,12 @@ std::string command(std::string_view action, std::string_view argument, std::str
             return s.lobbies.status().browser;
         }
         if (action == "join-lobby" || action == "join-friend-lobby") {
-            if (s.mode != Mode::off) {
-                s.status = "Leave your current session before joining another lobby.";
+            // A guest can hop straight to a server or lobby they pick in the browser: they leave
+            // this one first. A host ends everyone's session by leaving, so they end it themselves;
+            // and a Steam friend's join offer, which can arrive unasked, never replaces a session.
+            if (s.mode != Mode::off && (s.mode != Mode::join || action != "join-lobby")) {
+                s.status = s.mode == Mode::join ? "Leave your current session before joining another lobby."
+                                                : "End your session before joining another lobby.";
                 publish(s);
                 return s.status;
             }
@@ -770,10 +784,27 @@ std::string command(std::string_view action, std::string_view argument, std::str
             const auto result = std::from_chars(argument.data(), argument.data() + argument.size(), id);
             if (result.ec != std::errc{} || result.ptr != argument.data() + argument.size() || !id)
                 return "Invalid lobby selection. Refresh the browser.";
-            // A dedicated server's row carries its join code.
+            if (s.mode == Mode::join) {
+                if (id == s.joined_public_lobby) return "You are already there.";
+                stop(s, "Switching servers...");
+            }
+            // A dedicated server's row carries its join code. It is a public listing like a
+            // lobby's: friends are told the player is there, and can follow them in.
             if (const auto *server = s.servers.find(id)) {
                 const auto code = server->code;
-                return command("join", code, input.password);
+                auto reply = command("join", code, input.password);
+                if (s.mode == Mode::join) {
+                    s.joined_public_lobby = id;
+                    publish(s);
+                }
+                return reply;
+            }
+            // A friend on a server this game has not listed yet: only the list has its code.
+            if (game_server_steam_id(id)) {
+                s.servers.refresh(now_us());
+                s.status = "That server is not in your server list yet. Open the server browser and join it there.";
+                publish(s);
+                return s.status;
             }
             if (!s.transport.open())
                 return s.transport.status().detail;
@@ -845,6 +876,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
             invitation = parse_invite(argument);
             if (!invitation)
                 return refuse("Invalid join code. Paste the complete SteamID-session code from the host.");
+            if (blocked_server(invitation->steam_id)) return refuse(std::string(blocked_server_notice));
         }
         stop(s, "Starting multiplayer...");
         s.chat.clear(); // A new session starts with an empty chat.

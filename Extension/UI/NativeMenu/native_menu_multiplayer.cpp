@@ -128,7 +128,9 @@ void process_actions(const Context& context, const MultiplayerModel& model) {
         } else {
             std::string command = cmd, argument = request.argument, password;
             if (cmd == "host" || cmd == "join" || cmd == "join-lobby") {
-                if (model.active || model.lobby_joining) { s.feedback = "Leave the current session before connecting."; continue; }
+                // From a session they joined a player can hop to a server in the list (can_join).
+                const bool hop = cmd == "join-lobby" && model.active && !model.hosting && !model.echo;
+                if ((model.active && !hop) || model.lobby_joining) { s.feedback = "Leave the current session before connecting."; continue; }
                 if (cmd == "host") {
                     if (!model.local_ready) { s.feedback = "Load a map before hosting."; continue; }
                     const auto name = input_text(context, "host-name");
@@ -206,9 +208,10 @@ void render_section(const Context& context, const MultiplayerModel& model, Secti
         for (const auto* lobby : result.lobbies) {
             const auto id = std::to_string(lobby->id);
             const bool available = menu_view::can_join(model, *lobby);
-            const auto title = menu_view::caption(lobby->name) + (lobby->dedicated ? "   [SERVER]" : "") + "\n" + menu_view::caption(menu_view::map_name(lobby->map, levels), 32) +
+            const auto title = menu_view::caption(lobby->name) + (lobby->official ? "   [OFFICIAL]" : lobby->dedicated ? "   [SERVER]" : "") + "\n" + menu_view::caption(menu_view::map_name(lobby->map, levels), 32) +
                 "   /   " + std::to_string(lobby->players) + "/" + std::to_string(lobby->capacity) +
-                " skaters   /   " + (lobby->players >= lobby->capacity ? "FULL" : lobby->password_required ? "PASSWORD" : "OPEN");
+                " skaters   /   " + (lobby->players >= lobby->capacity ? "FULL" : lobby->password_required ? "PASSWORD" : "OPEN") +
+                (lobby->friends.empty() ? std::string{} : "   /   WITH " + menu_view::caption(lobby_friends_text(*lobby), 40));
             add_button(context, main, "lobby-" + id, title, available ? "join-lobby" : "", id);
         }
         s.row_width = side_width;
@@ -220,7 +223,8 @@ void render_section(const Context& context, const MultiplayerModel& model, Secti
         add_button(context, side, "refresh", model.lobby_searching ? "Searching..." : "Refresh lobbies",
             model.lobby_searching ? "" : "browse", "", true);
         add_text(context, side, "browser-status", s.feedback.empty() ? model.browser_status : s.feedback);
-        if (!idle) add_text(context, side, "browser-connected", "Leave your session before joining another.");
+        if (!idle) add_text(context, side, "browser-connected", model.active && !model.hosting && !model.echo
+            ? "Pick another server to leave this one and join it." : "End your session before joining another.");
     } else if (section == Section::host) {
         add_text(context, main, "host-heading", "MAKE IT YOUR SESSION");
         add_text(context, main, "host-name-label", "LOBBY NAME");

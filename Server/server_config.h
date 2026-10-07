@@ -39,6 +39,10 @@ struct ServerConfig {
     std::string password;      // empty: anyone may join
     std::string welcome;       // sent to each player as they join
     bool listed = true;        // shown in the in-game server browser
+    // A Steam game server login token (steamcommunity.com/dev/managegameservers, app 3354750).
+    // With one the server signs in to its own account and keeps the same Steam ID every start,
+    // which is how the ReSkate team's list of official servers knows it. Empty: anonymous.
+    std::string steam_token;
     bool auto_update = true;   // install new releases when nobody is on
     bool global_bans = true;   // turn away players the ReSkate team has banned (global_bans.h)
     bool activity_log = true;  // console lines for throwdowns, objects and loading

@@ -13,16 +13,16 @@
 
 namespace dingosdk {
 constexpr unsigned max_map_rotation = 1440; // minutes a server's rotation keeps one map, at most
-// A dedicated server's name: 1 to 64 letters, digits, spaces and - _ [ ] ( ), with a
+// A dedicated server's name: 1 to 64 letters, digits, spaces and - _ / [ ] ( ), with a
 // letter or digit among them and no space at either end. A server refuses any other
 // name, and the server browser does not show one.
-inline constexpr char server_name_rule[] = "1 to 64 letters, numbers, spaces and - _ [ ] ( )";
+inline constexpr char server_name_rule[] = "1 to 64 letters, numbers, spaces and - _ / [ ] ( )";
 [[nodiscard]] constexpr bool valid_server_name(std::string_view name) noexcept {
     if (name.empty() || name.size() > 64 || name.front() == ' ' || name.back() == ' ') return false;
     bool named{};
     for (const auto c : name) {
         const bool word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
-        if (!word && std::string_view(" -_[]()").find(c) == std::string_view::npos) return false;
+        if (!word && std::string_view(" -_/[]()").find(c) == std::string_view::npos) return false;
         named |= word;
     }
     return named;
@@ -34,8 +34,19 @@ struct MultiplayerLobby {
     int players = 1, capacity = multiplayer_player_limit;
     // A dedicated server rather than a player's lobby: joined by its code.
     bool dedicated{};
+    // A dedicated server the ReSkate team runs (developer_identity.h): first in the browser.
+    bool official{};
     int ping = -1; // ms, when the server answered directly
+    // Steam friends skating there now, by name (steam_social.h).
+    std::vector<std::string> friends;
 };
+// "Ana, Ben and 2 more": the friends in a server, as a browser row has room for.
+inline std::string lobby_friends_text(const MultiplayerLobby &lobby, std::size_t named = 2) {
+    std::string text;
+    for (std::size_t i = 0; i < lobby.friends.size() && i < named; ++i) text += (i ? ", " : "") + lobby.friends[i];
+    if (lobby.friends.size() > named) text += " and " + std::to_string(lobby.friends.size() - named) + " more";
+    return text;
+}
 struct MultiplayerPlayer {
     std::uint64_t id{};
     std::string name;
@@ -86,7 +97,7 @@ struct MultiplayerChatLine {
     std::string name, text;
     bool local{};               // sent by this player
     // The sender's role, as their nametag shows it: its colour (IM_COL32 layout, 0 = none)
-    // and a tag shown in a box before the name ("Dev", "Creator", "Centrix", "Homie", "Admin", "Host", "Friend" or empty).
+    // and a tag shown in a box before the name ("Dev", "Staff", "Creator", "Centrix", "Homie", "Admin", "Host", "Friend" or empty).
     std::uint32_t color{};
     std::string tag;
     // With the chat filter on, `text` is masked and this is the line as sent (same length), so
@@ -142,7 +153,7 @@ struct MultiplayerModel {
     float chat_bubbles_distance{40.f};
     float chat_bubbles_duration{5.f};
     int chat_bubbles_history{3};
-    // Local: the tag the ReSkate backend gives this player ("Dev", "Creator", "Centrix" or "Homie"; empty
+    // Local: the tag the ReSkate backend gives this player ("Dev", "Staff", "Creator", "Centrix" or "Homie"; empty
     // for most players) and its role colour, and whether they show it, and the animated items
     // that come with it, to everyone.
     std::string identity_tag;
@@ -150,15 +161,16 @@ struct MultiplayerModel {
     bool identity_tag_shown{true}, identity_items_shown{true};
     // Local: how each of this player's marked cosmetics is coloured, for the Special page: what
     // they wear in each slot ("Top", "Shoes", ...), then the parts of their board. mode: 0 what
-    // their list gives (`identity_animation`: "RAINBOW", "RED", "BLUE" or "GOLD"), 1 off, 2 a gradient
-    // between the two colours they picked, 3 the first of them alone. speed: 0 normal, 1 slow,
-    // 2 fast.
+    // their list gives (`identity_animation`: "RAINBOW", "GREEN", "RED", "BLUE" or "GOLD"), 1 off, 2 a gradient
+    // between the two colours they picked, 3 the first of them alone, 4 the rainbow (offered
+    // when `identity_rainbow`: to the staff). speed: 0 normal, 1 slow, 2 fast.
     struct IdentityStyle {
         std::string name;
         int mode{}, speed{};
         std::array<float, 3> from{}, to{};
     };
     std::vector<IdentityStyle> identity_styles;
+    bool identity_rainbow{};
     std::string identity_animation;
     float voice_range = default_voice_range;  // how far the host (or server) forwards proximity voice
     // In a dedicated server's session: the server is the host but not a player.

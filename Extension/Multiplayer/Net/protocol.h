@@ -94,14 +94,17 @@ enum class PartyAction : std::uint8_t {
 };
 bool valid_party_request(PartyAction action, std::uint64_t player) noexcept;
 // Steam accounts in the public universe. Players are individual accounts; a
-// dedicated server signs in anonymously as a game server (type 3 or 4) and gets
-// a new ID each time it starts.
+// dedicated server is a game server: anonymous (type 4) with a new ID each time
+// it starts, or signed in with a login token (type 3) with the same ID always.
 inline bool individual_steam_id(std::uint64_t id) noexcept {
     return (id >> 56) == 1 && ((id >> 52) & 15) == 1 && (id & 0xffffffffULL);
 }
 inline bool game_server_steam_id(std::uint64_t id) noexcept {
     const auto type = (id >> 52) & 15;
     return (id >> 56) == 1 && (type == 3 || type == 4) && (id & 0xffffffffULL);
+}
+inline bool persistent_server_steam_id(std::uint64_t id) noexcept {
+    return game_server_steam_id(id) && ((id >> 52) & 15) == 3;
 }
 // A player's own name as sent in their hello: at most this many bytes.
 constexpr std::size_t max_member_name = 64;

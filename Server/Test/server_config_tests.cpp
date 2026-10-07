@@ -48,8 +48,23 @@ int run() {
     const auto reloaded = load_config(file);
     check(reloaded.name == "Old Server" && !reloaded.boosts && reloaded.votes.map.percent == 60, "Values lost on rewrite");
 
-    // Server names: letters, digits, spaces and - _ [ ] ( ) only.
-    check(valid_server_name("Old Server") && valid_server_name("[EU] Skate_Park-2 (24x7)") && valid_server_name("a"),
+    // steam_token: empty (anonymous) unless set, kept on a rewrite, and only letters and digits.
+    // (The maps are not loaded yet, so config_error has another complaint: look for this one.)
+    const auto token_refused = [](const ServerConfig &c) { return config_error(c).find("steam_token") != std::string::npos; };
+    check(has("steam_token") && config.steam_token.empty() && !token_refused(config), "steam_token is not a new, empty setting");
+    auto tokened = reloaded;
+    tokened.steam_token = "0123456789ABCDEF0123456789ABCDEF";
+    save_config(tokened);
+    check(load_config(file).steam_token == tokened.steam_token && !token_refused(tokened), "steam_token was not kept");
+    tokened.steam_token = "not a token";
+    check(token_refused(tokened), "A steam_token with other characters was accepted");
+    tokened.steam_token = std::string(65, 'A');
+    check(token_refused(tokened), "An overlong steam_token was accepted");
+    save_config(reloaded);
+
+    // Server names: letters, digits, spaces and - _ / [ ] ( ) only.
+    check(valid_server_name("Old Server") && valid_server_name("[EU] Skate_Park-2 (24x7)") && valid_server_name("a") &&
+              valid_server_name("EU/West 24/7") && !valid_server_name("///") && !valid_server_name("a\\b"),
           "A plain server name was refused");
     check(!valid_server_name("") && !valid_server_name(std::string(65, 'a')) && !valid_server_name("Best! Server") &&
               !valid_server_name("caf\xC3\xA9") && !valid_server_name("a.b") && !valid_server_name("<b>x</b>") &&

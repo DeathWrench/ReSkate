@@ -4,6 +4,7 @@
 #include "Extension/Multiplayer/Net/protocol.h"
 #include "Engine/Game/World/world_names.h"
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -25,6 +26,7 @@ Json to_json(const ServerConfig &c) {
     root["password"] = c.password;
     root["welcome"] = c.welcome;
     root["listed"] = c.listed;
+    root["steam_token"] = c.steam_token;
     root["auto_update"] = c.auto_update;
     root["global_bans"] = c.global_bans;
     root["activity_log"] = c.activity_log;
@@ -124,6 +126,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.password = root.value("password", c.password);
     c.welcome = root.value("welcome", c.welcome);
     c.listed = root.value("listed", c.listed);
+    c.steam_token = root.value("steam_token", c.steam_token);
     c.auto_update = root.value("auto_update", c.auto_update);
     c.global_bans = root.value("global_bans", c.global_bans);
     c.activity_log = root.value("activity_log", c.activity_log);
@@ -232,6 +235,8 @@ std::optional<std::uint64_t> parse_scoring(std::string_view text) {
 std::string config_error(const ServerConfig &c) {
     using namespace multiplayer;
     if (!valid_server_name(c.name)) return std::string("name must be ") + server_name_rule + ".";
+    if (c.steam_token.size() > 64 || !std::all_of(c.steam_token.begin(), c.steam_token.end(), [](unsigned char ch) { return std::isalnum(ch); }))
+        return "steam_token must be a game server login token (letters and digits), or empty to sign in anonymously.";
     if (c.map.empty() || !valid_map_destination(map_destination(c.map)))
         return "map \"" + c.map + "\" is not a known map. Use a name like \"San Vansterdam\", or put the map's mod "
                "folder in Mods next to the server.";

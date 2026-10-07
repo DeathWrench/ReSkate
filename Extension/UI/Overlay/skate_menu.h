@@ -31,7 +31,7 @@ struct SkateMenu {
     std::optional<int> map_rotation_pending;                         // the rotation slider, likewise
     double map_rotation_until{};
     bool ban_confirm_on_server{};           // the Ban popup bans from a dedicated server
-    int multiplayer_lobby_sort = 0;
+    int multiplayer_lobby_sort = 1; // most players first
     float multiplayer_code_height = 0;  // what the join-by-code card took last frame
     // Bans: the manual add form, and the player a Ban button is asking about.
     std::array<char, 24> ban_id{};
