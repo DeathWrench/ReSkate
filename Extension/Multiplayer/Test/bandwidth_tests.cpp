@@ -135,6 +135,44 @@ void rate_checks() {
           pose_interval(49*49, 100000) == 50000, "Near-rate hysteresis failed");
     check(pose_interval(171*171, 100000) == 200000 && pose_interval(160*160, 200000) == 200000 &&
           pose_interval(149*149, 200000) == 100000, "Far-rate hysteresis failed");
+    {
+        // A crowd: no limit while everyone fits at the full rate, then the nearest at full,
+        // the next at half, the rest at low, within the budget.
+        std::vector<float> few(20), crowd(49), packed(127);
+        for (std::size_t i = 0; i < packed.size(); ++i) {
+            const auto d = static_cast<float>((packed.size() - i) * (packed.size() - i)); // farthest first
+            packed[i] = d;
+            if (i < crowd.size()) crowd[i] = d;
+            if (i < few.size()) few[i] = d;
+        }
+        const auto none = crowd_limits(few, 30);
+        // The default leaves twenty players in one place at the full rate, each to each.
+        std::vector<float> twenty(crowd.begin(), crowd.begin() + 19);
+        check(crowd_limits(twenty, 30).half == none.half && dingosdk::valid_crowd_budget(0) &&
+              dingosdk::valid_crowd_budget(dingosdk::crowd_pose_budget) && !dingosdk::valid_crowd_budget(50),
+              "The default crowd budget slowed twenty players, or a bad one was valid");
+        check(crowd_interval(33333, 1e9f, none) == 33333, "A small group was limited");
+        const auto count = [](std::span<const float> all, const CrowdLimits &limits, unsigned tps) {
+            unsigned sent{};
+            for (const auto d : all) sent += 1000000U / crowd_interval(dingosdk::multiplayer_pose_interval(tps), d, limits);
+            return sent;
+        };
+        for (const unsigned tps : {20U, 30U, 60U, 120U}) {
+            const auto limits = crowd_limits(crowd, tps, 600);
+            const auto sent = count(crowd, limits, tps);
+            check(sent <= 602 && sent > 450, "A crowd was not sent within the budget");
+            check(crowd_interval(dingosdk::multiplayer_pose_interval(tps), crowd.front(), limits) == dingosdk::multiplayer_pose_interval(tps) &&
+                  crowd_interval(dingosdk::multiplayer_pose_interval(tps), crowd.back(), limits) == 200000,
+                  "A crowd's nearest and farthest were not sent at the full and low rates");
+            check(limits.half < limits.low, "A crowd had no half-rate ring");
+        }
+        // Too many for the budget even at the low rate: all at the low rate, which is the floor.
+        const auto all_low = crowd_limits(packed, 30, 600);
+        check(count(packed, all_low, 30) == packed.size() * 5, "An over-full crowd was not sent at the low rate");
+        // Distance still slows what the crowd limit would send faster.
+        check(crowd_interval(200000, 0, none) == 200000 && crowd_interval(100000, 0, crowd_limits(crowd, 30, 600)) == 100000,
+              "A crowd limit sped a far player up");
+    }
     for (auto interval : {8333U, 16666U, 33333U, 50000U, 100000U, 200000U}) {
         PoseBuffer buffer;
         auto p = fixture(); p.pose_interval_us = interval;

@@ -168,7 +168,7 @@ void process_actions(const Context& context, const MultiplayerModel& model) {
                 SecureZeroMemory(password.data(), password.size());
                 s.feedback = "Password is too long. Use a shorter password."; continue;
             }
-            if ((cmd == "kick" || cmd == "object-placement" || cmd == "clear-objects" || cmd == "world-layer-sync" ||
+            if ((cmd == "kick" || cmd == "object-placement" || cmd == "object-limit" || cmd == "clear-objects" || cmd == "world-layer-sync" ||
                  cmd == "voice-allow" || cmd == "noclip-allow" || cmd == "nobail-allow" || cmd == "boosts-allow" ||
                  cmd == "tuning-enforce") &&
                 !model.hosting) {
@@ -382,6 +382,15 @@ void render_section(const Context& context, const MultiplayerModel& model, Secti
                 ? std::string("Admins only") : std::string(object_placement_name(model.object_placement));
             add_button(context, side, "editor", "Object placement: " + placement,
                 model.hosting ? "object-placement" : "", "next", false, 136.f);
+            {
+                // The same round numbers as the overlay's list, one press each.
+                static constexpr std::array<unsigned, 7> limits{0, 10, 25, 50, 100, 250, 500};
+                const auto found = std::find(limits.begin(), limits.end(), model.object_limit);
+                const auto next = limits[found == limits.end() ? 0 : static_cast<std::size_t>(found - limits.begin() + 1) % limits.size()];
+                add_button(context, side, "object-limit",
+                    "Objects per player: " + (model.object_limit ? std::to_string(model.object_limit) : std::string("No limit")),
+                    model.hosting ? "object-limit" : "", next ? std::to_string(next) : std::string("off"), false, 136.f);
+            }
             if (model.hosting)
                 add_button(context, side, "clear-objects", "Delete all guest objects", "clear-objects", {}, false, 136.f);
             add_button(context, side, "guest-noclip", std::string("Guest noclip: ") + (model.guest_noclip ? "Allowed" : "Off"),

@@ -73,6 +73,8 @@ void stop(Session &s, std::string reason) {
     s.voice_policy = {};
     s.tps = multiplayer_default_tps;
     s.object_placement = ObjectPlacement::everyone;
+    s.object_limit = 0;
+    set_lobby_object_limit(0);
     s.server_admin = false;
     s.server_bans.clear();
     s.server_ban_total = 0;
@@ -501,13 +503,19 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
         if (local.ready && !p.render_failed) {
             const bool sampled = s.mode == Mode::echo ? p.poses.sample(now, p.render_pose)
                                                        : p.poses.sample_remote(now, p.render_pose);
+            // Nothing new from them for over a second (a stall here, at the host or on the way):
+            // their skater stays where it was for a while longer. Taking it down and building
+            // it again three seconds later is the most expensive thing a frame can do, and on
+            // a busy server one slow frame made it happen to everyone at once, which made
+            // the next frames slower still.
+            const bool held = !sampled && was_visible && p.poses.heard_within(now, 8000000);
             // Showing a player without an actor spawns one (native_skater_spawn.cpp).
             const bool spawning = sampled && p.appearance.value() && !was_visible && !remote_skater_entity();
             if (spawning && now < p.next_spawn) {
                 p.native_status = "Waiting to show the player again.";
             } else if (spawning && native_pass) {
                 p.native_status = "Waiting for another player's skater to finish spawning.";
-            } else if (sampled && p.appearance.value()) {
+            } else if ((sampled || held) && p.appearance.value()) {
                 if (spawning) {
                     native_pass = true;
                     p.applied_cosmetics = 0; // the new actor wears no recipe yet

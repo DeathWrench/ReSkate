@@ -159,6 +159,10 @@ const MultiplayerLobby *SteamServerBrowser::find(std::uint64_t id) const {
 }
 void SteamServerBrowser::refresh(std::uint64_t now) {
     if (!api().open()) return;
+    // Steam stops answering a game that asks often (an empty list, for minutes): one search at a
+    // time, a quarter of a minute apart, and three quarters after one that came back empty.
+    // Opening or refreshing the browser sooner shows what the last search found.
+    if (started_ && (!searches_.empty() || now - started_ < (internet_listed_ ? 15000000 : 45000000))) return;
     servers_ = api().servers();
     if (!servers_) return;
     release();
@@ -248,11 +252,12 @@ void SteamServerBrowser::tick(std::uint64_t now) {
     if (done) {
         release();
         // An internet list with servers in it is the whole truth: what it left out is gone.
-        // An empty one is Steam not answering (see the header): keep what was listed in the
-        // last two minutes.
+        // An empty one is Steam not answering (see the header), and it has stayed that way for
+        // minutes for a player who searched often: keep what was listed in the last quarter
+        // of an hour. A server that closed meanwhile only fails to join.
         const auto before = found_.size();
         std::erase_if(found_, [&](const auto &entry) {
-            return entry.second.search != search_ && (internet_listed_ || now - entry.second.listed > 120000000);
+            return entry.second.search != search_ && (internet_listed_ || now - entry.second.listed > 900000000);
         });
         if (found_.size() != before) read(now);
         std::string list;

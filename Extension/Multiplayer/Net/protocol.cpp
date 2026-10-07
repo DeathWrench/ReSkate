@@ -558,6 +558,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         if (!valid_multiplayer_tps(p.tps)) throw std::invalid_argument("Invalid session TPS");
         w.integer(p.tps, 1);
         w.integer(static_cast<std::uint8_t>(p.object_placement), 1);
+        if (!valid_object_limit(p.object_limit)) throw std::invalid_argument("Invalid object limit");
+        w.integer(p.object_limit, 2);
         w.integer(p.force_world_layers, 1);
         // One mode per world-layer catalog row; both peers read the same catalog
         // from the same game build.
@@ -864,6 +866,9 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             const auto placement = r.integer(1);
             if (!valid_object_placement(placement)) return {};
             p.object_placement = static_cast<ObjectPlacement>(placement);
+            const auto object_limit = r.integer(2);
+            if (!valid_object_limit(object_limit)) return {};
+            p.object_limit = static_cast<unsigned>(object_limit);
             const auto forced = r.integer(1);
             if (forced > 1) return {};
             p.force_world_layers = forced != 0;

@@ -50,6 +50,8 @@ void load_host_preferences(Session &s) {
         p.voice_range = value->get<float>();
     if (const auto value = number("Host.ObjectPlacement"); value && *value >= 0 && valid_object_placement(static_cast<std::uint64_t>(*value)))
         p.placement = static_cast<ObjectPlacement>(*value);
+    if (const auto value = number("Host.ObjectLimit"); value && *value >= 0 && valid_object_limit(static_cast<std::uint64_t>(*value)))
+        p.object_limit = static_cast<unsigned>(*value);
     p.guest_noclip = profile_runtime::local_preference("Host.GuestNoclip").value_or(true);
     p.guest_no_bail = profile_runtime::local_preference("Host.GuestNoBail").value_or(true);
     p.guest_boosts = profile_runtime::local_preference("Host.GuestBoosts").value_or(true);
@@ -70,6 +72,7 @@ void save_host_preferences(const Session &s) {
         {"Host.Distance.HalfReturn", static_cast<std::int64_t>(p.distances.half_rate_return)},
         {"Host.Distance.LowStart", static_cast<std::int64_t>(p.distances.low_rate_start)},
         {"Host.ObjectPlacement", static_cast<std::int64_t>(p.placement)},
+        {"Host.ObjectLimit", static_cast<std::int64_t>(p.object_limit)},
         {"Host.GuestNoclip", p.guest_noclip},
         {"Host.GuestNoBail", p.guest_no_bail},
         {"Host.GuestBoosts", p.guest_boosts},
@@ -147,6 +150,9 @@ void publish(Session &s, const NativeFrame *local) {
     view.tps = s.tps;
     view.distances = s.distances;
     view.object_placement = s.object_placement;
+    view.object_limit = s.object_limit;
+    view.object_limit_own = s.mode == Mode::host || s.server_admin ? 0 : s.object_limit; // as apply_object_limit gives this game
+    view.objects_placed = s.mode == Mode::off ? 0 : static_cast<unsigned>(s.local_objects.objects().size());
     view.guest_noclip = s.guest_noclip;
     view.guest_no_bail = s.guest_no_bail;
     view.guest_boosts = s.guest_boosts;
@@ -451,6 +457,9 @@ std::vector<MultiplayerChatCommand> chat_commands(const Session &s) {
         list.push_back({"/party", "/party", "Who is in your party"});
     }
     if (dedicated_host(s)) {
+        // The server's own commands (server_votes.cpp, server_host.cpp): it answers them, and
+        // this list is only what the "/" menu offers, so one left out here still works unseen.
+        list.push_back({"/w", "/w <player> <message>", "Send a player a private message", "player"});
         if (s.server_votes & server_vote_map) list.push_back({"/vote map", "/vote map <map>", "Start a vote to change the map", "map"});
         if (s.server_votes & server_vote_kick)
             list.push_back({"/vote kick", "/vote kick <player>", "Start a vote to kick a player", "player"});
@@ -461,6 +470,9 @@ std::vector<MultiplayerChatCommand> chat_commands(const Session &s) {
             list.push_back({"/no", "/no", "Vote no in the running vote"});
         }
         if (s.server_admin) {
+            list.push_back({"/msg", "/msg <player> <message>", "Admin: message a player privately", "player"});
+            list.push_back({"/msg-party", "/msg-party <player> <message>", "Admin: message everyone in a player's party", "player"});
+            list.push_back({"/msg-admins", "/msg-admins <message>", "Admin: message the admins who are on"});
             list.push_back({"/kick", "/kick <player>", "Admin: kick a player until the server restarts", "player"});
             list.push_back({"/ban", "/ban <player>", "Admin: ban a player", "player"});
             list.push_back({"/map", "/map <map>", "Admin: change the server's map", "map"});

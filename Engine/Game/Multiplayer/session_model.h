@@ -130,6 +130,9 @@ struct MultiplayerModel {
     std::vector<MultiplayerBan> bans;
     unsigned tps = multiplayer_default_tps;
     ObjectPlacement object_placement = ObjectPlacement::everyone;
+    // Objects each player may have placed in this session (0: no limit), the limit this
+    // player is held to (0 for the host and a server's admins), and how many they have placed.
+    unsigned object_limit{}, object_limit_own{}, objects_placed{};
     // Host setting: whether guests may use noclip / No Bail (the host and server admins always may).
     bool guest_noclip{true}, guest_no_bail{true}, guest_boosts{true};
     // Host setting: guests skate with the host's physics tuning (on a dedicated server: the

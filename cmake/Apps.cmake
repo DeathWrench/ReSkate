@@ -108,8 +108,9 @@ if(WIN32)
         list(APPEND launcher_resources "LAUNCHER_BACKGROUND RCDATA \"${launcher_background}\"\n")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${launcher_background}")
     endif()
-    # Tile icons: the skate tool on MODS, the wheel on SETTINGS.
-    foreach(tile_icon mods settings)
+    # Tile icons: the skate tool on MODS, the wheel on SETTINGS; and Thunderstore's mark for the
+    # mod manager's Thunderstore button.
+    foreach(tile_icon mods settings thunderstore)
         set(tile_icon_path "${PROJECT_SOURCE_DIR}/assets/launcher/icon_${tile_icon}.png")
         if(EXISTS "${tile_icon_path}")
             string(TOUPPER "${tile_icon}" tile_icon_name)

@@ -27,6 +27,10 @@ void apply_distances(Session &s, const MultiplayerDistances &distances) {
     // previous band's hysteresis or waiting for its old send deadline.
     for (auto &peer : active_peers(s)) peer.pose_delivery = {};
 }
+void apply_object_limit(Session &s, unsigned limit) {
+    s.object_limit = limit;
+    set_lobby_object_limit(s.mode == Mode::host || s.server_admin ? 0 : limit);
+}
 void apply_object_placement(Session &s, ObjectPlacement policy) {
     s.object_placement = policy;
     // On a dedicated server "host only" means its admins.
@@ -288,6 +292,21 @@ std::string edit_object_placement(Session &s, std::string_view argument) {
          : *policy == ObjectPlacement::host_only ? "Only you can place objects. Guests' objects are frozen."
                                                  : "Object placement is disabled for everyone. Existing objects stay.";
 }
+std::string edit_object_limit(Session &s, std::string_view argument) {
+    if (s.mode != Mode::host) return "Only the session host can change the object limit.";
+    const auto limit = parse_object_limit(argument);
+    if (!limit) return "Use a number of objects from 1 to " + std::to_string(max_object_limit) + ", or off.";
+    // Guests' games stop them at the limit when the roster arrives; enforcement is the host
+    // showing everyone no more than that of each guest's layout (publish_guest_objects).
+    apply_object_limit(s, *limit);
+    for (auto &peer : active_peers(s)) peer.shared_from = 0; // look at every layout again
+    s.roster_dirty = true;
+    load_host_preferences(s);
+    s.host_preferences.object_limit = *limit;
+    save_host_preferences(s);
+    return *limit ? "Each guest can place up to " + std::to_string(*limit) + " objects."
+                  : std::string("Guests can place as many objects as they like.");
+}
 // Removes every guest's objects for everyone, whatever the placement policy.
 // The host's own objects are its saved park and are left alone.
 std::string clear_guest_objects(Session &s, std::string_view) {
@@ -541,7 +560,7 @@ bool own_mark_command(std::string_view action) {
 bool queue_command(std::string_view action, std::string_view argument, std::string_view password) {
     if (launcher::offline_mode() && !own_mark_command(action)) return false;
     if ((action != "host" && action != "host-config" && action != "join" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
-         action != "distances" && action != "object-placement" && action != "kick" && action != "clear-objects" &&
+         action != "distances" && action != "object-placement" && action != "object-limit" && action != "kick" && action != "clear-objects" &&
          action != "nametags" && action != "nametag-style" && action != "chat-visible" && action != "chat-filter" &&
          action != "chat-bubbles" && action != "chat-bubbles-own" && action != "chat-bubbles-distance" &&
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
@@ -581,7 +600,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
         // their own: the same menu actions, sent to the server. "server" sends
         // any server console command.
         if (dedicated_host(s) && (action == "server" || (s.server_admin &&
-            (action == "distances" || action == "object-placement" || action == "voice-allow" || action == "voice-range" ||
+            (action == "distances" || action == "object-placement" || action == "object-limit" || action == "voice-allow" || action == "voice-range" ||
              action == "clear-objects" || action == "kick" || action == "ban" || action == "unban" ||
              action == "world-layer-sync" || action == "noclip-allow" || action == "nobail-allow" ||
              action == "tpall" || action == "tphere" || action == "boosts-allow" || action == "tuning-enforce")))) {
@@ -716,7 +735,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
         // Host-only settings check the mode themselves; guests get a refusal.
         using Setting = std::string (*)(Session &, std::string_view);
         static constexpr std::pair<std::string_view, Setting> settings[] = {
-            {"object-placement", edit_object_placement}, {"kick", kick_player},
+            {"object-placement", edit_object_placement}, {"object-limit", edit_object_limit}, {"kick", kick_player},
             {"noclip-allow", edit_guest_noclip},           {"nobail-allow", edit_guest_no_bail},
             {"boosts-allow", edit_guest_boosts},           {"tuning-enforce", edit_enforce_tuning},
             {"score-check", edit_score_check},
@@ -919,6 +938,7 @@ std::string command(std::string_view action, std::string_view argument, std::str
             apply_distances(s, remembered.distances);
             s.voice_range = remembered.voice_range;
             apply_object_placement(s, remembered.placement);
+            apply_object_limit(s, remembered.object_limit);
             apply_guest_tools(s, remembered.guest_noclip, remembered.guest_no_bail, remembered.guest_boosts);
             s.enforce_tuning = remembered.enforce_tuning;
             s.score_check = remembered.score_check;
