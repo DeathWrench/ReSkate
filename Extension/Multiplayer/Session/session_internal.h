@@ -92,6 +92,8 @@ struct Peer {
     // A skater removed for lack of poses is not spawned again before this: a spawn is a heavy
     // native pass, and a player's poses may stop and start again and again.
     std::uint64_t next_spawn{};
+    // Near enough to be shown as a skater; and whether a pose has placed them yet.
+    bool shown_wanted = true, placed{};
     ReceiveBudget budget;
     PoseBuffer poses;
     Pose render_pose;
@@ -229,7 +231,11 @@ struct Session {
     unsigned capacity = max_players;
     // Local display preferences, loaded once from the profile. Never sent to peers.
     bool nametags = true, chat_visible = true, display_preferences_loaded{};
-    bool custom_nametags = true; // ReSkate's nametags instead of the game's (Hud/custom_nametags.h)
+    float nametag_distance = 120.f; // names within this many metres, dots past it
+    // Only players within this many metres have a skater (session.cpp); checked a few times a second.
+    float player_distance = 120.f;
+    std::uint64_t next_shown_rank{};
+    bool nametag_dots = true, nametags_friends{};
     bool chat_filter = true;     // bad words in chat show as **** (Engine/Core/Text/word_filter.h)
     // Chat bubbles above each skater's head (Hud/custom_nametags.h, nametag_overlay.cpp).
     bool chat_bubbles = true, chat_bubbles_own{};

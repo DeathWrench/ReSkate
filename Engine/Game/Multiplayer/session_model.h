@@ -125,6 +125,7 @@ struct MultiplayerBan {
     std::string name;          // as they were known when banned; may be empty
     std::int64_t added{};      // Unix time
 };
+inline constexpr float player_distance_least = 50.f, player_distance_unlimited = 1000.f;
 struct MultiplayerModel {
     VoiceModel voice;
     std::vector<MultiplayerBan> bans;
@@ -141,12 +142,21 @@ struct MultiplayerModel {
     std::string tuning_status;
     // Local display preference: the floating name label above each peer.
     bool nametags{true};
-    // Nametag style: ReSkate's own (name, distance, role colours, dots) or the game's.
-    bool custom_nametags{true};
     // Local: whether session text chat shows at all (and T opens it).
     bool chat_visible{true};
     // Local: bad words in chat names and messages show as **** (on by default).
     bool chat_filter{true};
+    // Local, for ReSkate's nametags: `nametag_distance` is how far away a player's name still
+    // shows (past it they are a dot), `nametag_dots` whether those dots and the ones at the
+    // screen's edge for off-screen players show at all, `nametags_friends` names only the
+    // player's Steam friends.
+    // Local: how far away another player still gets a skater built for them, in metres. Past
+    // it they keep their nametag or dot. Each skater costs memory and frame time, in view or
+    // not. `player_distance_unlimited` and above: every player, however far.
+    float player_distance{120.f};
+    float nametag_distance{120.f};
+    bool nametag_dots{true};
+    bool nametags_friends{};
     // Local: chat bubbles above each skater's head. `chat_bubbles_distance` is how far away
     // a player may be and still show one, `chat_bubbles_duration` how many seconds a line
     // stays before it fades, `chat_bubbles_history` how many recent lines stack up.

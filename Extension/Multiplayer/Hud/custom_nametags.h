@@ -28,6 +28,8 @@ struct NametagPlayer {
     std::vector<NametagBubble> bubbles;
     // The local player's own tag: only ever draws bubbles, never a name or dot.
     bool self{};
+    // Another player whose name is not shown (friends-only nametags): bubbles only, like `self`.
+    bool nameless{};
 };
 // Role colours; friends are the viewer's own Steam friends.
 inline constexpr std::uint32_t nametag_white = 0xffffffffU, nametag_developer = 0xffff78b4U, // purple
@@ -49,10 +51,12 @@ inline constexpr std::uint32_t nametag_developer_start = 0xffff206eU, // #6E20FF
 // Client thread, once per rendered frame: everyone to label and the local skater's position
 // (for distances). Also reads whether the game is hiding its own nametags right now.
 // `show_names` draws the name, distance and role badge; `show_bubbles` draws chat bubbles
-// within `bubble_distance` metres.
+// within `bubble_distance` metres. Names show within `name_distance` metres; past it, and for
+// players off screen, a dot when `dots` is on.
 void publish_custom_nametags(std::uintptr_t base, std::vector<NametagPlayer> players,
                              std::optional<std::array<float, 3>> local, bool show_names,
-                             bool show_bubbles, float bubble_distance) noexcept;
+                             bool show_bubbles, float bubble_distance, float name_distance = 120.f,
+                             bool dots = true) noexcept;
 void set_custom_nametags_enabled(bool enabled) noexcept;
 bool custom_nametags_enabled() noexcept;
 // The overlay's feed (any thread): nothing while off, stale, or while the game hides nametags.

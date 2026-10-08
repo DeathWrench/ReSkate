@@ -685,6 +685,18 @@ std::vector<TransportLink> SteamTransport::links() {
             row.out_bps = s.m_flOutBytesPerSec;
             row.in_bps = s.m_flInBytesPerSec;
             row.queue_us = queue_time(s);
+            SteamNetConnectionInfo_t info{};
+            if (p.get_info && p.get_info(p.sockets, link.handle, &info)) {
+                // A location's ID is its name's characters packed into a number.
+                const auto named = [](SteamNetworkingPOPID id) {
+                    std::string text;
+                    for (const unsigned shift : {16U, 8U, 0U, 24U})
+                        if (const auto c = static_cast<char>((id >> shift) & 0xff); c > 32 && c < 127) text.push_back(c);
+                    return text;
+                };
+                row.relay = named(info.m_idPOPRelay);
+                row.remote_relay = named(info.m_idPOPRemote);
+            }
         }
         out.push_back(row);
     }

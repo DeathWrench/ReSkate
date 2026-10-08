@@ -318,6 +318,7 @@ struct Nametag {
     // Recent chat lines to show as bubbles above the head, oldest first ("" = none).
     std::vector<NametagBubble> bubbles;
     bool self{};                      // the local player: bubbles only, never a name or dot
+    bool nameless{};                  // another player whose name is not shown: bubbles only too
 };
 struct Nametags {
     std::array<float, 16> camera{}; // world matrix: right, up, back, position rows
@@ -325,6 +326,8 @@ struct Nametags {
     bool show_names{true};          // draw the name, distance and role badge
     bool show_bubbles{};            // draw chat bubbles above the heads
     float bubble_distance{40.f};    // furthest a player may be and still show a bubble (metres)
+    float name_distance{120.f};     // furthest a player's name shows; past it they are a dot
+    bool dots{true};                // draw those dots, and the ones at the edge for off-screen players
     std::vector<Nametag> tags;
 };
 using NametagFeed = Nametags (*)();

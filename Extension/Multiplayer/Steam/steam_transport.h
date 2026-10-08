@@ -21,6 +21,10 @@ struct TransportLink {
     float quality_local = -1, quality_remote = -1; // 0-1 of packets delivered each way; -1 unknown
     float out_bps{}, in_bps{};
     std::uint64_t queue_us{}; // how long a message sent now would wait
+    // Which of Steam's relay locations the connection goes through, by their short names
+    // ("ord", "fra"...): the one this side uses and the one the other side uses. A ping far
+    // above the direct one is the route, and these say which way it went.
+    std::string relay, remote_relay;
 };
 struct TransportMessage {
     std::uint64_t peer{};

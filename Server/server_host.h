@@ -177,7 +177,8 @@ class Host {
     // every fourth pose that arrives (net). A nearer reference changes less, so it packs
     // smaller: this says by how much, before the server is made to send them that way.
     struct PoseSizes {
-        std::uint64_t samples{}, whole{}, last{}, quarter{}, second{}, sent{}, sent_bytes{};
+        std::uint64_t samples{}, whole{}, last{}, quarter{}, second{};
+        std::array<std::uint64_t, 4> sent{}, sent_bytes{}; // differences sent, by precision (pose_precision)
     } pose_sizes_;
     void measure_pose(Guest &from, const Packet &packet);
     std::uint64_t traffic_mark_{}, traffic_window_us_{}; // when `mark` was taken, and how long `last` covers

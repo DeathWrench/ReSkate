@@ -39,9 +39,11 @@ void apply_object_placement(Session &s, ObjectPlacement policy) {
 void apply_nametags(const Session &s) {
     // The feed also runs when only chat bubbles are on: the overlay draws whichever of the
     // two is enabled from the flags it is handed.
-    set_custom_nametags_enabled((s.nametags && s.custom_nametags) || s.chat_bubbles);
-    set_native_nametags_enabled(s.nametags && !s.custom_nametags);
-    set_native_compass_enabled(!(s.nametags && s.custom_nametags));
+    // Nametags are ReSkate's own (Hud/custom_nametags.h); the game's are never shown. Its
+    // compass comes back when they are off, since they are what points at the other players.
+    set_custom_nametags_enabled(s.nametags || s.chat_bubbles);
+    set_native_nametags_enabled(false);
+    set_native_compass_enabled(!s.nametags);
 }
 void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts) {
     s.guest_noclip = noclip;
@@ -337,16 +339,6 @@ std::string edit_nametags(Session &s, std::string_view argument) {
     profile_runtime::set_local_preference("Nametags", s.nametags);
     return s.nametags ? "Peer nametags shown." : "Peer nametags hidden.";
 }
-std::string edit_nametag_style(Session &s, std::string_view argument) {
-    const auto custom = argument == "reskate" ? std::optional<bool>(true) : argument == "game" ? std::optional<bool>(false)
-                                                                          : parse_switch(argument, s.custom_nametags);
-    if (!custom) return "Use reskate, game, or toggle for the nametag style.";
-    s.custom_nametags = *custom;
-    s.display_preferences_loaded = true;
-    apply_nametags(s);
-    profile_runtime::set_local_preference("CustomNametags", s.custom_nametags);
-    return s.custom_nametags ? "ReSkate nametags: names, distances and dots." : "The game's own nametags.";
-}
 // The Special page: a player on one of the backend's lists going without their tag, or
 // without the animation on their items. Their next appearance packet tells everyone
 // (session_send.cpp).
@@ -409,6 +401,42 @@ std::string edit_chat_filter(Session &s, std::string_view argument) {
     profile_runtime::set_local_preference("ChatFilter", s.chat_filter);
     publish_chat(s);
     return s.chat_filter ? "Bad words in chat are hidden." : "Chat is shown unfiltered.";
+}
+std::string edit_player_distance(Session &s, std::string_view argument) {
+    float value{};
+    const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() || !std::isfinite(value) ||
+        value < player_distance_least || value > player_distance_unlimited)
+        return "Player distance is a number of metres from 50 to 1000 (1000: every player).";
+    s.player_distance = value;
+    s.next_shown_rank = 0;
+    profile_runtime::set_local_values({{"PlayerDistance", static_cast<double>(value)}});
+    return value >= player_distance_unlimited ? std::string("Every player is shown as a skater, however far.")
+                                              : "Players within " + std::to_string(static_cast<int>(value)) + " m are shown as skaters.";
+}
+std::string edit_nametag_distance(Session &s, std::string_view argument) {
+    float value{};
+    const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), value);
+    if (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() || !std::isfinite(value) ||
+        value < 10.f || value > 500.f)
+        return "Nametag distance is a number of metres from 10 to 500.";
+    s.nametag_distance = value;
+    profile_runtime::set_local_values({{"NametagDistance", static_cast<double>(value)}});
+    return "Names show within " + std::to_string(static_cast<int>(value)) + " m.";
+}
+std::string edit_nametag_dots(Session &s, std::string_view argument) {
+    const auto enabled = parse_switch(argument, s.nametag_dots);
+    if (!enabled) return "Use on, off, or toggle for nametag dots.";
+    s.nametag_dots = *enabled;
+    profile_runtime::set_local_preference("NametagDots", s.nametag_dots);
+    return s.nametag_dots ? "Far and off-screen players show as dots." : "No dots for far and off-screen players.";
+}
+std::string edit_nametags_friends(Session &s, std::string_view argument) {
+    const auto enabled = parse_switch(argument, s.nametags_friends);
+    if (!enabled) return "Use on, off, or toggle for friends-only nametags.";
+    s.nametags_friends = *enabled;
+    profile_runtime::set_local_preference("NametagsFriendsOnly", s.nametags_friends);
+    return s.nametags_friends ? "Only your Steam friends have nametags." : "Every player has a nametag.";
 }
 std::string edit_chat_bubbles(Session &s, std::string_view argument) {
     const auto enabled = parse_switch(argument, s.chat_bubbles);
@@ -561,7 +589,8 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
     if (launcher::offline_mode() && !own_mark_command(action)) return false;
     if ((action != "host" && action != "host-config" && action != "join" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
          action != "distances" && action != "object-placement" && action != "object-limit" && action != "kick" && action != "clear-objects" &&
-         action != "nametags" && action != "nametag-style" && action != "chat-visible" && action != "chat-filter" &&
+         action != "nametags" && action != "chat-visible" && action != "chat-filter" &&
+         action != "nametag-distance" && action != "nametag-dots" && action != "nametags-friends" && action != "player-distance" &&
          action != "chat-bubbles" && action != "chat-bubbles-own" && action != "chat-bubbles-distance" &&
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
          !own_mark_command(action) &&
@@ -743,7 +772,8 @@ std::string command(std::string_view action, std::string_view argument, std::str
             {"clear-objects", clear_guest_objects},
             {"world-layer-sync", edit_world_layer_sync},   {"distances", edit_distances},
             {"nametags", edit_nametags},
-            {"nametag-style", edit_nametag_style},
+            {"nametag-distance", edit_nametag_distance}, {"nametag-dots", edit_nametag_dots},
+            {"nametags-friends", edit_nametags_friends}, {"player-distance", edit_player_distance},
             {"mark-tag", edit_own_tag}, {"mark-items", edit_own_items}, {"mark-style", edit_mark_style},
             {"chat-visible", edit_chat_visible}, {"chat-filter", edit_chat_filter},
             {"chat-bubbles", edit_chat_bubbles}, {"chat-bubbles-own", edit_chat_bubbles_own},

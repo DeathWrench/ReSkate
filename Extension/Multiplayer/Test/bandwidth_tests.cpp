@@ -130,6 +130,63 @@ void audio_checks() {
     check(raw.size() < packet_header_size + 2 + p.audio.size() * 383, "Sparse audio failed to shrink fixture");
     std::cout << "Audio: continuous coalescing, contact/selector edges, exact values, idle heartbeat, reordering, deduplication and disconnect passed.\n";
 }
+void coarse_checks() {
+    // Coarser rotations still encode and decode as any pose, land within a step of the
+    // original, and make a bone that barely turned the same bytes as before.
+    std::mt19937 random(11);
+    std::uniform_real_distribution<float> any(-1.f, 1.f);
+    auto p = fixture();
+    p.kind = PacketKind::pose;
+    for (auto &t : p.pose.skater) {
+        t.rotation = {any(random), any(random), any(random), any(random)};
+        float norm{};
+        for (float v : t.rotation) norm += v * v;
+        for (float &v : t.rotation) v /= std::sqrt(norm);
+    }
+    // The awkward ones: two components equal and as large as a smaller one can be, and an exact axis.
+    p.pose.skater[0].rotation = {.70710678f, .70710678f, 0, 0};
+    p.pose.skater[1].rotation = {0, 0, 0, -1};
+    p.pose.skater[2].rotation = {.5f, .5f, .5f, .5f};
+    for (const unsigned bits : {4U, 6U, 7U, 11U}) {
+        auto coarse = p;
+        coarsen_rotations(coarse.pose, bits);
+        const auto decoded = decode(encode(coarse, true));
+        check(decoded && decoded->pose.skater.size() == p.pose.skater.size(), "A coarsened pose did not decode");
+        const float step = static_cast<float>(1U << bits) / 46339.5358f;
+        for (std::size_t i = 0; decoded && i < p.pose.skater.size(); ++i) {
+            const auto &a = p.pose.skater[i].rotation, &b = decoded->pose.skater[i].rotation;
+            const float same = std::abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
+            // Each of three components is off by at most half a step.
+            check(same > 1.f - 2.f * step * step - 1e-4f, "A coarsened rotation moved by more than its step");
+        }
+        // A turn of a fortieth of a step is lost: the same bytes, so a difference leaves the bone out.
+        auto nudged = p;
+        for (auto &t : nudged.pose.skater) {
+            t.rotation[0] += step * .025f;
+            float norm{};
+            for (float v : t.rotation) norm += v * v;
+            for (float &v : t.rotation) v /= std::sqrt(norm);
+        }
+        coarsen_rotations(nudged.pose, bits);
+        const auto first = encode(coarse, true), second = encode(nudged, true);
+        std::size_t different{};
+        for (std::size_t i = 0; i < std::min(first.size(), second.size()); ++i) different += first[i] != second[i];
+        check(first.size() == second.size() && different < first.size() / 20, "A turn far below the step still changed the pose's bytes");
+    }
+    // A resized bone is held to the limit both ways, and at 1 is not resized at all.
+    auto big = fixture();
+    big.pose.skater[5].scale = {4, 4, 4};
+    big.pose.skater[6].scale = {.1f, 1, 1};
+    auto held = big.pose, plain = big.pose, free = big.pose;
+    limit_bone_scale(held, 1.5f);
+    limit_bone_scale(plain, 1.f);
+    limit_bone_scale(free, 0.f);
+    check(held.skater[5].scale == std::array<float, 3>{1.5f, 1.5f, 1.5f} && std::abs(held.skater[6].scale[0] - 1.f / 1.5f) < 1e-5f &&
+              plain.skater[5].scale == std::array<float, 3>{1, 1, 1} && plain.skater[6].scale == std::array<float, 3>{1, 1, 1} &&
+              free.skater[5].scale == std::array<float, 3>{4, 4, 4},
+          "A bone's scale was not held to the limit");
+    std::cout << "Coarse rotations: valid poses, within a step, small turns unchanged.\n";
+}
 void rate_checks() {
     check(pose_interval(61*61, 50000) == 100000 && pose_interval(56*56, 100000) == 100000 &&
           pose_interval(49*49, 100000) == 50000, "Near-rate hysteresis failed");
@@ -160,15 +217,21 @@ void rate_checks() {
         for (const unsigned tps : {20U, 30U, 60U, 120U}) {
             const auto limits = crowd_limits(crowd, tps, 600);
             const auto sent = count(crowd, limits, tps);
-            check(sent <= 602 && sent > 450, "A crowd was not sent within the budget");
+            // Within the budget, or at the least every crowd is sent: the nearest few at the
+            // full and half rates, which at a high TPS is more than the budget by itself.
+            const unsigned least = crowd_always_full * (1000000U / dingosdk::multiplayer_pose_interval(tps)) + crowd_always_half * 10 +
+                                   (static_cast<unsigned>(crowd.size()) - crowd_always_full - crowd_always_half) * 5;
+            check(sent <= std::max(602U, least + 2) && sent > 450, "A crowd was not sent within the budget");
             check(crowd_interval(dingosdk::multiplayer_pose_interval(tps), crowd.front(), limits) == dingosdk::multiplayer_pose_interval(tps) &&
                   crowd_interval(dingosdk::multiplayer_pose_interval(tps), crowd.back(), limits) == 200000,
                   "A crowd's nearest and farthest were not sent at the full and low rates");
             check(limits.half < limits.low, "A crowd had no half-rate ring");
         }
-        // Too many for the budget even at the low rate: all at the low rate, which is the floor.
-        const auto all_low = crowd_limits(packed, 30, 600);
-        check(count(packed, all_low, 30) == packed.size() * 5, "An over-full crowd was not sent at the low rate");
+        // Too many for the budget even at the low rate: the nearest few are still sent at the
+        // full and half rates, and only the rest at the low rate.
+        const auto floor = crowd_limits(packed, 30, 600);
+        check(count(packed, floor, 30) == crowd_always_full * 30 + crowd_always_half * 10 + (packed.size() - crowd_always_full - crowd_always_half) * 5,
+              "An over-full crowd did not keep its nearest at the full and half rates");
         // Distance still slows what the crowd limit would send faster.
         check(crowd_interval(200000, 0, none) == 200000 && crowd_interval(100000, 0, crowd_limits(crowd, 30, 600)) == 100000,
               "A crowd limit sped a far player up");
@@ -213,6 +276,6 @@ void block_checks() {
 }
 }
 int main() {
-    try { pose_checks(); audio_checks(); rate_checks(); block_checks(); }
+    try { pose_checks(); audio_checks(); coarse_checks(); rate_checks(); block_checks(); }
     catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }
 }

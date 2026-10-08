@@ -177,7 +177,6 @@ void publish(Session &s, const NativeFrame *local) {
     view.saved_host = {true, s.host_preferences.public_lobby, s.host_preferences.password_required,
                        static_cast<int>(s.host_preferences.capacity), s.host_preferences.tps, s.host_preferences.lobby_name};
     view.nametags = s.nametags;
-    view.custom_nametags = s.custom_nametags;
     if (const auto social = steam_social_snapshot())
         if (const auto mark = identity_mark(social->local.id)) {
             std::tie(view.identity_tag_colour, view.identity_tag) = mark_role(*mark);
@@ -229,6 +228,10 @@ void publish(Session &s, const NativeFrame *local) {
         view.server_map_rotation = s.server_map_rotation;
         view.server_map_votes = (s.server_votes & server_vote_map) != 0;
     }
+    view.player_distance = s.player_distance;
+    view.nametag_distance = s.nametag_distance;
+    view.nametag_dots = s.nametag_dots;
+    view.nametags_friends = s.nametags_friends;
     view.chat_visible = s.chat_visible;
     view.chat_filter = s.chat_filter;
     view.chat_bubbles = s.chat_bubbles;

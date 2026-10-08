@@ -46,6 +46,8 @@ class DeltaSender {
     WireUpdate prepare(const Packet &, std::span<const std::uint8_t> raw, std::span<const std::uint8_t> wire,
                        DeltaCache &cache) const;
     void sent(const Packet &, WireUpdate &&);
+    // Drops a stream's reference: the next packet of it goes as a whole state.
+    void forget(std::uint64_t source, PacketKind kind) { bases_.erase(StreamKey{source, kind}); }
     // How old a pose or sound reference may get before a whole state replaces it. Each one
     // is sent reliably, so Steam resends it until it arrives: a dedicated server, with a
     // stream for every pair of players, keeps them rarer than the two seconds a game does.

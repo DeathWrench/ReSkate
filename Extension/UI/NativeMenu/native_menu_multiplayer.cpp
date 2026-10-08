@@ -406,8 +406,6 @@ void render_section(const Context& context, const MultiplayerModel& model, Secti
                 model.hosting ? "world-layer-sync" : "", "toggle", false, 136.f);
             add_button(context, side, "nametags", std::string("Nametags: ") + (model.nametags ? "On" : "Off"),
                 "nametags", "toggle", false, 136.f);
-            add_button(context, side, "nametag-style", std::string("Nametag style: ") + (model.custom_nametags ? "ReSkate" : "Game"),
-                "nametag-style", "toggle", false, 136.f);
             add_button(context, side, "chat-bubbles", std::string("Chat bubbles: ") + (model.chat_bubbles ? "On" : "Off"),
                 "chat-bubbles", "toggle", false, 136.f);
             add_button(context, side, "chat-bubbles-own", std::string("Own chat bubbles: ") + (model.chat_bubbles_own ? "On" : "Off"),
