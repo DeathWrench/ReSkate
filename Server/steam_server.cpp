@@ -127,6 +127,7 @@ std::string server_tags(const Advertisement &a) {
     for (int shift = 60; shift >= 0; shift -= 4) secret += hex[(a.secret >> shift) & 15];
     auto tags = "reskate,v" + std::to_string(multiplayer::protocol_version) + ",k" + secret + ",p" +
                 std::to_string(a.players) + ",c" + std::to_string(a.max_players) + (a.password ? ",w1" : ",w0");
+    if (a.direct_port) tags += ",d" + std::to_string(a.direct_port);
     tags += ",m" + tag_text(a.map, 24);
     tags += ",n" + tag_text(a.name, 127 - tags.size() - 2);
     return tags;

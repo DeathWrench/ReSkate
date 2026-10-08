@@ -37,17 +37,28 @@ struct ServerConfig {
     std::vector<std::string> map_pool; // maps for votes and the rotation, in order; empty: every map
     unsigned map_rotation = 0;         // minutes per map before the next pool map (0: off)
     unsigned max_players = 16; // players; the server itself is not one
-    // Of those, how many are kept for the players in `reserved` and the admins: everyone else
-    // is told the server is full once only these are left. 0: none are kept.
-    unsigned reserved_slots = 0;
     // The most poses a second one player is sent (crowd_limits); 0: no limit.
     unsigned crowd_budget = crowd_pose_budget;
     // The most a mod may resize part of a skater for the other players, as a factor (and its
     // inverse the least): 1, the default, shows every skater at the game's own proportions;
     // 0 is no limit.
     float bone_scale_limit = 1;
+    // How players reach the server: true, through Steam's relay network only; false, straight
+    // to `port` (UDP). A direct server still answers through the relays, for a player the port
+    // does not reach, one who has turned direct connections off, or an older game.
+    bool use_steam_relay = true;
+    // Logs what Steam's networking says it is doing, to find out why connections fail.
+    bool steam_debug = false;
+    // How long a message to a player may wait to share a packet with the next ones, in
+    // milliseconds (0: each goes at once in a packet of its own). Fewer, fuller packets:
+    // less sent for the same updates, and less work sending it.
+    unsigned pack_ms = 10;
+    // Past this many metres a player's fingers are not sent moving (0: always). A skater's
+    // forty finger bones turn in nearly every pose and are half of what a pose carries.
+    unsigned finger_distance = 25;
     // What the server may send each player, in KB/s (128-16384).
     unsigned send_rate = 900;
+    // The players with a reserved slot: one is kept free for each of them who is not on.
     std::vector<std::uint64_t> reserved;
     std::string password;      // empty: anyone may join
     std::string welcome;       // sent to each player as they join
@@ -104,9 +115,13 @@ struct ServerConfig {
 // their names go to `added` ("votes.seconds" for a nested one).
 ServerConfig load_config(const std::filesystem::path &file, std::vector<std::string> *added = nullptr);
 void save_config(const ServerConfig &config);
-// Whether a player who is not yet on may join a server with `on` players on it: anyone while
-// an unreserved slot is free, then only the reserved players and the admins until it is full.
-bool may_join(const ServerConfig &config, std::uint64_t id, std::size_t on) noexcept;
+// Where the bans are kept: data/bans.json, beside the config.
+std::filesystem::path bans_file(const ServerConfig &config);
+// Whether a player who is not yet on may join a server with `on` players on it, `reserved_on`
+// of them players with a reserved slot. A slot is kept for each reserved player who is not on:
+// anyone joins while a slot beyond those is free, then only the reserved players and the admins
+// until the server is full.
+bool may_join(const ServerConfig &config, std::uint64_t id, std::size_t on, std::size_t reserved_on) noexcept;
 // Why `config` cannot run, or empty.
 std::string config_error(const ServerConfig &config);
 // A scoring fingerprint as the config and console write it (16 hex digits), and read back
@@ -129,6 +144,8 @@ const ServerLevel *find_level(std::string_view map);
 // Whether the server has this map (a name, level path or destination): one of the game's own,
 // or one a mod folder in its Mods lists. It only moves players to a map it has itself.
 bool installed_map(std::string_view map);
+// "a.b.c.d" as a number (a the highest byte), or 0 when it is not an IPv4 address.
+std::uint32_t direct_ipv4(std::string_view text) noexcept;
 // What players load for a map, as the protocol carries it ("<root>|<level>").
 // Empty when the map is unknown (a full level path is always accepted).
 std::string map_destination(std::string_view map);

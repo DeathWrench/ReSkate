@@ -12,6 +12,7 @@ struct Advertisement {
     unsigned players{}, max_players{};
     bool password{}, listed{true};
     std::uint64_t secret{};
+    std::uint16_t direct_port{}; // players may connect straight to this UDP port; 0: relays only
 };
 std::string server_tags(const Advertisement &);
 
