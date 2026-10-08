@@ -354,20 +354,26 @@ std::optional<std::uint64_t> parse_scoring(std::string_view text) {
     if (!value) return std::nullopt;
     return value;
 }
-bool may_join(const ServerConfig &config, std::uint64_t id, std::size_t on, std::size_t reserved_on) noexcept {
-    if (on >= config.max_players) return false;
+std::size_t extra_slots(const ServerConfig &config) noexcept {
+    // (An admin who is also listed has one slot, not two.)
+    std::size_t slots = config.reserved.size();
+    for (const auto id : config.admins)
+        if (std::find(config.reserved.begin(), config.reserved.end(), id) == config.reserved.end()) ++slots;
+    // Never more players than a session can hold, the server itself being one of them.
+    const std::size_t room = multiplayer::max_players - 1;
+    return config.max_players >= room ? 0 : std::min<std::size_t>(slots, room - config.max_players);
+}
+bool may_join(const ServerConfig &config, std::uint64_t id, std::size_t on) noexcept {
+    if (on < config.max_players) return true;
     const auto listed = [&](const std::vector<std::uint64_t> &ids) { return std::find(ids.begin(), ids.end(), id) != ids.end(); };
-    if (listed(config.reserved) || listed(config.admins)) return true;
-    const auto kept = config.reserved.size() - std::min(reserved_on, config.reserved.size());
-    return on + kept < config.max_players;
+    return (listed(config.reserved) || listed(config.admins)) && on < config.max_players + extra_slots(config);
 }
 std::string config_error(const ServerConfig &c) {
     using namespace multiplayer;
     if (!valid_server_name(c.name)) return std::string("name must be ") + server_name_rule + ".";
     for (const auto id : c.reserved)
         if (!individual_steam_id(id)) return "reserved_players_slots must be SteamID64s (17 digits starting 7656119).";
-    if (c.reserved.size() >= c.max_players)
-        return "reserved_players_slots must list fewer players than max_players: a slot is kept for each, so nobody else could join.";
+    if (c.reserved.size() > 1024) return "reserved_players_slots holds at most 1024 players.";
     if (c.send_rate < 128 || c.send_rate > 16384) return "send_rate must be 128 to 16384 (KB/s for each player).";
     if (c.bone_scale_limit != 0 && !(c.bone_scale_limit >= 1.f && c.bone_scale_limit <= 8.f))
         return "bone_scale_limit must be 0 (no limit) or 1 to 8 (1: no resized body parts at all).";

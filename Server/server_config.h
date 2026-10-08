@@ -40,9 +40,9 @@ struct ServerConfig {
     // The most poses a second one player is sent (crowd_limits); 0: no limit.
     unsigned crowd_budget = crowd_pose_budget;
     // The most a mod may resize part of a skater for the other players, as a factor (and its
-    // inverse the least): 1, the default, shows every skater at the game's own proportions;
-    // 0 is no limit.
-    float bone_scale_limit = 1;
+    // inverse the least). The game's own skater height is a scale as well, so 1 shows every
+    // skater at one height and build; 2, the default, leaves height alone. 0 is no limit.
+    float bone_scale_limit = 2;
     // How players reach the server: true, through Steam's relay network only; false, straight
     // to `port` (UDP). A direct server still answers through the relays, for a player the port
     // does not reach, one who has turned direct connections off, or an older game.
@@ -58,7 +58,7 @@ struct ServerConfig {
     unsigned finger_distance = 25;
     // What the server may send each player, in KB/s (128-16384).
     unsigned send_rate = 900;
-    // The players with a reserved slot: one is kept free for each of them who is not on.
+    // The players with a reserved slot: they can join a full server, as the admins can.
     std::vector<std::uint64_t> reserved;
     std::string password;      // empty: anyone may join
     std::string welcome;       // sent to each player as they join
@@ -117,11 +117,12 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
 void save_config(const ServerConfig &config);
 // Where the bans are kept: data/bans.json, beside the config.
 std::filesystem::path bans_file(const ServerConfig &config);
-// Whether a player who is not yet on may join a server with `on` players on it, `reserved_on`
-// of them players with a reserved slot. A slot is kept for each reserved player who is not on:
-// anyone joins while a slot beyond those is free, then only the reserved players and the admins
-// until the server is full.
-bool may_join(const ServerConfig &config, std::uint64_t id, std::size_t on, std::size_t reserved_on) noexcept;
+// How many players may be on beyond max_players: one for each reserved player and each admin.
+std::size_t extra_slots(const ServerConfig &config) noexcept;
+// Whether a player who is not yet on may join a server with `on` players on it. Anyone, until
+// max_players are on; the reserved players and the admins after that too, in the extra slots
+// (a full server of 32 shows 33/32 with one of them on).
+bool may_join(const ServerConfig &config, std::uint64_t id, std::size_t on) noexcept;
 // Why `config` cannot run, or empty.
 std::string config_error(const ServerConfig &config);
 // A scoring fingerprint as the config and console write it (16 hex digits), and read back

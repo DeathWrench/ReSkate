@@ -1,5 +1,6 @@
 // A config written by an older server gains the settings added since, keeping its own values.
 #include "Server/server_config.h"
+#include "Extension/Multiplayer/Session/peer_slots.h"
 #include <algorithm>
 #include <fstream>
 #include <iostream>
@@ -68,7 +69,7 @@ int run() {
         ServerConfig rate;
         rate.send_rate = 64;
         check(config_error(rate).find("send_rate") != std::string::npos, "A send rate too low to play with was accepted");
-        check(has("anti_cheat.bone_scale_limit") && config.bone_scale_limit == 1, "bone_scale_limit is not a new setting of 1");
+        check(has("anti_cheat.bone_scale_limit") && config.bone_scale_limit == 2, "bone_scale_limit is not a new setting of 2");
         ServerConfig scaled;
         scaled.bone_scale_limit = 0.5f;
         check(config_error(scaled).find("bone_scale_limit") != std::string::npos, "A bone scale limit under 1 was accepted");
@@ -79,25 +80,29 @@ int run() {
         crowd.crowd_budget = 50;
         check(config_error(crowd).find("crowd_budget") != std::string::npos, "A crowd budget too small to play with was accepted");
     }
-    // Reserved slots: none unless set; the last of them only the listed players and admins take.
+    // Reserved slots: beyond max_players, for the listed players and the admins only.
     {
         check(has("access.reserved_players_slots") && config.reserved.empty(), "Reserved slots are not a new setting that reserves nothing");
         ServerConfig slots;
         slots.max_players = 4;
         const std::uint64_t vip = 76561198000000001ULL, admin = 76561198000000002ULL, anyone = 76561198000000003ULL;
-        check(may_join(slots, anyone, 3, 0) && !may_join(slots, anyone, 4, 0) && !may_join(slots, vip, 4, 0), "A server with nothing reserved did not fill up plainly");
-        // A slot for each reserved player who is not on; one who is on has taken theirs.
+        check(may_join(slots, anyone, 3) && !may_join(slots, anyone, 4) && !may_join(slots, vip, 4) && extra_slots(slots) == 0,
+              "A server with nothing reserved did not fill up plainly");
+        // Nothing is held back from anyone; the listed players and the admins have a slot each past the last.
         const std::uint64_t vip2 = 76561198000000004ULL;
         slots.reserved = {vip, vip2};
-        slots.admins = {admin};
-        check(may_join(slots, anyone, 1, 0) && !may_join(slots, anyone, 2, 0) && !may_join(slots, anyone, 3, 0), "Reserved slots were given to anyone");
-        check(may_join(slots, anyone, 2, 1) && !may_join(slots, anyone, 3, 1) && may_join(slots, anyone, 3, 2), "A slot was kept for a reserved player who is already on");
-        check(may_join(slots, vip, 2, 0) && may_join(slots, vip, 3, 1) && may_join(slots, admin, 3, 0), "A reserved player or an admin was kept out of a reserved slot");
-        check(!may_join(slots, vip, 4, 1) && !may_join(slots, admin, 4, 2), "A full server let someone in");
+        slots.admins = {admin, vip}; // listed twice: one slot
+        check(extra_slots(slots) == 3, "Extra slots were not one for each reserved player and admin");
+        check(may_join(slots, anyone, 3) && !may_join(slots, anyone, 4) && !may_join(slots, anyone, 6), "An extra slot was given to anyone, or a slot was held back");
+        check(may_join(slots, vip, 4) && may_join(slots, admin, 5) && may_join(slots, vip2, 6), "A reserved player or an admin was kept out of a full server");
+        check(!may_join(slots, vip, 7) && !may_join(slots, admin, 7), "More joined than there are extra slots");
+        ServerConfig brim;
+        brim.max_players = static_cast<unsigned>(dingosdk::multiplayer::max_players) - 2;
+        brim.reserved = {vip, vip2};
+        check(extra_slots(brim) == 1 && may_join(brim, vip, brim.max_players) && !may_join(brim, vip2, brim.max_players + 1),
+              "Extra slots went past what a session can hold");
         const auto refused = [](const ServerConfig &c) { return config_error(c).find("reserved") != std::string::npos; };
         check(!refused(slots), "Valid reserved slots were refused");
-        slots.reserved = {vip, vip2, 76561198000000005ULL, 76561198000000006ULL};
-        check(refused(slots), "A server with every slot reserved was accepted");
         slots.reserved = {vip, 42};
         check(refused(slots), "A reserved entry that is not a player was accepted");
         auto kept = reloaded;

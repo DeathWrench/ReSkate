@@ -72,14 +72,13 @@ activity_log       Log what players do (default true): throwdown drops placed,
 admins             SteamID64s (as strings) who may change settings in-game.
 reserved_players_slots
                    SteamID64s of the players with a reserved slot, e.g.
-                   ["76561198000000000"] (default none). A slot is kept free
-                   for each of them who is not on: with 64 players and 4
-                   listed, none of them on, anyone can join until 60 are on
-                   and only they can take the last 4. One who is on has taken
-                   theirs. The browser still shows 64, and everyone else is
-                   told the remaining slots are reserved. Admins may take a
-                   kept slot too, but none is kept for them. Must list fewer
-                   players than max_players.
+                   ["76561198000000000"] (default none). They can join when
+                   the server is full, as the admins always can: each of them
+                   adds a slot beyond max_players that only they use. With 32
+                   players and 2 admins and 2 listed, anyone can join until
+                   32 are on, and those four can still join after that, up to
+                   36. The browser then shows 33/32 and so on. Nothing is
+                   held back from everyone else.
 use_global_bans    Turn away players the ReSkate team has banned from multiplayer
                    (default true). The list is read from api.reskate.dev at startup
                    and every ten minutes. false lets them in; the server's own
@@ -146,10 +145,12 @@ enforce_tuning     Players skate with the game's own Gameplay/SkatePhysicsTuning
                    everyone.
 bone_scale_limit   How far a mod may resize part of a skater for the other
                    players (a "big head" mod and the like): the most a bone may
-                   be scaled, 1 to 8. 1 (default) shows every skater at the
-                   game's own proportions; 0 is no limit. The player with the
-                   mod still sees it on their own screen. Console:
-                   bone-scale <1-8>|off.
+                   be scaled, 1 to 8 (default 2); 0 is no limit. The game's
+                   own skater height is a scale too, so 1 shows every skater
+                   at the same height and build as well as stopping mods; 2
+                   leaves height alone and still halves the largest heads.
+                   The player with the mod still sees it on their own screen.
+                   Console: bone-scale <1-8>|off.
 
 "network" - How players connect and how much they are sent. The defaults suit most servers.
 use_steam_relay    How players reach the server: true (default) or false.
@@ -233,7 +234,7 @@ and change voice, distances, placement and kicks from the Multiplayer menu.
   help                          A short list of every command.
   status                        Name, map, players, code.
   players                       Connected players and their SteamID64s.
-  reserved                      Who has a reserved slot.
+  reserved                      Who has a reserved slot, and how many extra slots there are.
   reserved add|remove <player or id>   (console only)
   net [player]                  How the connections are doing right now: traffic,
                                 queues, the server's own loop timing, and the twelve

@@ -144,7 +144,7 @@ bool Host::start(std::string &error) {
     if (config_.steam_debug)
         log_(transport_.set_steam_debug(true) ? "Steam networking debug output is on (\"steam_debug\"): its lines are marked [direct] Steam:."
                                              : "steam_debug: this Steam has no debug output.");
-    if (!transport_.host(capacity())) {
+    if (!transport_.host(connection_capacity())) {
         error = transport_.status().detail;
         return false;
     }
@@ -410,10 +410,10 @@ void Host::broadcast(const Packet &packet, bool reliable, bool fresh, std::uint6
             const auto reach = static_cast<float>(config_.distances.half_rate_start);
             if (distance > p.crowd.half || (config_.distances.valid() && distance > reach * reach)) continue;
         }
-        // Frequent gameplay streams skip the server once the receiver confirms a direct route.
-        if (source && (packet.kind == PacketKind::pose || packet.kind == PacketKind::audio) &&
-            !needs_relay(p.direct_routes, p.route_reported, source->member, now_))
-            continue;
+        // Poses and sound go through the server to everyone, whether or not two games have linked
+        // to each other: what they send each other directly is the older, larger format, and
+        // games of 1.1.6 as first released discard most of it (they took its first four bytes
+        // for sound_codec's).
         // Sound is sent with everyone else's they hear, once a pass (flush_poses).
         if (packet.kind == PacketKind::audio) {
             if (!sound) sound = std::make_shared<const std::vector<AudioSample>>(packet.audio);
@@ -1398,13 +1398,8 @@ void Host::tick(std::uint64_t now) {
             continue;
         }
         if (!guest) {
-            const auto reserved_on = static_cast<std::size_t>(std::count_if(
-                config_.reserved.begin(), config_.reserved.end(), [&](std::uint64_t id) { return guests_.contains(id); }));
-            if (!individual_steam_id(link.id) || !may_join(config_, link.id, guests_.size(), reserved_on)) {
-                // Full for them: for everyone, or with only the reserved slots left.
-                transport_.disconnect(link.id, guests_.size() >= config_.max_players || !individual_steam_id(link.id)
-                                                   ? "The server is full."
-                                                   : "The server is full: the slots that are left are reserved.");
+            if (!individual_steam_id(link.id) || !may_join(config_, link.id, guests_.size())) {
+                transport_.disconnect(link.id, "The server is full.");
                 continue;
             }
             auto created = std::make_unique<Guest>();
@@ -2118,8 +2113,8 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         if (!console) return "Only the server console manages reserved slots.";
         const auto [sub, who] = split(argument);
         if (sub.empty()) {
-            std::string text = std::to_string(config_.reserved.size()) + " of " + std::to_string(config_.max_players) +
-                               " slots are reserved, one for each of these players while they are not on";
+            std::string text = std::to_string(extra_slots(config_)) + " extra slots beyond the " + std::to_string(config_.max_players) +
+                               ": the admins and these players can join when the server is full";
             for (const auto id : config_.reserved) {
                 const auto *guest = find(id);
                 text += "\n  " + std::to_string(id) + (guest ? "  " + guest_name(*guest) : std::string{});
@@ -2131,10 +2126,9 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         if (!individual_steam_id(id) || (sub != "add" && sub != "remove")) return "reserved | reserved add|remove <player or SteamID64>";
         const bool listed = std::find(config_.reserved.begin(), config_.reserved.end(), id) != config_.reserved.end();
         if (sub == "add") {
-            if (!listed && config_.reserved.size() + 1 >= config_.max_players)
-                return "Every slot but one is reserved already: a slot is kept for each reserved player.";
+            if (!listed && config_.reserved.size() >= 1024) return "The reserved list is full.";
             if (!listed) config_.reserved.push_back(id);
-            return changed(std::to_string(id) + " has a reserved slot.");
+            return changed(std::to_string(id) + " has a reserved slot: they can join when the server is full.");
         }
         std::erase(config_.reserved, id);
         return changed(std::to_string(id) + " no longer has a reserved slot.");
