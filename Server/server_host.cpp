@@ -1163,7 +1163,8 @@ void Host::sync_objects() {
             // No more of a player's objects than the server allows each of them; admins are not limited.
             if (!is_admin(id)) layout = limited_layout(std::move(layout), guest->shared.objects(), config_.object_limit);
             // Nobody places objects by the hundred, minute after minute: a game that does is
-            // spawning and removing them to animate them. Theirs stay as they are for a minute.
+            // spawning and removing them to animate them. Theirs are deleted for everyone, and
+            // nothing they place is shared for a minute (or they would be back at once).
             if (!is_admin(id)) {
                 if (now_ - guest->placed_since >= 60000000) {
                     guest->placed_since = now_;
@@ -1175,9 +1176,17 @@ void Host::sync_objects() {
                     guest->objects_held_until = now_ + 60000000;
                     guest->placed_since = guest->objects_held_until;
                     guest->placed = 0;
+                    const auto deleted = guest->shared.objects().size();
+                    for (const auto *state : {&guest->objects, &guest->shared})
+                        for (const auto &[object, value] : state->objects()) {
+                            (void)value;
+                            guest->cleared.insert(object);
+                        }
+                    if (guest->shared.revision()) guest->shared.replace({});
+                    guest->shared_from = guest->objects.revision();
                     log_("[objects] " + guest_name(*guest) + " (" + std::to_string(id) + ") placed over " + std::to_string(burst) +
-                         " objects in a minute: their objects are held as they are for a minute.");
-                    reply(*guest, "You are placing objects faster than the server allows. Yours are held as they are for a minute.");
+                         " objects in a minute: their " + std::to_string(deleted) + " objects were deleted, and none of theirs are shared for a minute.");
+                    reply(*guest, "You placed objects faster than the server allows. Yours were deleted for everyone, and none you place are shared for a minute.");
                     continue;
                 }
             }

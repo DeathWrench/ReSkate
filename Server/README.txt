@@ -128,8 +128,9 @@ object_limit       How many objects each player may have placed, 1-1024
                    A player at the limit deletes one to place another.
                    A player who places more than twice the limit plus 100
                    in a minute (a modified game animating objects by
-                   respawning them) has theirs held as they are for a
-                   minute; the log says who. Admins are not held.
+                   respawning them) has theirs deleted for everyone, and
+                   nothing they place is shared for a minute; the log
+                   says who. Admins are exempt.
 allow_object_scaling  Let players place objects bigger or smaller than their
                    own size (default true). false shares every player's
                    objects at their own size and turns the size controls

@@ -154,6 +154,11 @@ void movement_controls(SkateMenu& menu, const Model& model, const CallbacksV3& c
     if (toggle_row(menu, "No Bail", bail_help, no_bail,
             (debug.no_bail_available || debug.no_bail) && callbacks.queue_debug))
         debug_request(menu, callbacks, {DebugAction::set_no_bail, no_bail});
+    bool hall_of_meat = model.hall_of_meat.enabled;
+    if (toggle_row(menu, "Hall of Meat",
+            "Your bails show the bones they hurt and score a Meat card, as in skate. 3. A break slows the game in single player.",
+            hall_of_meat, model.hall_of_meat.available && callbacks.queue_console_command))
+        send_console(menu, callbacks, hall_of_meat ? "hallofmeat 1" : "hallofmeat 0");
     end_card();
 
     begin_card(menu, "boosts", "BOOSTS", "Buttons are set in Settings > Controls");

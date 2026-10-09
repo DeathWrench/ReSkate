@@ -168,8 +168,8 @@ class Host {
         ObjectState objects, shared;
         std::uint64_t shared_from{};
         std::set<std::uint64_t> cleared;
-        // Objects they placed in the last minute, and until when theirs are held for placing
-        // more than a person does (object_burst).
+        // Objects they placed in the last minute, and until when none of theirs are shared, for
+        // placing more than a person does (sync_objects).
         std::uint64_t placed_since{}, placed{}, objects_held_until{};
         struct ObjectDelivery {
             std::map<std::uint64_t, std::pair<std::uint64_t, std::uint64_t>> sent;
