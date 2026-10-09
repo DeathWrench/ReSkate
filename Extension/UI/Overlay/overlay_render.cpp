@@ -481,6 +481,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool skate_hud_frame = skate_hud_pending();
     const bool nametag_frame = nametags_pending();
     const bool meat_frame = hall_of_meat_pending();
+    const bool item_browser_frame = item_browser_pending();
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
     const bool hub_frame = hub_page_pending();
     if (trainer_open_requested()) s.visible.store(true);
@@ -500,7 +501,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
         }
         // Hidden, the overlay still draws while a notice or chat line is on screen.
         if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !skate_hud_frame &&
-            !nametag_frame && !meat_frame && !perf_frame && !hub_frame) return;
+            !nametag_frame && !meat_frame && !item_browser_frame && !perf_frame && !hub_frame) return;
     } else if (!s.ui_was_interactive) {
         s.ui_was_interactive = true;
         s.last_model = {}; // Reopening immediately reads fresh state.
@@ -557,6 +558,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     draw_perf_hud();
     draw_trainer_hud();
     draw_notices();
+    draw_item_browser();
     draw_chat();
     sync_menu_cursor(); // close buttons also change visibility, without a key message
     ImGui::Render();

@@ -13,6 +13,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Console/perf_commands.cpp
     Extension/Skater/console_commands.cpp
     Extension/Multiplayer/console_commands.cpp
+    Extension/Customization/console_commands.cpp
     Extension/Multiplayer/Session/session.cpp
     Extension/Multiplayer/Session/session_view.cpp
     Extension/Multiplayer/Session/session_send.cpp
@@ -149,6 +150,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Profile/local_profile_missions.cpp
     Extension/Customization/local_cosmetic_catalog.cpp
     Extension/Customization/local_customization_runtime.cpp
+    Extension/Customization/item_browser.cpp
     Extension/Progression/local_entitlement_trigger_runtime.cpp
     Extension/Progression/local_neighborhood_runtime.cpp
     Extension/Customization/local_player_card_runtime.cpp

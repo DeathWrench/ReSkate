@@ -22,6 +22,7 @@ void register_object_commands(Commands &);
 void register_park_editor_commands(Commands &);
 void register_multiplayer_commands(Commands &);
 void register_perf_commands(Commands &);
+void register_item_commands(Commands &);
 void register_trainer_commands(Commands &);
 void register_hall_of_meat_commands(Commands &);
 // Runtime adapters. Invoked only by the verified game-thread dispatcher.

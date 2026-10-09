@@ -1,4 +1,5 @@
 #include "runtime_internal.h"
+#include "Extension/Customization/item_browser.h"
 #include "bootstrap.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
@@ -192,6 +193,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         dingosdk::overlay::set_hub_page_feed(dingosdk::multiplayer::native_menu_page);
         dingosdk::overlay::set_hub_callbacks(native_callbacks);
         dingosdk::overlay::set_ui_sound(dingosdk::multiplayer::queue_ui_sound);
+        dingosdk::overlay::set_item_browser(dingosdk::item_browser::overlay_host());
         dingosdk::overlay::set_game_text_feed(dingosdk::multiplayer::skate_debug_text);
         dingosdk::overlay::set_skate_hud_feed(dingosdk::multiplayer::skate_hud);
         dingosdk::overlay::set_nametag_feed(dingosdk::multiplayer::custom_nametags);
