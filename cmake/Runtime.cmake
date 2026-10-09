@@ -173,6 +173,7 @@ add_library(dingosdk_runtime SHARED
     Extension/World/visual_environment.cpp
     Extension/World/local_population_controls.cpp
     Extension/World/native_route_lookahead.cpp
+    Extension/World/unload_guard.cpp
     Extension/World/local_world_controls.cpp
     Extension/World/local_atmosphere_controls.cpp
     Extension/Rendering/local_graphics_controls.cpp
