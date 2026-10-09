@@ -407,6 +407,12 @@ void save_bans(const Session &s);
 bool is_banned(Session &s, std::uint64_t id);
 // Re-reads friend_ids when the Steam social snapshot has changed.
 void refresh_friends(Session &s);
+// On a dedicated server games do not send each other anything: all of it goes through the
+// server, which holds it to its rules. The one thing a server cannot do for a game is prove
+// who another player is, which the marks rest on (steam_vouched). So two games still link,
+// for that proof alone, when one of the two players has a mark the other would show: either is
+// on one of the backend's lists, or they are Steam friends. Both games decide the same.
+bool identity_link(Session &s, std::uint64_t other);
 // `marks`: whether the line may show the badge the backend gives its sender (player_role).
 void add_chat(Session &s, std::uint64_t sender, std::string name, std::string text, bool local = false, bool marks = true);
 // The colour and badge of one of the backend's categories.
