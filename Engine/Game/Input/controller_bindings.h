@@ -84,6 +84,21 @@ struct ControllerInput {
     ControllerStyle style{};
     std::array<std::uint64_t, 4> keys{};
 };
+// Switches a player can put on a button or key: each runs a console command when pressed.
+// `key` is its name in the profile, `name` what "bind <name>" takes.
+struct ActionBind {
+    std::string_view key, name, label, command;
+};
+inline constexpr std::array<ActionBind, 8> action_binds{{
+    {"first_person", "firstperson", "First person", "firstperson toggle"},
+    {"hide_hud", "hidehud", "Hide HUD", "hideui toggle"},
+    {"voice_chat", "voicechat", "Voice chat on / off", "mp voice-chat toggle"},
+    {"time_of_day", "tod", "Next time of day", "tod next"},
+    {"no_bail", "nobail", "No Bail", "nobail toggle"},
+    {"challenges", "challenges", "Show / hide challenges", "challenges toggle"},
+    {"nametags", "nametags", "Player nametags", "mp nametags toggle"},
+    {"nametag_dots", "nametagdots", "Player dots", "mp nametag-dots toggle"},
+}};
 struct ControllerBindingsModel {
     bool available{};
     bool freecam_controller{};
@@ -95,6 +110,7 @@ struct ControllerBindingsModel {
     std::uint32_t up_velocity_combo{};
     std::uint32_t offboard_up_velocity_combo{};
     std::uint32_t vote_yes_combo{}, vote_no_combo{}; // answering a dedicated server's vote
+    std::array<std::uint32_t, action_binds.size()> action_combos{}; // by action_binds
     std::string status;
 };
 inline std::string controller_combo_label(std::uint32_t value, ControllerStyle style = ControllerStyle::xbox) {

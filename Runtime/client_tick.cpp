@@ -385,6 +385,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
     std::uint32_t freecam_controller_combo{}, freecam_combo{}, tp_to_freecam_combo{}, noclip_combo{}, forward_velocity_combo{}, up_velocity_combo{}, offboard_up_velocity_combo{};
     // Yes and No in a dedicated server's vote: read only while one is running.
     std::uint32_t vote_yes_combo{}, vote_no_combo{};
+    // The switches on buttons (action_binds): each runs its console command.
+    std::array<std::uint32_t, dingosdk::action_binds.size()> action_combos{};
     const bool vote_open = dingosdk::multiplayer::server_vote_open();
     bool freecam_controller = dingosdk::local_freecam_controller();
     {
@@ -398,6 +400,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
         forward_velocity_combo = r.model.bindings.available ? r.model.bindings.forward_velocity_combo : 0;
         up_velocity_combo = r.model.bindings.available ? r.model.bindings.up_velocity_combo : 0;
         offboard_up_velocity_combo = r.model.bindings.available ? r.model.bindings.offboard_up_velocity_combo : 0;
+        if (r.model.bindings.available) action_combos = r.model.bindings.action_combos;
         if (vote_open && r.model.bindings.available) {
             vote_yes_combo = r.model.bindings.vote_yes_combo;
             vote_no_combo = r.model.bindings.vote_no_combo;
@@ -409,7 +412,15 @@ void update_model(std::uintptr_t client, TickState& frame) {
     DingoSDKOverlaySetFreecamInputCapture(dingosdk::client_free_camera_active() && freecam_controller);
     dingosdk::ControllerInput controller;
     if (freecam_controller_combo || freecam_combo || tp_to_freecam_combo || noclip_combo || forward_velocity_combo || up_velocity_combo || offboard_up_velocity_combo ||
-        vote_yes_combo || vote_no_combo) DingoSDKOverlayReadControllerInput(&controller);
+        vote_yes_combo || vote_no_combo || std::ranges::any_of(action_combos, [](auto combo) { return combo != 0; }))
+        DingoSDKOverlayReadControllerInput(&controller);
+    for (std::size_t i = 0; i < action_combos.size(); ++i)
+        if (r.action_bind_latches[i].update(action_combos[i], controller, r.observer_failed)) {
+            std::array<char, 256> result{};
+            const std::string command(dingosdk::action_binds[i].command);
+            if (queue_console_command(nullptr, command.c_str(), result.data(), result.size()))
+                record(("{\"event\":\"controller_binding_triggered\",\"action\":\"" + std::string(dingosdk::action_binds[i].key) + "\"}").c_str());
+        }
     // (The input reads as nothing while the menu, the console or the chat box is open, so typing
     // a bound key answers no vote.)
     if (r.vote_yes_bind_latch.update(vote_yes_combo, controller, !vote_open) && dingosdk::multiplayer::queue_command("vote", "yes", ""))

@@ -616,7 +616,7 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
     if ((action != "host" && action != "host-config" && action != "join" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
          action != "distances" && action != "object-placement" && action != "object-limit" && action != "kick" && action != "clear-objects" &&
          action != "nametags" && action != "chat-visible" && action != "chat-filter" &&
-         action != "nametag-distance" && action != "nametag-dots" && action != "nametags-friends" && action != "player-distance" && action != "direct-connections" && action != "pose-dump" && action != "vote" &&
+         action != "nametag-distance" && action != "nametag-dots" && action != "nametags-friends" && action != "player-distance" && action != "direct-connections" && action != "pose-dump" && action != "vote" && action != "voice-chat" &&
          action != "chat-bubbles" && action != "chat-bubbles-own" && action != "chat-bubbles-distance" &&
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
          !own_mark_command(action) &&
@@ -740,6 +740,18 @@ std::string command(std::string_view action, std::string_view argument, std::str
             s.voice.configure(value);
             publish(s);
             return value.enabled ? (value.open_mic ? "Open microphone enabled." : "Push-to-talk voice enabled.") : "Voice chat disabled.";
+        }
+        if (action == "voice-chat") {
+            // The player's own voice chat, on or off; the rest of their voice settings stay.
+            if (argument != "on" && argument != "off" && argument != "toggle") return "Choose on, off or toggle.";
+            auto value = s.voice_settings;
+            value.enabled = argument == "toggle" ? !value.enabled : argument == "on";
+            s.voice_settings = value;
+            s.voice.configure(value);
+            publish(s);
+            const std::string result = value.enabled ? "Voice chat on." : "Voice chat off.";
+            add_chat(s, 0, "ReSkate", result);
+            return result;
         }
         if (action == "tp") return teleport_self(s, argument);
         if (action == "tpall" || action == "tphere") return teleport_players(s, action, argument);
