@@ -278,6 +278,12 @@ void set_native_compass_enabled(bool) noexcept {}
 void prepare_native_indicators(std::uintptr_t) noexcept {}
 void prepare_player_ui(std::uintptr_t) noexcept {}
 void prepare_remote_audio(std::uintptr_t) noexcept {}
+void prepare_effects(std::uintptr_t) noexcept {}
+std::vector<Impact> drain_impacts() { return {}; }
+void play_impact(const Impact &) noexcept {}
+void note_remote_outfit(std::uint64_t) noexcept {}
+void tick_remote_effects(std::uint64_t) noexcept {}
+void reset_effects() noexcept {}
 bool install_entity_hooks(std::uintptr_t, std::string &) noexcept { return true; }
 void publish_custom_nametags(std::uintptr_t, std::vector<NametagPlayer>, std::optional<std::array<float, 3>>, bool, bool, float, float, bool) noexcept {}
 void set_custom_nametags_enabled(bool) noexcept {}

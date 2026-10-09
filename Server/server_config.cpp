@@ -105,6 +105,7 @@ Layout layout(const ServerConfig &c) {
     players.set("object_placement", placement_text(c.object_placement));
     players.set("object_limit", c.object_limit);
     players.set("allow_object_scaling", c.object_scaling);
+    players.set("sync_effects", c.sync_effects);
     players.set("announce_throwdowns", c.announce_throwdowns);
 
     auto &anti_cheat = root.section("anti_cheat");
@@ -260,6 +261,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
                        : placement == "admins" || placement == "host" ? ObjectPlacement::host_only : ObjectPlacement::everyone;
     c.object_limit = get("players", "object_limit", c.object_limit);
     c.object_scaling = get("players", "allow_object_scaling", c.object_scaling);
+    c.sync_effects = get("players", "sync_effects", c.sync_effects);
     c.announce_throwdowns = get("players", "announce_throwdowns", c.announce_throwdowns);
 
     c.speed_check = get("anti_cheat", "speed_hack", c.speed_check, {"speed_check"});

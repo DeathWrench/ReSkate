@@ -274,6 +274,7 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     apply_object_placement(s, p.object_placement);
     apply_object_limit(s, p.object_limit); // after server_admin, which exempts an admin
     s.object_scaling = !dedicated_host(s) || p.object_scaling;
+    s.sync_effects = !dedicated_host(s) || p.sync_effects;
     apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts);
     s.enforce_tuning = p.enforce_tuning;
     s.server_votes = dedicated_host(s) ? p.server_votes : 0;
@@ -337,7 +338,14 @@ bool accept_data(Peer &peer, const Packet &p, std::uint64_t now) {
         }
     } else if (p.kind == PacketKind::audio)
         accepted = peer.sound_budget.accept(now, p.audio.size()) && peer.audio.push(p, now);
-    else if (p.kind == PacketKind::pose)
+    else if (p.kind == PacketKind::effects) {
+        accepted = peer.effect_budget.accept(now);
+        if (accepted) {
+            const auto due = now + std::max<std::uint64_t>(100000, peer.received_pose_interval + 50000);
+            for (const auto &impact : p.impacts) peer.impacts.emplace_back(due, impact);
+            while (peer.impacts.size() > 64) peer.impacts.pop_front();
+        }
+    } else if (p.kind == PacketKind::pose)
         accepted = peer.poses.push_validated(p, now);
     if (accepted) {
         peer.last_packet = now;

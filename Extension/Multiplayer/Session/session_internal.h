@@ -117,6 +117,10 @@ struct Peer {
     VoiceBudget voice_budget;
     OutfitBudget outfit_budget;
     SoundBudget sound_budget;
+    EffectBudget effect_budget;
+    // Their skater's contacts with the world (effects.h), each with when to show it: as late
+    // as their poses are shown, so the sparks are where their skater is.
+    std::deque<std::pair<std::uint64_t, Impact>> impacts;
     ChatRate chat_rate;
     // Chat proofs (session_receive.cpp): the copies of their lines this player sent us over
     // their own Steam connection, and the lines the host passed on as theirs that wait for one.
@@ -156,6 +160,7 @@ struct Session {
     ObjectPlacement object_placement = ObjectPlacement::everyone;
     unsigned object_limit{}; // objects each player may have placed; 0: no limit
     bool object_scaling{true}; // the dedicated server lets players resize what they place
+    bool sync_effects{true};   // the dedicated server has players see each other's skater effects
     // What guests may use: the host's choice, or the host's roster for a guest.
     bool guest_noclip = true, guest_no_bail = true, guest_boosts = true;
     // Host: guests skate with its physics tuning. Guest: the host's roster says so (a

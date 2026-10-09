@@ -375,6 +375,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         throw std::invalid_argument("Invalid object update");
     if (p.kind == PacketKind::voice && (!p.map || !p.source || !valid_voice(p.voice)))
         throw std::invalid_argument("Invalid voice packet");
+    if (p.kind == PacketKind::effects && (!p.map || !p.source || !valid_impacts(p.impacts)))
+        throw std::invalid_argument("Invalid effects packet");
     if (p.kind == PacketKind::chat && (!p.source || !valid_chat_text(p.text)))
         throw std::invalid_argument("Invalid chat message");
     if (p.kind == PacketKind::admin && (!p.source || !valid_admin_text(p.text)))
@@ -427,7 +429,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         p.kind != PacketKind::objects && p.kind != PacketKind::voice && p.kind != PacketKind::chat &&
         p.kind != PacketKind::admin && p.kind != PacketKind::bans && p.kind != PacketKind::maps &&
         p.kind != PacketKind::throwdown && p.kind != PacketKind::teleport && p.kind != PacketKind::physics_tuning &&
-        p.kind != PacketKind::party && p.kind != PacketKind::scoring && p.kind != PacketKind::physics_extras)
+        p.kind != PacketKind::party && p.kind != PacketKind::scoring && p.kind != PacketKind::physics_extras &&
+        p.kind != PacketKind::effects)
         throw std::invalid_argument("Unknown packet kind");
     const auto payload = greeting ? 72
                          : p.kind == PacketKind::away
@@ -550,6 +553,17 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         w.integer(p.tuning.size(), 2);
         w.bytes.insert(w.bytes.end(), p.tuning.begin(), p.tuning.end());
     }
+    if (p.kind == PacketKind::effects) {
+        w.integer(p.impacts.size(), 1);
+        for (const auto &impact : p.impacts) {
+            for (const auto v : impact.position) w.integer(std::bit_cast<std::uint32_t>(v), 4);
+            for (const auto v : impact.velocity)
+                w.integer(static_cast<std::uint16_t>(static_cast<std::int16_t>(std::lround(v * 100.f))), 2);
+            for (const auto v : impact.normal)
+                w.integer(static_cast<std::uint8_t>(static_cast<std::int8_t>(std::lround(v * 127.f))), 1);
+            w.integer(impact.material, 2);
+        }
+    }
     if (p.kind == PacketKind::physics_extras) {
         w.integer(p.extras.size(), 2);
         w.bytes.insert(w.bytes.end(), p.extras.begin(), p.extras.end());
@@ -620,6 +634,7 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         if (!valid_object_limit(p.object_limit)) throw std::invalid_argument("Invalid object limit");
         w.integer(p.object_limit, 2);
         w.integer(p.object_scaling ? 1 : 0, 1);
+        w.integer(p.sync_effects ? 1 : 0, 1);
         w.integer(p.force_world_layers, 1);
         // One mode per world-layer catalog row; both peers read the same catalog
         // from the same game build.
@@ -827,6 +842,20 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
                 return {};
             p.tuning.assign(bytes.begin() + static_cast<std::ptrdiff_t>(r.at), bytes.end());
             r.at = bytes.size();
+        } else if (p.kind == PacketKind::effects) {
+            const auto count = r.integer(1);
+            if (!p.map || !p.source || !count || count > max_impacts || count * impact_wire_size != bytes.size() - r.at)
+                return {};
+            p.impacts.resize(static_cast<std::size_t>(count));
+            for (auto &impact : p.impacts) {
+                for (auto &v : impact.position) v = r.number();
+                for (auto &v : impact.velocity)
+                    v = static_cast<float>(static_cast<std::int16_t>(static_cast<std::uint16_t>(r.integer(2)))) / 100.f;
+                for (auto &v : impact.normal)
+                    v = static_cast<float>(static_cast<std::int8_t>(static_cast<std::uint8_t>(r.integer(1)))) / 127.f;
+                impact.material = static_cast<std::uint16_t>(r.integer(2));
+            }
+            if (!valid_impacts(p.impacts)) return {};
         } else if (p.kind == PacketKind::physics_extras) {
             const auto length = r.integer(2);
             if (!p.source || length > max_physics_extras || length != bytes.size() - r.at)
@@ -949,6 +978,9 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             const auto scaling = r.integer(1);
             if (scaling > 1) return {};
             p.object_scaling = scaling != 0;
+            const auto shared_effects = r.integer(1);
+            if (shared_effects > 1) return {};
+            p.sync_effects = shared_effects != 0;
             const auto forced = r.integer(1);
             if (forced > 1) return {};
             p.force_world_layers = forced != 0;

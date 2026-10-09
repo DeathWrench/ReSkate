@@ -3,6 +3,7 @@
 #include "Extension/Multiplayer/Hud/native_party.h"
 #include "Extension/Multiplayer/Remote/native_skater.h"
 #include "Extension/Multiplayer/Remote/remote_collision.h"
+#include "Extension/Multiplayer/Remote/native_vfx.h"
 #include "Extension/Throwdowns/throwdown_lab.h"
 #include "Extension/Throwdowns/throwdown_debug_text.h"
 #include "Extension/Throwdowns/throwdown_relay.h"
@@ -163,6 +164,11 @@ void register_multiplayer_commands(Commands &registry) {
         out(multiplayer::puppet_saving_status());
     };
     registry.add(std::move(savings));
+    auto effects = action("mp effects",
+                          "Skater effects shared with other players: what has been captured and played",
+                          Group::gameplay, {});
+    effects.run = [](const Model &, const Values &, const Output &out) { out(multiplayer::native_effects_status()); };
+    registry.add(std::move(effects));
     auto hud_choice = argument("reskate|game", Type::text, true);
     hud_choice.complete = [](const Model &, auto) { return std::vector<std::string>{"reskate", "game"}; };
     auto hud = action("throwdown-hud",

@@ -31,6 +31,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Remote/puppet_cost.cpp
     Extension/Multiplayer/Remote/native_cosmetics.cpp
     Extension/Multiplayer/Remote/native_audio.cpp
+    Extension/Multiplayer/Remote/native_vfx.cpp
     Extension/Multiplayer/Voice/voice_chat.cpp
     Extension/Multiplayer/Voice/native_voice.cpp
     Extension/Multiplayer/Hud/native_player_ui.cpp
