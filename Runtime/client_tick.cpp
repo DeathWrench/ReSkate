@@ -93,6 +93,9 @@ void refresh_interactive_model(std::uintptr_t client, DWORD state, DWORD game_ty
 // Engine settings that cost simulation time for nothing here, set once through the named
 // setter (retried until the settings registry answers):
 // - telemetry and the performance tracker only feed EA's backend, absent offline;
+// - EA's error reporting (EadpErrorsData) only builds reports for EA's servers, which
+//   ea_service_block keeps unreachable. Set here because the same values given on the game's
+//   command line do not take;
 // - the world-transform update, which grows with every remote player's entities, is split
 //   over more jobs than Game.cfg's 2.
 void apply_performance_settings() {
@@ -104,11 +107,14 @@ void apply_performance_settings() {
     next_attempt = now + 500;
     try {
         const auto jobs = std::to_string(std::clamp(std::thread::hardware_concurrency() / 2, 2u, 8u));
-        const std::array<std::pair<const char*, std::string>, 7> settings{{
+        const std::array<std::pair<const char*, std::string>, 10> settings{{
             {"DingoTelemetry.Enable", "0"},
             {"DingoTelemetry.EnablePlayerTickEvents", "0"},
             {"DingoTelemetry.EnablePerformanceEvents", "0"},
             {"DingoTelemetry.EnableCPUBenchmark", "0"},
+            {"EadpErrorsData.DisableAllEventsReporting", "1"},
+            {"EadpErrorsData.EnableReportCrashes", "0"},
+            {"EadpErrorsData.AutoSendEventFromPersistence", "0"},
             {"PerformanceTracker.Enabled", "0"},
             {"PerformanceTracker.JuiceLogPerformance", "0"},
             {"EcsWorldTransform.ParallelWorldTransformUpdateJobCount", jobs},

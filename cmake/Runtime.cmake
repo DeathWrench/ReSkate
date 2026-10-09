@@ -175,7 +175,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Progression/fixed_stop_entitlement_observation.cpp
     Extension/Progression/neighborhood_unlock_override.cpp
     Extension/Boot/user_data_redirect.cpp
-    Extension/Boot/ea_app_block.cpp)
+    Extension/Boot/ea_app_block.cpp
+    Extension/Boot/ea_service_block.cpp)
 
 target_link_libraries(dingosdk_runtime PRIVATE dingosdk_logging dingosdk_profiler dingosdk_supported_build dingosdk_overlay dingosdk_console_core dingosdk_steam_restart_guard
     dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt
