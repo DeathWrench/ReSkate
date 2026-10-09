@@ -134,7 +134,7 @@ bool SteamTransport::host(unsigned capacity) {
     impl_->state.hosting = true;
     return true;
 }
-bool SteamTransport::join(std::uint64_t id) {
+bool SteamTransport::join(std::uint64_t id, std::uint32_t, std::uint16_t) {
     if (SimulatedNetwork::slow_join) Sleep(2);
     stop();
     open();
@@ -234,6 +234,7 @@ std::vector<TransportMessage> SteamTransport::receive() {
 const TransportStatus &SteamTransport::status() const { return impl_->state; }
 std::string SteamTransport::name(std::uint64_t id) { return "Player " + std::to_string(id); }
 bool SteamTransport::socket_test() { return true; }
+std::vector<std::string> SteamTransport::take_direct_notes() { return {}; }
 
 // No native/game/UI calls in this harness.
 NativeFrame tick_frame;
