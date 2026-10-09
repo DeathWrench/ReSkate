@@ -204,6 +204,11 @@ struct MissionRow {
     int completed = -1;
 };
 
+// Hall of Meat's switch (Extension/HallOfMeat/hall_of_meat.h): started, and switched on.
+struct HallOfMeatModel {
+    bool available = false, enabled = false;
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -222,6 +227,7 @@ struct Model {
     WorldControlsModel world_controls;
     ProgressionModel progression;
     PlayerCardModel player_card;
+    HallOfMeatModel hall_of_meat;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
