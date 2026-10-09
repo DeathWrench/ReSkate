@@ -155,6 +155,7 @@ struct Session {
     MultiplayerDistances distances;
     ObjectPlacement object_placement = ObjectPlacement::everyone;
     unsigned object_limit{}; // objects each player may have placed; 0: no limit
+    bool object_scaling{true}; // the dedicated server lets players resize what they place
     // What guests may use: the host's choice, or the host's roster for a guest.
     bool guest_noclip = true, guest_no_bail = true, guest_boosts = true;
     // Host: guests skate with its physics tuning. Guest: the host's roster says so (a

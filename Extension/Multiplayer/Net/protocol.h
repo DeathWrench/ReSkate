@@ -188,6 +188,9 @@ struct Packet {
     ObjectPlacement object_placement = ObjectPlacement::everyone;
     // Objects each player may have placed (object_placement.h); 0: no limit.
     unsigned object_limit{};
+    // Roster: players may place objects at another size than their own. Off: a dedicated server
+    // shares every player's objects at their own size (its admins' excepted).
+    bool object_scaling{true};
     // Bumped each time the host deletes all guest objects. Guests delete their
     // own session objects when it changes after their first roster.
     std::uint32_t object_clears{};

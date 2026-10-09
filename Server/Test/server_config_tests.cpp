@@ -192,6 +192,17 @@ int run() {
               "A config in sections did not read back as it was written");
         std::filesystem::remove_all(folder / "data");
     }
+    // Object scaling: allowed unless turned off, and kept in the file.
+    {
+        ServerConfig sized;
+        check(sized.object_scaling, "Object scaling is not allowed by default");
+        sized.file = folder / "sized.json";
+        sized.object_scaling = false;
+        save_config(sized);
+        check(!load_config(sized.file).object_scaling && text(sized.file).find("\"allow_object_scaling\": false") != std::string::npos,
+              "The object scaling setting was not kept");
+        std::filesystem::remove_all(folder / "data");
+    }
     // The server's chat colours: violet and lavender unless set, red first as written.
     {
         ServerConfig colours;

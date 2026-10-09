@@ -151,6 +151,7 @@ void publish(Session &s, const NativeFrame *local) {
     view.distances = s.distances;
     view.object_placement = s.object_placement;
     view.object_limit = s.object_limit;
+    view.object_scaling = s.object_scaling || s.server_admin || s.mode != Mode::join;
     view.object_limit_own = s.mode == Mode::host || s.server_admin ? 0 : s.object_limit; // as apply_object_limit gives this game
     view.objects_placed = s.mode == Mode::off ? 0 : static_cast<unsigned>(s.local_objects.objects().size());
     view.guest_noclip = s.guest_noclip;

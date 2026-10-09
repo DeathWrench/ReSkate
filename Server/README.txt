@@ -121,6 +121,11 @@ object_placement   everyone, admins (only admins can build), or nobody.
 object_limit       How many objects each player may have placed, 1-1024
                    (default 100), or 0 for no limit. Admins are not limited.
                    A player at the limit deletes one to place another.
+allow_object_scaling  Let players place objects bigger or smaller than their
+                   own size (default true). false shares every player's
+                   objects at their own size and turns the size controls
+                   off in their park editor. Admins can still resize
+                   theirs. Console: object-scaling on|off.
 announce_throwdowns  Tell everyone in chat when a throwdown drop is placed
                    (default true).
 
@@ -266,6 +271,7 @@ and change voice, distances, placement and kicks from the Multiplayer menu.
   distances <full> <half> <half-return> <low>
   placement everyone|admins|nobody   clear-objects
   objects <number>|off          How many objects each player may have placed.
+  object-scaling on|off         Whether players may resize the objects they place.
   noclip on|off   nobail on|off   boosts on|off
                                 What players may use (admins always can).
   tuning on|off                 Everyone on the game's own physics tuning.

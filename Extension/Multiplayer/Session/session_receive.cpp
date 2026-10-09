@@ -273,6 +273,7 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     }
     apply_object_placement(s, p.object_placement);
     apply_object_limit(s, p.object_limit); // after server_admin, which exempts an admin
+    s.object_scaling = !dedicated_host(s) || p.object_scaling;
     apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts);
     s.enforce_tuning = p.enforce_tuning;
     s.server_votes = dedicated_host(s) ? p.server_votes : 0;

@@ -74,6 +74,7 @@ void stop(Session &s, std::string reason) {
     s.tps = multiplayer_default_tps;
     s.object_placement = ObjectPlacement::everyone;
     s.object_limit = 0;
+    s.object_scaling = true;
     set_lobby_object_limit(0);
     s.server_admin = false;
     s.server_bans.clear();

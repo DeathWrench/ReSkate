@@ -585,6 +585,9 @@ void object_codec() {
     const auto listed = decode(encode(served));
     check(listed && listed->members.size() == 34 && listed->capacity == 32, "A server's roster past its limit failed to round-trip");
     check(listed && listed->vote == served.vote, "A server's vote failed to round-trip");
+    served.object_scaling = false;
+    const auto fixed = decode(encode(served));
+    check(fixed && !fixed->object_scaling && listed && listed->object_scaling, "The roster's object scaling rule failed to round-trip");
     served.vote = {};
     const auto quiet = decode(encode(served));
     check(quiet && quiet->vote == ServerVote{}, "A roster without a vote did not come back without one");

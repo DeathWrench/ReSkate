@@ -103,6 +103,7 @@ Layout layout(const ServerConfig &c) {
     players.set("voice_range", static_cast<double>(c.voice_range));
     players.set("object_placement", placement_text(c.object_placement));
     players.set("object_limit", c.object_limit);
+    players.set("allow_object_scaling", c.object_scaling);
     players.set("announce_throwdowns", c.announce_throwdowns);
 
     auto &anti_cheat = root.section("anti_cheat");
@@ -256,6 +257,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.object_placement = placement == "nobody" ? ObjectPlacement::nobody
                        : placement == "admins" || placement == "host" ? ObjectPlacement::host_only : ObjectPlacement::everyone;
     c.object_limit = get("players", "object_limit", c.object_limit);
+    c.object_scaling = get("players", "allow_object_scaling", c.object_scaling);
     c.announce_throwdowns = get("players", "announce_throwdowns", c.announce_throwdowns);
 
     c.speed_check = get("anti_cheat", "speed_hack", c.speed_check, {"speed_check"});

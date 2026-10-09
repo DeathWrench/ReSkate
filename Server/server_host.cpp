@@ -576,6 +576,7 @@ void Host::send_roster() {
     p.distances = config_.distances;
     p.object_placement = config_.object_placement;
     p.object_limit = config_.object_limit;
+    p.object_scaling = config_.object_scaling;
     p.guest_noclip = config_.noclip;
     p.guest_no_bail = config_.no_bail;
     p.guest_boosts = config_.boosts;
@@ -1113,6 +1114,10 @@ void Host::sync_objects() {
             std::erase_if(layout, [&](const auto &object) { return guest->cleared.contains(object.id); });
             // No more of a player's objects than the server allows each of them; admins are not limited.
             if (!is_admin(id)) layout = limited_layout(std::move(layout), guest->shared.objects(), config_.object_limit);
+            // With scaling off, a player's objects reach everyone else at their own size, whatever
+            // that player's game made of them.
+            if (!config_.object_scaling && !is_admin(id))
+                for (auto &object : layout) object.scale = 1.f;
             if (config_.activity_log) activity_.objects(id, guest->shared.layout(), layout);
             guest->shared.replace(layout);
             guest->shared_from = guest->objects.revision();

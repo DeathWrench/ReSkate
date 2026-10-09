@@ -16,7 +16,7 @@ constexpr std::string_view help_text =
     "status | net [player] | players | say <text> | msg <player> <text> | msg-party <player> <text> | msg-admins <text> | kick <player> | ban <player or SteamID64> [name] | unban <SteamID64> | bans\n"
     "map <name, e.g. San Vansterdam> | maps | name <text> | password <text|off> | welcome <text|off> | listed on|off\n"
     "voice on|off | voice-range <50-1000> | distances <full> <half> <half-return> <low> | crowd <n>|off | rate <KB/s> | bone-scale <1-8>|off\n"
-    "placement everyone|admins|nobody | objects <number>|off | clear-objects | noclip on|off | nobail on|off | boosts on|off | tuning on|off\n"
+    "placement everyone|admins|nobody | objects <number>|off | object-scaling on|off | clear-objects | noclip on|off | nobail on|off | boosts on|off | tuning on|off\n"
     "tpall [player] | tphere <player> | votes [map|kick|tod on|off|<percent>] | vote-cancel\n"
     "map-pool [add|remove <map>|clear] | rotation [<minutes>|off]\n"
     "park <lot> <layout> | park random | layer-sync on|off | layer <key> default|on|off | tod <time|default>\n"
@@ -437,6 +437,14 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         for (auto &[id, guest] : guests_) guest->shared_from = 0; // look at every layout again
         return changed(*limit ? "Each player can place up to " + std::to_string(*limit) + " objects. Admins are not limited."
                               : std::string("Players can place as many objects as they like."));
+    }
+    if (name == "object-scaling") {
+        const auto value = on_off(argument);
+        if (!value) return std::string("object-scaling on|off (now ") + (config_.object_scaling ? "on" : "off") + ")";
+        config_.object_scaling = *value;
+        for (auto &[id, guest] : guests_) guest->shared_from = 0; // look at every layout again
+        return changed(*value ? "Players can resize the objects they place."
+                              : "Placed objects are their own size for everyone. Admins can still resize theirs.");
     }
     if (name == "votes") {
         // votes | votes <map|kick|tod> on|off|<percent> | votes seconds|cooldown <n>
