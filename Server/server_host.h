@@ -128,6 +128,11 @@ class Host {
         std::unordered_map<std::uint16_t, sound_codec::In> sound_in;
         Transform still_at;
         std::uint64_t moved_at{};
+        // When they last did something a player at their game does: moved, spoke, typed in chat
+        // or changed their objects (0 until their game has loaded the map). And whether they have
+        // been told they are about to be removed for being away.
+        std::uint64_t active_at{};
+        bool away_warned{};
         std::uint64_t pose_arrival{};
         std::array<PoseDelivery, max_players> pose_delivery;
         CrowdLimits crowd; // how far the full and half rates reach for them in a crowd
@@ -192,6 +197,11 @@ class Host {
     std::uint64_t vote_shown_until_{};
     std::uint32_t vote_ids_{};
     void show_vote(const Vote &vote, std::uint8_t outcome, unsigned yes, unsigned no, unsigned needed);
+    void active(Guest &guest) {
+        guest.active_at = now_;
+        guest.away_warned = false;
+    }
+    void remove_away();
     bool vote_recount_{}; // a player left: recount in tick(), never while guests_ is being walked
     std::map<std::uint64_t, std::uint64_t> vote_cooldowns_;
     std::uint64_t map_since_{}; // rotation clock start: the last map change, or while nobody is on

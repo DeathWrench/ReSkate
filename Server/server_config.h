@@ -78,6 +78,9 @@ struct ServerConfig {
     // panel has eight rows). Off, nobody can be in one.
     bool parties = true;
     unsigned party_size = 8;
+    // Minutes a player may be away (not moving, talking, typing or building) before the server
+    // removes them, 1 to 1440; 0: never. Admins are never removed for it.
+    unsigned afk_kick = 0;
     // Players whose game runs fast (a speedhack; Server/speed_check.h): "warn" takes them out of
     // throwdowns and coop challenges and tells the admins, "kick" also removes them, "off" does not check.
     std::string speed_check = "warn";

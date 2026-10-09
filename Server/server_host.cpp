@@ -763,6 +763,7 @@ bool Host::accept_data(Guest &source, const Packet &p) {
             if (!source.moved_at || moved > 0.05f * 0.05f || std::abs(facing) < 0.9995f) {
                 source.still_at = root;
                 source.moved_at = now_;
+                active(source);
             }
         }
         return check_speed(source, p.time_us); // last: a speed-check kick frees `source`
@@ -890,7 +891,10 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
                 log_("[map] " + guest_name(*link) + " finished loading (" + std::to_string((now_ - since) / 1000000) + " s)");
         link->world_ready = p.world_ready;
         if (p.world_ready) link->travel_since = link->loading_since = 0;
-        if (arrived) meet_later(*link);
+        if (arrived) {
+            meet_later(*link);
+            active(*link); // the time away starts once they are in
+        }
         return;
     }
     case PacketKind::map_request: {
@@ -1007,6 +1011,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
     // A listen host's; the server's physics are the game's own.
     if (p.kind == PacketKind::physics_tuning || p.kind == PacketKind::physics_extras) return;
     if (p.kind == PacketKind::chat) {
+        active(*link);
         if (!routed_source(p, link->member, peer, true, id_) ||
             link->chat_rate.accept(now_, p.text, 1) != ChatRate::Verdict::accepted)
             return;
@@ -1062,8 +1067,10 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
     if (!routed_source(p, link->member, peer, true, id_)) return;
     if (p.kind == PacketKind::away) return drop(peer, "A player ended their session.");
     if (p.kind == PacketKind::objects) {
+        const auto before = link->objects.revision();
         if (link->objects.receive(p.objects) == ObjectState::Result::invalid)
             return drop(peer, "Invalid shared object revision or layout.");
+        if (link->objects.revision() != before) active(*link);
         link->last_packet = now_;
         return;
     }
@@ -1074,6 +1081,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
         link->received_voice = true;
         link->voice_sequence = p.sequence;
         link->last_packet = now_;
+        active(*link);
         broadcast(p, false, true, p.source);
         return;
     }
@@ -1097,6 +1105,30 @@ void Host::receive_cosmetics() {
             if (p.map == map_ && routed_source(p, link.member, id, true, id_) && accept_data(link, p))
                 broadcast(p, true, false, p.source);
         }
+    }
+}
+
+// Players who have been away longer than the server allows ("afk_kick_minutes") are removed,
+// with a warning a minute before. Away is doing nothing a player at their game does: not
+// moving, speaking, typing in chat or changing their objects. Admins stay, and so does anyone
+// whose game is still loading the map.
+void Host::remove_away() {
+    if (!config_.afk_kick) return;
+    const auto limit = static_cast<std::uint64_t>(config_.afk_kick) * 60000000;
+    std::vector<std::uint64_t> away;
+    for (auto &[id, guest] : guests_) {
+        auto &g = *guest;
+        if (!g.handshaken || !g.world_ready || !g.active_at || is_admin(id)) continue;
+        const auto idle = now_ - g.active_at;
+        if (idle >= limit) away.push_back(id);
+        else if (!g.away_warned && limit > 60000000 && idle >= limit - 60000000) {
+            g.away_warned = true;
+            reply(g, "You have been away a while: move or say something within a minute to stay on the server.");
+        }
+    }
+    for (const auto id : away) {
+        if (const auto *g = find(id)) log_("[afk] " + guest_name(*g) + " was removed after " + std::to_string(config_.afk_kick) + " min away.");
+        drop(id, "You were removed from the server for being away too long. You can join again.");
     }
 }
 
@@ -1519,6 +1551,7 @@ void Host::tick(std::uint64_t now) {
         roster_dirty_ = true;
     }
     tick_rotation();
+    remove_away();
     std::erase_if(vote_cooldowns_, [&](const auto &entry) { return now_ >= entry.second; });
     join_backoff_.prune(now_);
 }

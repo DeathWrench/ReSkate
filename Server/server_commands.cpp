@@ -20,7 +20,7 @@ constexpr std::string_view help_text =
     "tpall [player] | tphere <player> | votes [map|kick|tod on|off|<percent>] | vote-cancel\n"
     "map-pool [add|remove <map>|clear] | rotation [<minutes>|off]\n"
     "park <lot> <layout> | park random | layer-sync on|off | layer <key> default|on|off | tod <time|default>\n"
-    "activity-log on|off | announce-throwdowns on|off | parties [on|off] | party-size <2-8> | speed-check off|warn|kick\n"
+    "activity-log on|off | announce-throwdowns on|off | parties [on|off] | party-size <2-8> | afk-kick <minutes>|off | speed-check off|warn|kick\n"
     "score-check [off|warn|kick] | score-allow [<fingerprint>|remove <fingerprint>]\n"
     "reserved [slots <n> | add|remove <SteamID64>] | admin add|remove <SteamID64> | admins | update | quit";
 } // namespace
@@ -362,6 +362,17 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         return changed(*value ? "Each player is sent at most " + std::to_string(*value) + " poses a second: about " +
                                     std::to_string(*value / config_.tps) + " players near them at the full rate."
                               : std::string("No crowd limit: every player near is sent at the full rate."));
+    }
+    if (name == "afk-kick") {
+        const auto value = lower(argument) == "off" ? std::optional<std::uint64_t>(0) : number(argument);
+        if (!value || *value > 1440)
+            return "afk-kick <minutes 1-1440>|off (now " + (config_.afk_kick ? std::to_string(config_.afk_kick) + " min" : std::string("off")) + ")";
+        config_.afk_kick = static_cast<unsigned>(*value);
+        // Nobody is removed for time away before the rule was set.
+        for (auto &[id, guest] : guests_)
+            if (guest->active_at) active(*guest);
+        return changed(config_.afk_kick ? "Players away for " + std::to_string(config_.afk_kick) + " min are removed. Admins are not."
+                                        : std::string("Players are no longer removed for being away."));
     }
     if (name == "party-size") {
         const auto value = number(argument);
