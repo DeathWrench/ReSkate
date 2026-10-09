@@ -122,6 +122,7 @@ Layout layout(const ServerConfig &c) {
     network.set("send_rate", c.send_rate);
     network.set("crowd_budget", c.crowd_budget);
     network.set("pack_ms", c.pack_ms);
+    network.set("threads", c.threads);
     network.set("finger_distance", c.finger_distance);
     auto &distances = network.section("distances");
     distances.set("full_rate_return", c.distances.full_rate_return);
@@ -279,6 +280,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.send_rate = get("network", "send_rate", c.send_rate);
     c.crowd_budget = get("network", "crowd_budget", c.crowd_budget);
     c.pack_ms = get("network", "pack_ms", c.pack_ms);
+    c.threads = get("network", "threads", c.threads);
     c.finger_distance = get("network", "finger_distance", c.finger_distance);
     if (const auto *d = find("network", "distances"); d && d->is_object()) {
         c.distances.full_rate_return = d->value("full_rate_return", c.distances.full_rate_return);
@@ -403,6 +405,7 @@ std::string config_error(const ServerConfig &c) {
     if (c.bone_scale_limit != 0 && !(c.bone_scale_limit >= 1.f && c.bone_scale_limit <= 8.f))
         return "bone_scale_limit must be 0 (no limit) or 1 to 8 (1: no resized body parts at all).";
     if (c.pack_ms > 50) return "pack_ms must be 0 (off) to 50.";
+    if (c.threads > 32) return "threads must be 0 (one for each processor but one) to 32.";
     if (c.finger_distance > 10000) return "finger_distance must be 0 (fingers always sent) to 10000.";
     if (!valid_crowd_budget(c.crowd_budget))
         return "crowd_budget must be 0 (no limit) or " + std::to_string(min_crowd_budget) + " to " +

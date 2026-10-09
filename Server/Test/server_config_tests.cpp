@@ -74,6 +74,7 @@ int run() {
         scaled.bone_scale_limit = 0.5f;
         check(config_error(scaled).find("bone_scale_limit") != std::string::npos, "A bone scale limit under 1 was accepted");
         check(has("network.pack_ms") && config.pack_ms == 10, "pack_ms is not a new setting of 10");
+        check(has("network.threads") && config.threads == 0, "threads is not a new setting of 0");
         check(has("network.finger_distance") && config.finger_distance == 25, "finger_distance is not a new setting of 25");
         check(has("network.use_steam_relay") && config.use_steam_relay, "use_steam_relay is not a new setting of true");
         ServerConfig crowd;

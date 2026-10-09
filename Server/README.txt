@@ -218,6 +218,14 @@ pack_ms            How long a message to a player may wait to go in the same
                    bandwidth and less CPU. It adds up to that long to when an
                    update arrives. Voice is never held back. 0 sends every
                    message at once, as before. Takes effect on restart.
+threads            How many threads share the sending of each pass (default 0:
+                   one for each of the machine's processors but one, up to
+                   8; 1: a single thread, as before). Most of a full
+                   server's work is building each player's update of everyone
+                   else, which the threads do for several players at once.
+                   What is sent is the same whatever the number. The server
+                   says how many it uses when it starts. Takes effect on
+                   restart.
 finger_distance    Past this many metres (default 25) a player's fingers are not
                    sent moving: they stay as they were, and move again when the
                    player is nearer. Fingers are nearly half of every position

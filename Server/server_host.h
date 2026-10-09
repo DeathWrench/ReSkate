@@ -1,5 +1,6 @@
 #pragma once
 #include "server_activity.h"
+#include "worker_pool.h"
 #include "server_config.h"
 #include "speed_check.h"
 #include "Engine/Game/Multiplayer/chat_rate.h"
@@ -12,6 +13,7 @@
 #include "Extension/Multiplayer/Session/room.h"
 #include "Extension/Multiplayer/Steam/steam_transport.h"
 #include "Engine/Game/World/world_layers.h"
+#include <mutex>
 #include <unordered_map>
 #include <functional>
 #include <map>
@@ -145,6 +147,10 @@ class Host {
         OutfitBudget outfit_budget;
         SoundBudget sound_budget;
         EffectBudget effect_budget;
+        // Their poses read this pass, passed on once all of the pass's messages are read
+        // (relay_poses), and how many of their effects packets were passed on in it.
+        std::vector<Packet> relay_poses;
+        unsigned effects_pass{};
         ChatRate chat_rate;
         ChatBudget admin_budget, throwdown_budget, party_budget;
         SpeedCheck speed;           // how fast their game runs, from their pose timestamps
@@ -253,9 +259,27 @@ class Host {
         std::array<Changed, 4> changed{}; // positions as floats, positions in mm, rotations, scales
         std::uint64_t bones{};
     } pose_sizes_;
+    struct Flushed {
+        Traffic traffic;
+        PoseSizes sizes;
+        std::vector<std::pair<Guest *, std::uint32_t>> whole;
+    };
+    // The threads that share a pass's sending (none: this one does it all), and the lock
+    // each send into the transport is made under.
+    std::unique_ptr<WorkerPool> workers_;
+    std::mutex send_mutex_;
     void measure_pose(Guest &from, const Packet &packet);
     Guest::KeptPose *keep_pose(Guest &from, const Packet &packet);
+    // What sending one player their part of a pass added to the server's own counts, and the
+    // whole poses it sent (the player they are of, and which): see flush_player.
+    struct PoseSizes;
+    struct Flushed;
+    void flush_player(std::uint64_t id, Guest &g, Flushed &sent);
     void flush_poses();
+    void relay_poses();
+    // Poses and effects that arrived while the server was behind and were not passed on: in
+    // all, as of the last log line about it, and when that line was written.
+    std::uint64_t shed_{}, shed_logged_{}, shed_log_at_{};
     void pose_ack(Guest &guest, const pose_batch::Ack &ack);
     std::uint64_t traffic_mark_{}, traffic_window_us_{}; // when `mark` was taken, and how long `last` covers
     void meet_later(Guest &guest);

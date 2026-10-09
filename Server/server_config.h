@@ -53,6 +53,9 @@ struct ServerConfig {
     // milliseconds (0: each goes at once in a packet of its own). Fewer, fuller packets:
     // less sent for the same updates, and less work sending it.
     unsigned pack_ms = 10;
+    // How many threads share the sending of each pass, this one included (1: the one thread,
+    // as before 2.0.2). 0: one for each of the machine's processors but one, up to 8.
+    unsigned threads = 0;
     // Past this many metres a player's fingers are not sent moving (0: always). A skater's
     // forty finger bones turn in nearly every pose and are half of what a pose carries.
     unsigned finger_distance = 25;
