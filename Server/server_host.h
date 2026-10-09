@@ -213,6 +213,7 @@ class Host {
     // The announcement games show (the roster carries it), until announcement_until_.
     multiplayer::ServerAnnouncement announcement_;
     std::uint64_t announcement_until_{};
+    std::uint64_t announcement_for_{}; // the one player shown it, or 0: everyone
     std::uint32_t announcement_ids_{};
     std::uint64_t announced_at_{}; // the last timed announcement, or while nobody is on
     std::size_t next_announcement_{};
@@ -332,6 +333,7 @@ class Host {
     void apply_layers();
     // Chat commands and votes (server_votes.cpp).
     void chat_command(Guest &, std::string_view line);
+    void run_custom_command(Guest &, const CustomCommand &, std::string_view argument);
     void start_vote(Guest &, VoteKind, std::string_view argument, std::size_t custom = 0);
     void start_poll(Guest &, std::string_view text);
     void cast_vote(Guest &, bool yes);
@@ -350,8 +352,8 @@ class Host {
     // The "votes" and "announcements" commands (server_votes.cpp); the bool: a setting changed.
     std::pair<std::string, bool> votes_command(std::string_view argument);
     std::pair<std::string, bool> announcements_command(std::string_view argument);
-    // A line in chat, and the announcement card on every player's screen.
-    void announce(std::string_view text);
+    // The announcement card on every player's screen, or only on player `to`'s (not in chat).
+    void announce(std::string_view text, std::uint64_t to = 0);
     void tick_announcements(); // the owner's messages in turn, on their timer
     void reply(Guest &, std::string_view text, unsigned max_lines = 12);
     Guest *match_player(std::string_view text);

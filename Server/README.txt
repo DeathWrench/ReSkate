@@ -275,10 +275,26 @@ polls              Who may ask everyone a question with up to six answers:
 
 "announcements" - Messages from the server.
 messages           Lines the server posts in turn, one every "interval_minutes"
-                   (0: off) while players are on. Each is one chat line.
-card               Also show each announcement as a card at the top of every
-                   player's screen, not only in chat (default true).
-                   Admins announce something once with: announce <text>.
+                   (0: off) while players are on. Each is at most one chat line.
+                   Announcements show as a card at the top of the screen, not
+                   in chat. Admins announce something once with announce <text>,
+                   or to one player only with announce-to <player> <text>.
+
+"commands" - Chat commands of your own, e.g. /discord or /rules. A list, each:
+name               1-16 of a-z, 0-9, - and _; not one of the server's own
+                   commands (help, party, vote, kick, map...).
+reply              A chat line sent back to whoever typed it (optional).
+command            A server command, or a list of up to 8, run as the console
+                   (optional). {player} is the SteamID64 of whoever typed it,
+                   {map} the current map and {arg} the rest of what they
+                   typed. Each command needs a reply, a command, or both.
+admin              Only admins may use it (default false).
+                   For example:
+                     {"name": "discord", "reply": "Join us: discord.gg/..."}
+                     {"name": "rules", "command": "announce-to {player} No griefing!"}
+                     {"name": "restart", "admin": true, "command": ["map {map}"]}
+                   They are not listed in /help: tell players about them yourself.
+                   Up to 32. Mind what {arg} lets players put into a command.
 
 Every change made from the console or by an admin is saved back to this file.
 
@@ -344,8 +360,9 @@ and change voice, distances, placement and kicks from the Multiplayer menu.
                                 is map, kick, tod or a custom vote's name, which
                                 also takes on|off|<percent>.
   votes polls off|admins|everyone   votes poll-seconds <n>   votes starter-yes on|off
-  announce <text>               Tell everyone, in chat and on a card.
-  announcements [list | add <text> | remove <n> | clear | interval <minutes>|off | card on|off]
+  announce <text>               Tell everyone, on a card.
+  announce-to <player> <text>   Tell one player, on a card.
+  announcements [list | add <text> | remove <n> | clear | interval <minutes>|off]
                                 The messages posted on a timer.
   activity-log on|off           Log player activity (see activity_log).
   announce-throwdowns on|off    Chat message when a throwdown is placed.

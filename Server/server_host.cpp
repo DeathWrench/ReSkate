@@ -676,7 +676,18 @@ void Host::send_roster() {
         if (m.party && std::none_of(p.members.begin(), p.members.end(),
                                     [&](const Member &o) { return o.party == m.party && o.party_leader; }))
             m.party_leader = true; // the first listed member of a party missing its leader
-    broadcast(p, true, false);
+    // An announcement for one player: everyone else's roster goes without it.
+    auto *only = announcement_for_ ? find(announcement_for_) : nullptr;
+    if (only && !only->handshaken) only = nullptr;
+    if (announcement_for_) {
+        const auto shown = p.announcement;
+        p.announcement = {};
+        broadcast(p, true, false, announcement_for_);
+        p.announcement = shown;
+        if (only) send_packet(*only, p, true, false);
+    } else {
+        broadcast(p, true, false);
+    }
     roster_dirty_ = false;
     last_roster_ = now_;
 }
