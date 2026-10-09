@@ -592,11 +592,16 @@ void publish_chat(Session &s) {
 std::pair<std::uint32_t, std::string> mark_role(IdentityList list) {
     switch (list) {
     case IdentityList::developer: return {nametag_developer, "Dev"};
-    case IdentityList::content_creator: return {nametag_creator, "Creator"};
+    case IdentityList::content_creator: return {nametag_creator, "Content Creator"};
     case IdentityList::centrix: return {nametag_centrix, "Centrix"};
     case IdentityList::staff: return {nametag_staff, "Staff"};
     default: return {nametag_homie, "Homie"};
     }
+}
+bool identity_link(Session &s, std::uint64_t other) {
+    if (identity_mark(other) || identity_mark(s.transport.status().local_id)) return true;
+    refresh_friends(s);
+    return std::binary_search(s.friend_ids.begin(), s.friend_ids.end(), other);
 }
 // The colour and tag a player gets, in chat and on their nametag. `marks` off leaves out who
 // the backend says they are: for a chat line that is not known to be theirs (chat proofs,

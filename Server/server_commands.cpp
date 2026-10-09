@@ -132,6 +132,8 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         if (!console && is_admin(id)) return "Admins cannot ban other admins.";
         if (is_banned(id)) return std::to_string(id) + " is already banned.";
         auto label = guest ? guest->member.name : clean_chat_text(reason);
+        // Banned by SteamID after they left: the name they were last here under.
+        if (const auto seen = seen_names_.find(id); label.empty() && seen != seen_names_.end()) label = seen->second;
         cut_text(label, 64);
         config_.bans.push_back({id, label, static_cast<std::int64_t>(std::time(nullptr))});
         if (guest) drop(id, "You were banned from this server.");

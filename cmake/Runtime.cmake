@@ -111,6 +111,15 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/physics_tuning.cpp
     Extension/Multiplayer/Remote/remote_collision.cpp
     Extension/Skater/physics_tuning_model.cpp
+    Extension/HallOfMeat/hall_of_meat.cpp
+    Extension/HallOfMeat/hall_of_meat_card.cpp
+    Extension/HallOfMeat/hall_of_meat_commands.cpp
+    Extension/HallOfMeat/hall_of_meat_hud.cpp
+    Extension/HallOfMeat/hall_of_meat_model.cpp
+    Extension/HallOfMeat/hall_of_meat_render.cpp
+    Extension/HallOfMeat/hall_of_meat_skater.cpp
+    Extension/HallOfMeat/hall_of_meat_skeleton.cpp
+    Extension/HallOfMeat/hall_of_meat_slow_motion.cpp
     Extension/Trainer/trainer.cpp
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp

@@ -323,7 +323,7 @@ void broadcast(Session &s, const Packet &packet, bool reliable, bool fresh, std:
     for (auto &p : active_peers(s)) {
         if (!p.handshaken || p.member.id == except ||
             (s.mode == Mode::host && gameplay && !p.world_ready) ||
-            (s.mode == Mode::join && p.member.id != s.host_id && !p.direct_ready))
+            (s.mode == Mode::join && p.member.id != s.host_id && (!p.direct_ready || dedicated_host(s))))
             continue;
         // Chat and throwdown messages always travel through the host, which relays
         // them once to everyone else; a direct copy as well would deliver them twice.

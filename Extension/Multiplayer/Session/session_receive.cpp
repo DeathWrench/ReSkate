@@ -53,6 +53,7 @@ void receive_cosmetics(Session &s, const NativeFrame &local, std::uint64_t now) 
                 link.pending_cosmetics.push_back(std::move(item));
                 continue;
             }
+            if (direct && dedicated_host(s)) continue; // only what the server passed on (identity_link)
             if (p.map == s.map &&
                 routed_source(p, source->member, link.member.id, s.mode == Mode::host, s.host_id, direct) &&
                 accept_data(*source, p, now) && s.mode == Mode::host)
@@ -324,7 +325,13 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     for (auto &peer : active_peers(s))
         if (peer.member.id && peer.member.name.empty() && individual_steam_id(peer.member.id))
             peer.member.name = s.transport.name(peer.member.id);
-    s.transport.allow_peers(p.members);
+    // On a dedicated server games link only to prove who a player is (identity_link).
+    if (dedicated_host(s)) {
+        std::vector<Member> known;
+        for (const auto &member : p.members)
+            if (identity_link(s, member.id)) known.push_back(member);
+        s.transport.allow_peers(known);
+    } else s.transport.allow_peers(p.members);
     s.last_routes = 0;
     s.status = "Connected through Steam. Network updates: " + std::to_string(s.tps) + " TPS.";
 }
@@ -410,7 +417,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             } else {
                 if (p.connected_at || p.direct_ready)
                     reset_direct(s, p, now);
-                if (p.handshaken && now >= p.next_dial &&
+                if (p.handshaken && now >= p.next_dial && (!dedicated_host(s) || identity_link(s, id)) &&
                     dial_peer(s.transport.status().local_id, id, s.host_id)) {
                     p.next_dial = now + 3000000;
                     s.transport.connect_peer(id);
@@ -720,7 +727,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             if (p.kind == PacketKind::peer_hello)
                 send_required(s, message.peer, encode_wire(packet(s, PacketKind::peer_welcome, now)));
             if (first) {
-                send_required(s, message.peer, s.cosmetic_packet);
+                // An outfit, like everything else, reaches a dedicated server's players through it.
+                if (!dedicated_host(s)) send_required(s, message.peer, s.cosmetic_packet);
                 s.last_routes = 0;
             }
             continue;
@@ -970,6 +978,10 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         }
         if (direct_link && p.kind == PacketKind::pose)
             link->last_direct_pose = now;
+        // A dedicated server sends everything itself, held to its rules (how far a body part may
+        // be resized, say). A link between two of its games is there to prove who they are
+        // (identity_link); nothing else that arrives over one is taken.
+        if (direct_link && dedicated_host(s)) continue;
         if (p.kind == PacketKind::objects) {
             if (direct_link) { disconnect(s, message.peer, "Object updates must use the host route."); continue; }
             const auto result = source->objects.receive(p.objects);

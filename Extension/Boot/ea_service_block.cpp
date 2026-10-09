@@ -116,17 +116,31 @@ hostent* WSAAPI get_host_by_name(const char* name) {
     return original_get_host_by_name.load()(name);
 }
 
+// `required`: the entry point the game itself resolves names through; without it nothing is
+// blocked, and that is an error. The others close the same door for anything else loaded into
+// the process, and are left alone where they cannot be hooked: Wine's ws2_32 (Proton, on Linux
+// and the Steam Deck) does not have all of them, and what it does not have nothing can call.
 template<class Fn>
-void hook(const char* name, void* replacement, std::atomic<Fn>& original) {
+void hook(const char* name, void* replacement, std::atomic<Fn>& original, bool required) {
+    const auto fail = [&](const std::string& why) {
+        if (required) throw std::runtime_error(why);
+        logging::log(logging::Level::info, logging::Channel::runtime, "EA online services block: {} left as it is ({}).", name, why);
+    };
     const auto module = LoadLibraryExW(L"ws2_32.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
     const auto target = module ? reinterpret_cast<void*>(GetProcAddress(module, name)) : nullptr;
-    if (!target) throw std::runtime_error(std::string("Missing ") + name);
+    if (!target) return fail(std::string("Missing ") + name);
     void* relay{};
     const auto create = hook_prepare(target, replacement, &relay);
-    if (create != HookOk) throw std::runtime_error(std::string("Cannot hook ") + name + ": " + hook_status_string(create));
+    if (create != HookOk || !relay) {
+        if (create == HookOk) (void)hook_remove(target);
+        return fail(std::string("Cannot hook ") + name + ": " + hook_status_string(create == HookOk ? HookUnsupportedFunction : create));
+    }
     original.store(reinterpret_cast<Fn>(relay));
     const auto enable = hook_enable(target);
-    if (enable != HookOk) throw std::runtime_error(std::string("Cannot enable ") + name + ": " + hook_status_string(enable));
+    if (enable != HookOk) {
+        (void)hook_remove(target);
+        return fail(std::string("Cannot enable ") + name + ": " + hook_status_string(enable));
+    }
 }
 
 } // namespace
@@ -137,11 +151,11 @@ bool start_ea_service_block(std::string& error) noexcept {
         // same door for anything else loaded into the process.
 #pragma warning(push)
 #pragma warning(disable: 4191)
-        hook("getaddrinfo", reinterpret_cast<void*>(&get_addr_info_a), original_get_addr_info_a);
-        hook("GetAddrInfoW", reinterpret_cast<void*>(&get_addr_info_w), original_get_addr_info_w);
-        hook("GetAddrInfoExA", reinterpret_cast<void*>(&get_addr_info_ex_a), original_get_addr_info_ex_a);
-        hook("GetAddrInfoExW", reinterpret_cast<void*>(&get_addr_info_ex_w), original_get_addr_info_ex_w);
-        hook("gethostbyname", reinterpret_cast<void*>(&get_host_by_name), original_get_host_by_name);
+        hook("getaddrinfo", reinterpret_cast<void*>(&get_addr_info_a), original_get_addr_info_a, true);
+        hook("GetAddrInfoW", reinterpret_cast<void*>(&get_addr_info_w), original_get_addr_info_w, false);
+        hook("GetAddrInfoExA", reinterpret_cast<void*>(&get_addr_info_ex_a), original_get_addr_info_ex_a, false);
+        hook("GetAddrInfoExW", reinterpret_cast<void*>(&get_addr_info_ex_w), original_get_addr_info_ex_w, false);
+        hook("gethostbyname", reinterpret_cast<void*>(&get_host_by_name), original_get_host_by_name, false);
 #pragma warning(pop)
         error.clear();
         return true;

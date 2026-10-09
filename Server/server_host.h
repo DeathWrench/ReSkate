@@ -168,6 +168,9 @@ class Host {
         ObjectState objects, shared;
         std::uint64_t shared_from{};
         std::set<std::uint64_t> cleared;
+        // Objects they placed in the last minute, and until when none of theirs are shared, for
+        // placing more than a person does (sync_objects).
+        std::uint64_t placed_since{}, placed{}, objects_held_until{};
         struct ObjectDelivery {
             std::map<std::uint64_t, std::pair<std::uint64_t, std::uint64_t>> sent;
             std::vector<ObjectChunk> chunks;
@@ -212,6 +215,8 @@ class Host {
     std::uint64_t party_revision_{};
     std::map<std::uint64_t, std::unique_ptr<Guest>> guests_;
     std::set<std::uint64_t> kicked_;
+    // The name each player last joined under, for banning one who has left by their SteamID.
+    std::map<std::uint64_t, std::string> seen_names_;
     JoinBackoff join_backoff_; // Steam IDs whose attempts to join keep failing
     std::optional<PasswordKey> password_;
     std::uint64_t id_{}, secret_{}, epoch_{}, map_{}, world_ = 1;
