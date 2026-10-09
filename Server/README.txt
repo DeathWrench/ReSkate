@@ -115,6 +115,11 @@ allow_parties      Let players form parties (default true): invite each other
                    members join each other's coop challenges, see each other on
                    the map and talk with /p <message>.
 party_size         Most players in one party, 2-8 (default 8).
+afk_kick_minutes   Remove a player who has been away this many minutes, 1-1440
+                   (default 0: never). Away is not moving, speaking, typing
+                   in chat or changing their objects. They are warned in chat
+                   a minute before and can join again at once. Admins are
+                   never removed for it. Console: afk-kick <minutes>|off.
 allow_voice_chat   Allow voice chat.
 voice_range        How far proximity voice reaches, 50-1000 m.
 object_placement   everyone, admins (only admins can build), or nobody.
@@ -289,6 +294,7 @@ and change voice, distances, placement and kicks from the Multiplayer menu.
   announce-throwdowns on|off    Chat message when a throwdown is placed.
   parties [on|off]              List the parties, or allow them (off ends them all).
   party-size <2-8>              Most players in one party.
+  afk-kick <minutes>|off        Remove players who have been away that long.
   speed-check off|warn|kick     What happens to players whose game runs fast.
   score-check [off|warn|kick]   What happens to players whose mods change scoring
                                 or physics; with no argument, every player's result.

@@ -99,6 +99,7 @@ Layout layout(const ServerConfig &c) {
     players.set("allow_noclip", c.noclip);
     players.set("allow_parties", c.parties);
     players.set("party_size", c.party_size);
+    players.set("afk_kick_minutes", c.afk_kick);
     players.set("allow_voice_chat", c.voice_chat);
     players.set("voice_range", static_cast<double>(c.voice_range));
     players.set("object_placement", placement_text(c.object_placement));
@@ -250,6 +251,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.noclip = get("players", "allow_noclip", c.noclip, {"noclip"});
     c.parties = get("players", "allow_parties", c.parties, {"parties"});
     c.party_size = std::clamp(get("players", "party_size", c.party_size), 2U, 8U);
+    c.afk_kick = get("players", "afk_kick_minutes", c.afk_kick);
     c.voice_chat = get("players", "allow_voice_chat", c.voice_chat, {"voice_chat"});
     c.voice_range = get("players", "voice_range", c.voice_range);
     const auto placement = get("players", "object_placement", placement_text(c.object_placement));
@@ -389,6 +391,7 @@ std::optional<std::uint32_t> parse_colour(std::string_view text) noexcept {
 std::string config_error(const ServerConfig &c) {
     using namespace multiplayer;
     if (!parse_colour(c.chat_color)) return "chat_color must be a colour like #8E5CFF.";
+    if (c.afk_kick > 1440) return "afk_kick_minutes must be 0 (never) to 1440.";
     if (!parse_colour(c.chat_text_color)) return "chat_text_color must be a colour like #D9C8FF.";
     if (!valid_server_name(c.name)) return std::string("name must be ") + server_name_rule + ".";
     for (const auto id : c.reserved)

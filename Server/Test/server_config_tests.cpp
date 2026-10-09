@@ -192,6 +192,18 @@ int run() {
               "A config in sections did not read back as it was written");
         std::filesystem::remove_all(folder / "data");
     }
+    // The away timer: off unless set, and no more than a day.
+    {
+        ServerConfig away;
+        check(away.afk_kick == 0 && config_error(away).find("afk_kick_minutes") == std::string::npos, "The away timer is not off by default");
+        away.file = folder / "away.json";
+        away.afk_kick = 15;
+        save_config(away);
+        check(load_config(away.file).afk_kick == 15, "The away timer was not kept");
+        away.afk_kick = 1441;
+        check(config_error(away).find("afk_kick_minutes") != std::string::npos, "An away timer over a day was accepted");
+        std::filesystem::remove_all(folder / "data");
+    }
     // Object scaling: allowed unless turned off, and kept in the file.
     {
         ServerConfig sized;
