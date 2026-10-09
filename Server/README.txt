@@ -241,6 +241,36 @@ votes              Player votes, each off until turned on:
                    "cooldown_seconds" (default 60) how long a player waits before
                    starting another. Players vote with /yes and /no in chat;
                    admins cannot be vote-kicked.
+                   Each vote may also have its own "seconds" and
+                   "cooldown_seconds" (0: the ones above) and "min_players", the
+                   players who must be on before anyone can start it (default 1).
+starter_votes_yes  Whoever starts a vote has voted yes (default true).
+custom             Votes of your own: a list, each running a server command
+                   when it passes. {map} in the command is the current map,
+                   {arg} the choice the player picked (one of "choices"; without
+                   choices the vote takes no argument). For example:
+                     {"name": "restart", "description": "Reload the current map",
+                      "command": "map {map}", "percent": 60}
+                     {"name": "noclip", "description": "Turn noclip on or off",
+                      "command": "noclip {arg}", "choices": ["on", "off"]}
+                   Players start them with /vote restart, /vote noclip off; /vote
+                   list shows them. A name and each choice is 1-16 of a-z, 0-9,
+                   - and _, and not one of the server's own (map, kick, tod,
+                   list...). Each takes "enabled", "percent", "seconds",
+                   "cooldown_seconds" and "min_players" as the others do. Up to 16.
+polls              Who may ask everyone a question with up to six answers:
+                   "off", "admins" (default) or "everyone".
+                     /poll Next map? | Grom | San Vansterdam | Stadium
+                   Players answer on the card or with /1, /2... A poll runs
+                   nothing; it ends after "poll_seconds" (default 60), or when
+                   whoever started it (or an admin) types /poll end.
+
+"announcements" - Messages from the server.
+messages           Lines the server posts in turn, one every "interval_minutes"
+                   (0: off) while players are on. Each is one chat line.
+card               Also show each announcement as a card at the top of every
+                   player's screen, not only in chat (default true).
+                   Admins announce something once with: announce <text>.
 
 Every change made from the console or by an admin is saved back to this file.
 
@@ -302,6 +332,13 @@ and change voice, distances, placement and kicks from the Multiplayer menu.
                                 Time of day on every map (needs layer-sync on).
   votes [map|kick|tod on|off|<percent>]   The vote settings (see votes).
   votes seconds <n>   votes cooldown <n>   vote-cancel
+  votes <vote> seconds|cooldown|min-players <n>   One vote's own limits; <vote>
+                                is map, kick, tod or a custom vote's name, which
+                                also takes on|off|<percent>.
+  votes polls off|admins|everyone   votes poll-seconds <n>   votes starter-yes on|off
+  announce <text>               Tell everyone, in chat and on a card.
+  announcements [list | add <text> | remove <n> | clear | interval <minutes>|off | card on|off]
+                                The messages posted on a timer.
   activity-log on|off           Log player activity (see activity_log).
   announce-throwdowns on|off    Chat message when a throwdown is placed.
   parties [on|off]              List the parties, or allow them (off ends them all).

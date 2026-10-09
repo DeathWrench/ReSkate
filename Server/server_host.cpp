@@ -593,6 +593,11 @@ void Host::send_roster() {
     p.guest_boosts = config_.boosts;
     p.enforce_tuning = config_.enforce_tuning;
     p.server_votes = enabled_votes();
+    p.server_polls = static_cast<std::uint8_t>(enabled_polls());
+    p.server_custom_votes = custom_votes();
+    p.announcement = announcement_;
+    if (announcement_.id)
+        p.announcement.seconds = static_cast<std::uint16_t>(announcement_until_ > now_ ? (announcement_until_ - now_ + 999999) / 1000000 : 0);
     p.object_clears = object_clears_;
     // Without the catalog (or with sync off) no layers are sent: every player keeps their own.
     p.force_world_layers = config_.world_layer_sync && !world_layers().empty();
@@ -1595,6 +1600,7 @@ void Host::tick(std::uint64_t now) {
         roster_dirty_ = true;
     }
     tick_rotation();
+    tick_announcements();
     remove_away();
     std::erase_if(vote_cooldowns_, [&](const auto &entry) { return now_ >= entry.second; });
     join_backoff_.prune(now_);

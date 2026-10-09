@@ -45,7 +45,7 @@ class Host {
     // The UDP port players may connect straight to, or 0 (config connection).
     std::uint16_t direct_port() const { return direct_port_; }
 
-    enum class VoteKind { map, kick, time };
+    enum class VoteKind { map, kick, time, custom, poll };
 
   private:
     struct ChatBudget {
@@ -185,14 +185,17 @@ class Host {
     Log log_;
     ActivityLog activity_; // what players do, for the console (config_.activity_log)
     // The running player vote (server_votes.cpp), and when each player may start another.
+    // A poll is one too: it has answers instead of yes and no, and runs nothing.
     struct Vote {
         VoteKind kind{};
+        std::size_t custom{}; // custom: which of config_.votes.custom
         std::uint32_t id{}; // told to games, so each can tell one vote from the next
         std::uint64_t starter{}, target{}; // target: the player a kick vote is about
-        std::string value, label;          // value: the map or time; label: "change the map to ..."
+        std::string value, label;          // value: the map, time or command; label: "change the map to ..." or the question
         std::set<std::uint64_t> yes, no;
+        std::vector<std::string> answers;            // poll
+        std::map<std::uint64_t, std::size_t> chosen; // poll: each voter's answer
         std::uint64_t ends{};
-        unsigned shown_yes{}, shown_no{};  // the tally last announced
     };
     std::optional<Vote> vote_;
     // What games are shown of the vote (the roster carries it): the running one with its
@@ -200,7 +203,13 @@ class Host {
     multiplayer::ServerVote vote_shown_;
     std::uint64_t vote_shown_until_{};
     std::uint32_t vote_ids_{};
-    void show_vote(const Vote &vote, std::uint8_t outcome, unsigned yes, unsigned no, unsigned needed);
+    void show_vote(const Vote &vote, std::uint8_t outcome);
+    // The announcement games show (the roster carries it), until announcement_until_.
+    multiplayer::ServerAnnouncement announcement_;
+    std::uint64_t announcement_until_{};
+    std::uint32_t announcement_ids_{};
+    std::uint64_t announced_at_{}; // the last timed announcement, or while nobody is on
+    std::size_t next_announcement_{};
     void active(Guest &guest) {
         guest.active_at = now_;
         guest.away_warned = false;
@@ -299,13 +308,28 @@ class Host {
     void apply_layers();
     // Chat commands and votes (server_votes.cpp).
     void chat_command(Guest &, std::string_view line);
-    void start_vote(Guest &, VoteKind, std::string_view argument);
+    void start_vote(Guest &, VoteKind, std::string_view argument, std::size_t custom = 0);
+    void start_poll(Guest &, std::string_view text);
     void cast_vote(Guest &, bool yes);
+    void answer_poll(Guest &, std::size_t answer);
+    void end_poll(Guest &);
     void check_vote(bool expired);
     void cancel_vote(const std::string &why);
-    const VoteSetting &vote_setting(VoteKind) const;
+    const VoteSetting &vote_setting(VoteKind, std::size_t custom = 0) const;
     std::uint8_t enabled_votes() const;
-    void reply(Guest &, std::string_view text);
+    multiplayer::ServerPolls enabled_polls() const;
+    std::vector<multiplayer::ServerCustomVote> custom_votes() const; // the owner's votes that are on, for the roster
+    std::set<std::uint64_t> vote_voters(const Vote &) const;         // who may vote in it
+    unsigned votes_needed(const Vote &, unsigned voters) const;
+    std::vector<unsigned> poll_count(const Vote &) const;
+    std::string running_vote_text() const; // what is running, and how to answer it
+    // The "votes" and "announcements" commands (server_votes.cpp); the bool: a setting changed.
+    std::pair<std::string, bool> votes_command(std::string_view argument);
+    std::pair<std::string, bool> announcements_command(std::string_view argument);
+    // A line in chat, and the announcement card on every player's screen.
+    void announce(std::string_view text);
+    void tick_announcements(); // the owner's messages in turn, on their timer
+    void reply(Guest &, std::string_view text, unsigned max_lines = 12);
     Guest *match_player(std::string_view text);
     void tick_rotation();
     std::string pool_text() const;     // the map pool, one map a line
