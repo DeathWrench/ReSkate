@@ -3,7 +3,6 @@
 #include "content_cache.h"
 #include "content_catalogs.h"
 #include "mod_merge_internal.h"
-#include "mod_store_copies.h"
 #include "native_db.h"
 
 #include <algorithm>
