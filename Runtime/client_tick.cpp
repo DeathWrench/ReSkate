@@ -6,6 +6,7 @@
 #include "Engine/Core/Profiling/profiler.h"
 #include "Extension/Settings/job_spin.h"
 #include "Engine/Game/World/client_state.h"
+#include "Extension/HallOfMeat/hall_of_meat.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
@@ -605,6 +606,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
         dingosdk::tick_network_objects();
     }
     if (r.observer_failed) return; // Keep the bounded restore/telemetry path available after catalog failure.
+    dingosdk::hall_of_meat::on_client_tick();
     if (!has_request && now < r.next_model && state == r.previous_state) return;
     r.next_model = now + 500;
     DINGO_PROFILE_ZONE("tick/update_model/world model (500 ms)");
@@ -612,6 +614,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     r.multiplayer_map = description.level.empty() ? std::string{} : description.level + "|" + description.lm_level;
     const auto& current_level = description.lm_level.empty() ? description.level : description.lm_level;
     dingosdk::live_mods::set_current_level(current_level);
+    dingosdk::hall_of_meat::set_level(current_level);
     // A live mod apply hands over the destinations its mods declare. A map
     // being played that is no longer among them (its mod disabled or deleted)
     // cannot stay loaded: the player goes to San Van.
@@ -740,6 +743,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     const auto missions_model = dingosdk::local_profile_missions();
     model.progression = dingosdk::local_profile_progression();
     model.player_card = dingosdk::local_profile_player_card();
+    model.hall_of_meat = {dingosdk::hall_of_meat::available(), dingosdk::hall_of_meat::enabled()};
     model.bindings = dingosdk::local_profile_controller_bindings();
     model.parks = dingosdk::local_profile_parks();
     model.world = dingosdk::local_profile_world_layers();

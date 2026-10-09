@@ -21,6 +21,7 @@ the launcher, the runtime that loads into the game, and the dedicated server.
   - World: time of day, population, district levels, rotating parks.
   - The **Park Editor**: place, move and save objects with freecam, snapping and undo.
   - Skater options: first person, movement, boosts, noclip.
+  - **Hall of Meat** (off by default): bail and see the bones you hurt, with a skate. 3 style Meat card.
   - Progression, controls, graphics and multiplayer settings.
 - **Mods.**
   - Drop a mod in `Mods/` and it is merged into the game at launch. Mods can add custom maps, loading
