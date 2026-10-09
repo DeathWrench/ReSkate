@@ -1,7 +1,5 @@
 #include "mod_merge.h"
 
-#include "content_cache.h"
-#include "content_catalogs.h"
 #include "mod_merge_internal.h"
 #include "native_db.h"
 
