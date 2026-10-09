@@ -116,6 +116,8 @@ std::uint32_t freecam_controller_binding(const Snapshot&);
 bool freecam_controller(const Snapshot&);
 std::uint32_t freecam_binding(const Snapshot&);
 std::uint32_t tp_to_freecam_binding(const Snapshot&);
+std::uint32_t vote_yes_binding(const Snapshot&);
+std::uint32_t vote_no_binding(const Snapshot&);
 std::uint32_t noclip_binding(const Snapshot&);
 std::uint32_t forward_velocity_binding(const Snapshot&);
 std::uint32_t up_velocity_binding(const Snapshot&);
@@ -191,6 +193,8 @@ public:
     void save_freecam_binding(std::uint32_t);
     std::uint32_t tp_to_freecam_binding() const;
     void save_tp_to_freecam_binding(std::uint32_t);
+    std::uint32_t vote_binding(bool yes) const;
+    void save_vote_binding(bool yes, std::uint32_t);
     std::uint32_t noclip_binding() const;
     void save_noclip_binding(std::uint32_t);
     std::uint32_t forward_velocity_binding() const;

@@ -169,8 +169,11 @@ struct Reader {
 };
 } // namespace
 bool valid_roster(std::span<const Member> members, unsigned capacity) noexcept {
-    if (capacity < 2 || capacity > max_players || members.empty() || members.size() > capacity)
+    if (capacity < 2 || capacity > max_players || members.empty() || members.size() > max_players)
         return false;
+    // A lobby holds no more than it was opened for. A dedicated server can hold a few more than
+    // it says: its reserved players and admins join past its limit (33 of 32).
+    if (members.size() > capacity && !game_server_steam_id(members[0].id)) return false;
     for (std::size_t i = 0; i < members.size(); ++i) {
         const auto &m = members[i];
         // The host comes first, and may be a dedicated server rather than a player.
@@ -599,6 +602,20 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         w.integer(p.tps, 1);
         w.integer(p.chat_badge & 0xffffff, 3); // red, green, blue
         w.integer(p.chat_text & 0xffffff, 3);
+        w.integer(p.vote.id, 4);
+        if (p.vote.id) {
+            if (p.vote.label.size() > max_vote_label || p.vote.outcome > vote_cancelled) throw std::invalid_argument("Invalid server vote");
+            w.integer(p.vote.kind, 1);
+            w.integer(p.vote.outcome, 1);
+            w.integer(p.vote.yes, 2);
+            w.integer(p.vote.no, 2);
+            w.integer(p.vote.needed, 2);
+            w.integer(p.vote.seconds, 2);
+            w.integer(p.vote.starter, 8);
+            w.integer(p.vote.target, 8);
+            w.integer(p.vote.label.size(), 1);
+            w.bytes.insert(w.bytes.end(), p.vote.label.begin(), p.vote.label.end());
+        }
         w.integer(static_cast<std::uint8_t>(p.object_placement), 1);
         if (!valid_object_limit(p.object_limit)) throw std::invalid_argument("Invalid object limit");
         w.integer(p.object_limit, 2);
@@ -907,6 +924,21 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             if (!valid_multiplayer_tps(p.tps)) return {};
             p.chat_badge = 0xff000000U | static_cast<std::uint32_t>(r.integer(3));
             p.chat_text = 0xff000000U | static_cast<std::uint32_t>(r.integer(3));
+            p.vote.id = static_cast<std::uint32_t>(r.integer(4));
+            if (p.vote.id) {
+                p.vote.kind = static_cast<std::uint8_t>(r.integer(1));
+                p.vote.outcome = static_cast<std::uint8_t>(r.integer(1));
+                p.vote.yes = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.no = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.needed = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.seconds = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.starter = r.integer(8);
+                p.vote.target = r.integer(8);
+                const auto length = r.integer(1);
+                if (p.vote.outcome > vote_cancelled || length > max_vote_label || length > bytes.size() - r.at) return {};
+                p.vote.label.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
+                r.at += static_cast<std::size_t>(length);
+            }
             const auto placement = r.integer(1);
             if (!valid_object_placement(placement)) return {};
             p.object_placement = static_cast<ObjectPlacement>(placement);

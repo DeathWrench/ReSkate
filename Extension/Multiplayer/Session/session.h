@@ -6,6 +6,8 @@
 namespace dingosdk::multiplayer {
 // Commands and tick execute on the game's client thread. model() is thread-safe.
 std::string command(std::string_view action, std::string_view argument = {}, std::string_view password = {});
+// A dedicated server's vote is running and this player may answer it (queue_command "vote" yes|no).
+bool server_vote_open() noexcept;
 // Private menu queue: passwords never pass through console history/logging.
 bool queue_command(std::string_view action, std::string_view argument, std::string_view password);
 // Called just before the host's validated native load is submitted, on the client thread.

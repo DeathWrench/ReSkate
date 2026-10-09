@@ -309,6 +309,14 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     s.roster_voice_range = p.voice_range;
     s.server_chat_badge = p.chat_badge;
     s.server_chat_text = p.chat_text;
+    // The server's vote. A new one starts with no answer from this player, unless they started it.
+    if (dedicated_host(s)) {
+        const auto local = s.transport.status().local_id;
+        if (p.vote.id != s.vote.id) s.vote_mine = p.vote.id && p.vote.starter == local ? 1 : 0;
+        s.vote = p.vote;
+        s.vote_ends = now_us() + std::uint64_t{p.vote.seconds} * 1000000;
+        server_vote_open_flag.store(p.vote.id && p.vote.outcome == vote_running && p.vote.target != local, std::memory_order_relaxed);
+    }
     ++s.party_revision; // anyone's party may have changed
     // A dedicated server knows players only by the name each sent in their hello.
     for (auto &peer : active_peers(s))

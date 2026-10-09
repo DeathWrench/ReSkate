@@ -217,6 +217,17 @@ void Store::save_forward_velocity_binding(std::uint32_t combo) {
     update.commit();
 }
 
+std::uint32_t Store::vote_binding(bool yes) const {
+    std::lock_guard lock(mutex_);
+    return yes ? profile::vote_yes_binding(value_) : profile::vote_no_binding(value_);
+}
+void Store::save_vote_binding(bool yes, std::uint32_t combo) {
+    require(valid_action_binding(combo), "Unsupported controller combo or keyboard key");
+    std::lock_guard lock(mutex_);
+    Update update(*this);
+    update.json(value_.settings, {"bindings", yes ? "vote_yes" : "vote_no"}) = combo;
+    update.commit();
+}
 std::uint32_t Store::offboard_up_velocity_binding() const {
     std::lock_guard lock(mutex_);
     return profile::offboard_up_velocity_binding(value_);

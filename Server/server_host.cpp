@@ -570,6 +570,9 @@ void Host::send_roster() {
     p.voice_range = config_.voice_range;
     p.chat_badge = parse_colour(config_.chat_color).value_or(multiplayer::default_server_chat_badge);
     p.chat_text = parse_colour(config_.chat_text_color).value_or(multiplayer::default_server_chat_text);
+    p.vote = vote_shown_;
+    if (vote_ && vote_shown_.id == vote_->id && vote_->ends > now_)
+        p.vote.seconds = static_cast<std::uint16_t>(std::min<std::uint64_t>((vote_->ends - now_ + 999999) / 1000000, 65535));
     p.distances = config_.distances;
     p.object_placement = config_.object_placement;
     p.object_limit = config_.object_limit;
@@ -1505,6 +1508,11 @@ void Host::tick(std::uint64_t now) {
     activity_.tick(now_);
     if (std::exchange(vote_recount_, false)) check_vote(false);
     if (vote_ && now_ >= vote_->ends) check_vote(true);
+    // A finished vote has been shown long enough.
+    if (!vote_ && vote_shown_.id && now_ >= vote_shown_until_) {
+        vote_shown_ = {};
+        roster_dirty_ = true;
+    }
     tick_rotation();
     std::erase_if(vote_cooldowns_, [&](const auto &entry) { return now_ >= entry.second; });
     join_backoff_.prune(now_);

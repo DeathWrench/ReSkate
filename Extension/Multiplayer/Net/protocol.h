@@ -33,6 +33,19 @@ constexpr std::size_t max_throwdown_message = 4096;
 constexpr std::size_t max_physics_tuning = 16384;
 // Votes a dedicated server runs (Packet::server_votes).
 constexpr std::uint8_t server_vote_map = 1, server_vote_kick = 2, server_vote_time = 4;
+// The vote a dedicated server is running, or has just finished (Packet::vote): games show it
+// with its tally and let the player answer. `id` is 0 when there is none. `kind` is one of the
+// server_vote_* bits; `seconds` is what is left of a running one.
+constexpr std::size_t max_vote_label = 120;
+constexpr std::uint8_t vote_running = 0, vote_passed = 1, vote_failed = 2, vote_cancelled = 3;
+struct ServerVote {
+    std::uint32_t id{};
+    std::uint8_t kind{}, outcome{vote_running};
+    std::uint16_t yes{}, no{}, needed{}, seconds{};
+    std::uint64_t starter{}, target{}; // target: the player a kick vote is about, who has no vote in it
+    std::string label;                 // "change the map to ..."
+    bool operator==(const ServerVote &) const = default;
+};
 enum class PacketKind : std::uint16_t {
     hello = 1,
     welcome = 2,
@@ -181,6 +194,7 @@ struct Packet {
     // Roster: the colours of a dedicated server's own chat lines, its badge and name and the
     // text after them (IM_COL32 layout; the server's owner chooses them).
     std::uint32_t chat_badge = default_server_chat_badge, chat_text = default_server_chat_text;
+    ServerVote vote; // roster
     bool force_world_layers{};
     WorldLayerState layers = WorldLayerState(world_layers().size()); // all "default"
     ParkChoices parks; // One allowlisted selection byte per shared native park slot.

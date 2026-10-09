@@ -157,6 +157,10 @@ void stop(Session &s, std::string reason) {
     s.sequence = s.roster_sequence = 0;
     s.server_chat_badge = default_server_chat_badge;
     s.server_chat_text = default_server_chat_text;
+    s.vote = {};
+    s.vote_ends = 0;
+    s.vote_mine = 0;
+    server_vote_open_flag.store(false, std::memory_order_relaxed);
     s.pose_streams.clear();
     s.pose_ack = {};
     s.pose_ack_due = false;

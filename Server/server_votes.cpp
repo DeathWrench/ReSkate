@@ -157,12 +157,14 @@ void Host::start_vote(Guest &guest, VoteKind kind, std::string_view argument) {
     }
     }
     vote.yes.insert(guest.member.id); // the starter is for it
+    if (!++vote_ids_) ++vote_ids_;
+    vote.id = vote_ids_;
     vote.ends = now_ + static_cast<std::uint64_t>(config_.votes.seconds) * 1000000;
     vote_cooldowns_[guest.member.id] = now_ + static_cast<std::uint64_t>(config_.votes.cooldown) * 1000000;
     const auto label = vote.label;
     vote_ = std::move(vote);
     send_chat(guest_name(guest) + " started a vote to " + label + " (" + std::to_string(setting.percent) + "% needed, " +
-              std::to_string(config_.votes.seconds) + " s). Type /yes or /no.");
+              std::to_string(config_.votes.seconds) + " s). Vote on the card above chat, or type /yes or /no.");
     log_("[vote] " + guest_name(guest) + " started a vote to " + label + ".");
     check_vote(false);
 }
@@ -179,9 +181,29 @@ void Host::cast_vote(Guest &guest, bool yes) {
     check_vote(false);
 }
 
+// What every game shows of the vote, with the next roster.
+void Host::show_vote(const Vote &vote, std::uint8_t outcome, unsigned yes, unsigned no, unsigned needed) {
+    const auto capped = [](unsigned value) { return static_cast<std::uint16_t>(std::min(value, 65535U)); };
+    multiplayer::ServerVote shown;
+    shown.id = vote.id;
+    shown.kind = vote.kind == VoteKind::map ? server_vote_map : vote.kind == VoteKind::kick ? server_vote_kick : server_vote_time;
+    shown.outcome = outcome;
+    shown.yes = capped(yes);
+    shown.no = capped(no);
+    shown.needed = capped(needed);
+    shown.starter = vote.starter;
+    shown.target = vote.target;
+    shown.label = vote.label.substr(0, multiplayer::max_vote_label);
+    // A finished vote stays up a few seconds, to show how it ended.
+    vote_shown_until_ = outcome == multiplayer::vote_running ? 0 : now_ + 4000000;
+    if (shown == vote_shown_) return;
+    vote_shown_ = std::move(shown);
+    roster_dirty_ = true;
+}
 void Host::cancel_vote(const std::string &why) {
     if (!vote_) return;
     const auto label = vote_->label;
+    show_vote(*vote_, multiplayer::vote_cancelled, vote_shown_.yes, vote_shown_.no, vote_shown_.needed);
     vote_.reset();
     send_chat("The vote to " + label + " was cancelled: " + why + ".");
     log_("[vote] The vote to " + label + " was cancelled: " + why + ".");
@@ -206,13 +228,13 @@ void Host::check_vote(bool expired) {
     const bool lost = !passed && (expired || yes + (eligible - std::min(eligible, yes + no)) < needed);
     const auto tally = std::to_string(yes) + " yes, " + std::to_string(no) + " no, " + std::to_string(needed) + " needed";
     if (!passed && !lost) {
-        if (yes != vote.shown_yes || no != vote.shown_no) {
-            vote.shown_yes = yes;
-            vote.shown_no = no;
-            send_chat("Vote to " + vote.label + ": " + tally + ".");
-        }
+        // Games show the tally as it changes (the vote card above chat); chat is not filled with it.
+        vote.shown_yes = yes;
+        vote.shown_no = no;
+        show_vote(vote, multiplayer::vote_running, yes, no, needed);
         return;
     }
+    show_vote(vote, passed ? multiplayer::vote_passed : multiplayer::vote_failed, yes, no, needed);
     const auto done = std::move(vote);
     vote_.reset();
     if (lost) {

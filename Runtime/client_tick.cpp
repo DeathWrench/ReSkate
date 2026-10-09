@@ -9,6 +9,7 @@
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
+#include "Extension/Multiplayer/Session/session.h"
 #include "Extension/Multiplayer/Hud/custom_nametags.h"
 #include "Extension/Multiplayer/developer_identity.h"
 #include "Extension/Multiplayer/Hud/follow_camera.h"
@@ -382,6 +383,9 @@ void update_model(std::uintptr_t client, TickState& frame) {
     std::optional<dingosdk::overlay::DebugRequest> debug_request;
     bool debug_busy{}, controller_busy{};
     std::uint32_t freecam_controller_combo{}, freecam_combo{}, tp_to_freecam_combo{}, noclip_combo{}, forward_velocity_combo{}, up_velocity_combo{}, offboard_up_velocity_combo{};
+    // Yes and No in a dedicated server's vote: read only while one is running.
+    std::uint32_t vote_yes_combo{}, vote_no_combo{};
+    const bool vote_open = dingosdk::multiplayer::server_vote_open();
     bool freecam_controller = dingosdk::local_freecam_controller();
     {
         std::lock_guard lock(r.mutex);
@@ -394,13 +398,24 @@ void update_model(std::uintptr_t client, TickState& frame) {
         forward_velocity_combo = r.model.bindings.available ? r.model.bindings.forward_velocity_combo : 0;
         up_velocity_combo = r.model.bindings.available ? r.model.bindings.up_velocity_combo : 0;
         offboard_up_velocity_combo = r.model.bindings.available ? r.model.bindings.offboard_up_velocity_combo : 0;
+        if (vote_open && r.model.bindings.available) {
+            vote_yes_combo = r.model.bindings.vote_yes_combo;
+            vote_no_combo = r.model.bindings.vote_no_combo;
+        }
         debug_request = r.requests.take<dingosdk::overlay::DebugRequest>(GetCurrentThreadId());
     }
     // Capture belongs to the freecam state itself. Keep it active across brief
     // request/loading phases instead of opening a path back to player input.
     DingoSDKOverlaySetFreecamInputCapture(dingosdk::client_free_camera_active() && freecam_controller);
     dingosdk::ControllerInput controller;
-    if (freecam_controller_combo || freecam_combo || tp_to_freecam_combo || noclip_combo || forward_velocity_combo || up_velocity_combo || offboard_up_velocity_combo) DingoSDKOverlayReadControllerInput(&controller);
+    if (freecam_controller_combo || freecam_combo || tp_to_freecam_combo || noclip_combo || forward_velocity_combo || up_velocity_combo || offboard_up_velocity_combo ||
+        vote_yes_combo || vote_no_combo) DingoSDKOverlayReadControllerInput(&controller);
+    // (The input reads as nothing while the menu, the console or the chat box is open, so typing
+    // a bound key answers no vote.)
+    if (r.vote_yes_bind_latch.update(vote_yes_combo, controller, !vote_open) && dingosdk::multiplayer::queue_command("vote", "yes", ""))
+        record("{\"event\":\"controller_binding_triggered\",\"action\":\"vote_yes\"}");
+    if (r.vote_no_bind_latch.update(vote_no_combo, controller, !vote_open) && dingosdk::multiplayer::queue_command("vote", "no", ""))
+        record("{\"event\":\"controller_binding_triggered\",\"action\":\"vote_no\"}");
     
     if (r.freecam_controller_bind_latch.update(freecam_controller_combo, controller, r.observer_failed || controller_busy || !r.debug_model.free_camera)) {
         if (dingosdk::set_local_freecam_controller(!freecam_controller))

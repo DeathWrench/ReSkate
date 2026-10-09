@@ -577,6 +577,20 @@ void object_codec() {
     check(decode(encode(roster))->members.size() == 32, "A 32-player roster failed to round-trip");
     roster.members.push_back({76561198000000033ULL, 50, "Extra"});
     check(reject(roster), "A 33rd roster member was accepted");
+    // A dedicated server lists its reserved players and admins past its limit, and the vote it runs.
+    Packet served = roster;
+    served.members.insert(served.members.begin(), Member{0x0130000100000001ULL, 7, "Server"});
+    check(dingosdk::multiplayer::game_server_steam_id(served.members[0].id), "The test's server ID is not a game server's");
+    served.vote = {7, server_vote_kick, vote_running, 3, 1, 5, 21, 76561198000000002ULL, 76561198000000003ULL, "kick Skater"};
+    const auto listed = decode(encode(served));
+    check(listed && listed->members.size() == 34 && listed->capacity == 32, "A server's roster past its limit failed to round-trip");
+    check(listed && listed->vote == served.vote, "A server's vote failed to round-trip");
+    served.vote = {};
+    const auto quiet = decode(encode(served));
+    check(quiet && quiet->vote == ServerVote{}, "A roster without a vote did not come back without one");
+    served.vote.id = 1;
+    served.vote.label.assign(max_vote_label + 1, 'a');
+    check(reject(served), "An overlong vote label was encoded");
 }
 void chat_codec() {
     const auto reject = [](const Packet &packet) {

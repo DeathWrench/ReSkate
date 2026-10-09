@@ -527,6 +527,13 @@ void publish_chat(Session &s) {
     for (const auto &peer : active_peers(s))
         if (listed(peer)) signature.add(peer.member.name.empty() ? s.transport.name(peer.member.id) : peer.member.name);
     for (const auto &asset : s.server_maps) signature.add(asset);
+    // The vote card: its tally, the player's answer, and the seconds left as they pass.
+    const auto now = now_us();
+    const unsigned vote_seconds = s.vote.id && s.vote.outcome == vote_running && s.vote_ends > now
+                                      ? static_cast<unsigned>((s.vote_ends - now + 999999) / 1000000) : 0;
+    signature.add(static_cast<std::uint64_t>(s.vote.id));
+    signature.add(static_cast<std::uint64_t>(s.vote.yes) << 32 | static_cast<std::uint64_t>(s.vote.no) << 16 | s.vote.needed);
+    signature.add(static_cast<std::uint64_t>(s.vote.outcome) << 40 | static_cast<std::uint64_t>(s.vote_mine) << 32 | vote_seconds);
     signature.add(static_cast<std::uint64_t>(s.chat.size()));
     if (!s.chat.empty()) {
         signature.add(s.chat.front().sequence);
@@ -548,6 +555,23 @@ void publish_chat(Session &s) {
     // (or the game's hidden UI) also closes an open chat box.
     view.available = (s.mode == Mode::host || s.mode == Mode::join) && s.chat_visible && !s.game_menu;
     view.latest = s.chat.empty() ? 0 : s.chat.back().sequence;
+    if (dedicated && s.vote.id) {
+        auto &vote = view.vote;
+        vote.id = s.vote.id;
+        vote.label = clean_chat_text(s.vote.label);
+        vote.yes = s.vote.yes;
+        vote.no = s.vote.no;
+        vote.needed = s.vote.needed;
+        vote.seconds = vote_seconds;
+        vote.outcome = s.vote.outcome;
+        vote.mine = s.vote_mine;
+        vote.may_vote = s.vote.target != s.transport.status().local_id;
+        const auto binds = local_profile_controller_bindings();
+        if (binds.available) {
+            vote.yes_bind = binds.vote_yes_combo;
+            vote.no_bind = binds.vote_no_combo;
+        }
+    }
     view.lines.assign(s.chat.begin(), s.chat.end());
     // The filter masks each line once; lines leave the cache with the log.
     if (!s.chat_filter || s.chat.empty()) {

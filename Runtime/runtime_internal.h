@@ -76,6 +76,7 @@ struct Runtime {
     dingosdk::ControllerComboLatch forward_velocity_bind_latch;
     dingosdk::ControllerComboLatch up_velocity_bind_latch;
     dingosdk::ControllerComboLatch offboard_up_velocity_bind_latch;
+    dingosdk::ControllerComboLatch vote_yes_bind_latch, vote_no_bind_latch;
     ULONGLONG next_offline{};
     bool transition_seen{}, initialized{}, catalog_logged{},
         native_tick_ready{}, native_loading_logging{}, fixed_stop_entitlement_route_ready{}, menu_load_queued{}, startup_load_queued{};

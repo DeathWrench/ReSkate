@@ -18,6 +18,7 @@
 #include "password.h"
 #include "client_timing.h"
 #include "monotonic_clock.h"
+#include <atomic>
 #include <algorithm>
 #include <fstream>
 #include <array>
@@ -214,6 +215,11 @@ struct Session {
     float roster_voice_range = default_voice_range;
     // The colours of the dedicated server's own chat lines, as its roster gives them.
     std::uint32_t server_chat_badge = default_server_chat_badge, server_chat_text = default_server_chat_text;
+    // The dedicated server's vote as its roster last gave it, when it ends by this game's clock,
+    // and what this player answered in it (0 nothing yet, 1 yes, 2 no).
+    ServerVote vote;
+    std::uint64_t vote_ends{};
+    std::uint8_t vote_mine{};
     // The server's ban list, as sent to us while we are one of its admins.
     std::vector<MultiplayerBan> server_bans;
     std::uint32_t server_ban_total{};
@@ -407,6 +413,10 @@ std::string send_chat(Session &s, std::string_view typed);
 // A "/" command for a dedicated server (votes, and any server command for its admins): sent
 // like chat but never shown as a line; the server answers in chat.
 std::string send_chat_command(Session &s, std::string_view typed);
+// Answers the dedicated server's running vote, as /yes or /no in chat does.
+std::string cast_server_vote(Session &s, bool yes);
+// Whether a vote the local player may answer is running: read by the game thread for the binds.
+inline std::atomic<bool> server_vote_open_flag{};
 // "/p <message>" in a lobby: one line for the local player's party only, relayed by the host.
 std::string send_party_chat(Session &s, std::string_view typed);
 // The "/" commands this session offers (the chat overlay lists them as the player types "/").

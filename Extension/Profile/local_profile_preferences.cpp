@@ -17,6 +17,8 @@ ControllerBindingsModel local_profile_controller_bindings() {
     result.forward_velocity_combo = s.store->forward_velocity_binding();
     result.up_velocity_combo = s.store->up_velocity_binding();
     result.offboard_up_velocity_combo = s.store->offboard_up_velocity_binding();
+    result.vote_yes_combo = s.store->vote_binding(true);
+    result.vote_no_combo = s.store->vote_binding(false);
     result.available = true;
     return result;
 }
@@ -62,6 +64,17 @@ bool set_local_freecam_binding(std::uint32_t combo) {
         s.store->save_freecam_binding(combo);
         binding_feedback = combo ? "Freecam binding saved." : "Freecam binding cleared.";
         dingosdk::logging::event(dingosdk::logging::Channel::profile, dingosdk::Json{{"event","controller_binding_saved"},{"action","freecam"},{"combo",combo}}.dump().c_str());
+        return true;
+    } catch (...) { binding_feedback = "Could not save the binding. See the console log."; return false; }
+}
+
+bool set_local_vote_binding(bool yes, std::uint32_t combo) {
+    auto& s = local_runtime(); std::lock_guard lock(s.native_mutex);
+    if (!s.active || !s.store || !valid_action_binding(combo)) return false;
+    try {
+        s.store->save_vote_binding(yes, combo);
+        binding_feedback = std::string(yes ? "Vote yes" : "Vote no") + (combo ? " binding saved." : " binding cleared.");
+        dingosdk::logging::event(dingosdk::logging::Channel::profile, dingosdk::Json{{"event","controller_binding_saved"},{"action",yes ? "vote_yes" : "vote_no"},{"combo",combo}}.dump().c_str());
         return true;
     } catch (...) { binding_feedback = "Could not save the binding. See the console log."; return false; }
 }

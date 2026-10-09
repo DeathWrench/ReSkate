@@ -120,12 +120,23 @@ struct MultiplayerChatCommand {
     std::string argument;    // what Tab completes after it: "player", "map", "time" or ""
 };
 // What the chat overlay reads each frame: cheap to copy, unlike the full model.
+// The vote a dedicated server is running or has just finished, for the card above chat.
+struct MultiplayerVote {
+    std::uint32_t id{};          // 0: none
+    std::string label;           // "change the map to ..."
+    unsigned yes{}, no{}, needed{}, seconds{}; // seconds: left of a running one
+    std::uint8_t outcome{};      // 0 running, 1 passed, 2 failed, 3 cancelled
+    std::uint8_t mine{};         // this player's answer: 0 none yet, 1 yes, 2 no
+    bool may_vote{};             // not the player a kick vote is about
+    std::uint32_t yes_bind{}, no_bind{}; // the player's binds for Yes and No (controller_bindings.h), 0: none
+};
 struct MultiplayerChat {
     bool available{};           // in a session that can carry chat
     std::uint64_t latest{};     // sequence of the newest line, 0 when empty
     std::vector<MultiplayerChatLine> lines;
     std::vector<MultiplayerChatCommand> commands; // what "/" offers in this session
     std::vector<std::string> players, maps;       // what their arguments complete to
+    MultiplayerVote vote;
 };
 // A player this PC's lobbies never admit, kept in the local profile.
 struct MultiplayerBan {

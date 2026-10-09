@@ -234,6 +234,19 @@ void register_movement_commands(Commands &registry) {
         out(saved ? local_profile_controller_bindings().status : "error: Invalid binding or save failed.");
     };
     registry.add(std::move(offboard_up_bind));
+    for (const bool yes : {true, false}) {
+        auto vote_bind = action(yes ? "bind voteyes" : "bind voteno",
+            yes ? "Bind a controller combo or keyboard key to Yes in a server's vote; 0 clears the binding"
+                : "Bind a controller combo or keyboard key to No in a server's vote; 0 clears the binding", Group::movement, {mask});
+        vote_bind.inspect = [](const Model &m) {
+            return State{m.bindings.available, {}, "Controller bindings are unavailable.", {}, false};
+        };
+        vote_bind.run = [yes](const Model &, const Values &args, const Output &out) {
+            const bool saved = set_local_vote_binding(yes, static_cast<std::uint32_t>(std::get<std::uint64_t>(args[0])));
+            out(saved ? local_profile_controller_bindings().status : "error: Invalid binding or save failed.");
+        };
+        registry.add(std::move(vote_bind));
+    }
 }
 void register_ai_commands(Commands &registry) {
     const auto ready = [](const Model &m) {

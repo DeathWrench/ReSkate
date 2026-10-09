@@ -616,7 +616,7 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
     if ((action != "host" && action != "host-config" && action != "join" && action != "join-lobby" && action != "join-friend-lobby" && action != "stop" &&
          action != "distances" && action != "object-placement" && action != "object-limit" && action != "kick" && action != "clear-objects" &&
          action != "nametags" && action != "chat-visible" && action != "chat-filter" &&
-         action != "nametag-distance" && action != "nametag-dots" && action != "nametags-friends" && action != "player-distance" && action != "direct-connections" && action != "pose-dump" &&
+         action != "nametag-distance" && action != "nametag-dots" && action != "nametags-friends" && action != "player-distance" && action != "direct-connections" && action != "pose-dump" && action != "vote" &&
          action != "chat-bubbles" && action != "chat-bubbles-own" && action != "chat-bubbles-distance" &&
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
          !own_mark_command(action) &&
@@ -642,6 +642,7 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
     s.requests.push_back(std::move(request));
     return true;
 }
+bool server_vote_open() noexcept { return session_detail::server_vote_open_flag.load(std::memory_order_relaxed); }
 std::string command(std::string_view action, std::string_view argument, std::string_view password) {
     if (launcher::offline_mode() && !own_mark_command(action))
         return "Multiplayer is unavailable in offline mode. Start Steam and relaunch ReSkate.";
@@ -662,6 +663,12 @@ std::string command(std::string_view action, std::string_view argument, std::str
             const auto text = action == "server" ? std::string(argument) : std::string(action) + " " + std::string(argument);
             const auto result = send_admin(s, text);
             if (result != "Sent to the server.") add_chat(s, 0, "Server", result);
+            return result;
+        }
+        if (action == "vote") {
+            if (argument != "yes" && argument != "no") return "vote yes|no";
+            const auto result = cast_server_vote(s, argument == "yes");
+            if (!result.empty()) add_chat(s, 0, "ReSkate", result);
             return result;
         }
         if (action == "server") return "Server commands need a dedicated server session.";
