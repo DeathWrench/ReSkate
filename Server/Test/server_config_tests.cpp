@@ -204,6 +204,17 @@ int run() {
         check(config_error(away).find("afk_kick_minutes") != std::string::npos, "An away timer over a day was accepted");
         std::filesystem::remove_all(folder / "data");
     }
+    // Skater effects: shared unless turned off, and kept in the file.
+    {
+        ServerConfig plain;
+        check(plain.sync_effects, "Skater effects are not shared by default");
+        plain.file = folder / "plain.json";
+        plain.sync_effects = false;
+        save_config(plain);
+        check(!load_config(plain.file).sync_effects && text(plain.file).find("\"sync_effects\": false") != std::string::npos,
+              "The skater effects setting was not kept");
+        std::filesystem::remove_all(folder / "data");
+    }
     // Object scaling: allowed unless turned off, and kept in the file.
     {
         ServerConfig sized;

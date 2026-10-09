@@ -106,6 +106,10 @@ struct ServerConfig {
     // Players may place objects at another size than their own. Off: every player's objects
     // are shared at their own size; admins may still resize theirs.
     bool object_scaling = true;
+    // Players see each other's skater effects: sparks and dust where a skater touches the world,
+    // and the trails and fire of costumes and skateboards. Off: nothing of them is relayed and
+    // players' games show each other without them.
+    bool sync_effects = true;
     // Whether players may use noclip (and teleport) / No Bail / the boosts (admins always may).
     bool noclip = true, no_bail = true, boosts = true;
     // Players skate with the game's own physics tuning, not copies they edited.

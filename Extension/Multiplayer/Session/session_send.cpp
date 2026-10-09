@@ -1,6 +1,7 @@
 #include "session_internal.h"
 #include "Extension/Multiplayer/Remote/native_cosmetics.h"
 #include "Extension/Multiplayer/Remote/native_audio.h"
+#include "Extension/Multiplayer/Remote/native_vfx.h"
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Objects/network_object_runtime.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
@@ -317,7 +318,8 @@ void broadcast(Session &s, const Packet &packet, bool reliable, bool fresh, std:
     std::vector<Outgoing> outgoing;
     unsigned direct_sent{};
     const bool gameplay = packet.kind == PacketKind::pose || packet.kind == PacketKind::audio ||
-                          packet.kind == PacketKind::voice || packet.kind == PacketKind::cosmetics;
+                          packet.kind == PacketKind::voice || packet.kind == PacketKind::cosmetics ||
+                          packet.kind == PacketKind::effects;
     for (auto &p : active_peers(s)) {
         if (!p.handshaken || p.member.id == except ||
             (s.mode == Mode::host && gameplay && !p.world_ready) ||
@@ -325,7 +327,7 @@ void broadcast(Session &s, const Packet &packet, bool reliable, bool fresh, std:
             continue;
         // Chat and throwdown messages always travel through the host, which relays
         // them once to everyone else; a direct copy as well would deliver them twice.
-        if ((packet.kind == PacketKind::chat || packet.kind == PacketKind::throwdown) && s.mode == Mode::join &&
+        if ((packet.kind == PacketKind::chat || packet.kind == PacketKind::throwdown || packet.kind == PacketKind::effects) && s.mode == Mode::join &&
             p.member.id != s.host_id)
             continue;
         if (packet.kind == PacketKind::voice) {
@@ -713,6 +715,12 @@ void send_local(Session &s, const NativeFrame &local, std::uint64_t now, std::ui
             s.pose_dump.write(reinterpret_cast<const char *>(raw.data()), static_cast<std::streamsize>(raw.size()));
         }
         deliver(a, std::any_of(a.audio.begin(), a.audio.end(), [](const auto &sample) { return sample.event; }), true);
+    }
+    // This skater's contacts with the world, for the sparks and dust others see on it.
+    if (auto impacts = drain_impacts(); !impacts.empty() && s.sync_effects) {
+        auto e = packet(s, PacketKind::effects, now);
+        e.impacts = std::move(impacts);
+        deliver(e, false, true);
     }
 }
 } // namespace session_detail

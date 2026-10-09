@@ -15,6 +15,7 @@
 #include "Extension/Objects/network_object_runtime.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "Extension/Multiplayer/Remote/native_audio.h"
+#include "Extension/Multiplayer/Remote/native_vfx.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/no_bail.h"
 #include "Extension/Skater/physics_tuning.h"
@@ -75,6 +76,7 @@ void stop(Session &s, std::string reason) {
     s.object_placement = ObjectPlacement::everyone;
     s.object_limit = 0;
     s.object_scaling = true;
+    s.sync_effects = true;
     set_lobby_object_limit(0);
     s.server_admin = false;
     s.server_bans.clear();
@@ -130,6 +132,7 @@ void stop(Session &s, std::string reason) {
     s.used_slots = 0;
     s.object_owners_valid = false;
     reset_audio();
+    reset_effects();
     s.public_host = s.started_map = s.roster_dirty = false;
     s.awaiting_map = s.join_map_authorized = s.map_load_submitted = false;
     s.join_started = s.last_map_request = s.last_map_load_check = 0;
@@ -203,6 +206,7 @@ void clear_world(Session &s, std::uint64_t now) {
         peer.last_packet = now;
     }
     reset_audio();
+    reset_effects();
     s.started_map = false;
     s.context = s.parent = 0;
     s.sent_appearance.reset();
@@ -487,11 +491,27 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
             native_pass = true;
         }
         update_remote_cosmetics(s.base, local, *p.appearance.value(), p.cosmetic_status);
+        // The effects their costume and board items come with follow the outfit.
+        if (p.applied_cosmetics != p.cosmetic_revision && s.sync_effects) note_remote_outfit(now);
         p.last_cosmetic_apply = now;
         p.applied_cosmetics = p.cosmetic_revision;
     };
-    // The player's sound for this frame, every frame they are shown.
+    // The player's sound for this frame, every frame they are shown, and the effects of their
+    // skater's contacts that are due.
     const auto present_audio = [&](Peer &p) {
+        tick_remote_effects(now);
+        if (!s.sync_effects) p.impacts.clear();
+        while (!p.impacts.empty() && p.impacts.front().first <= now) {
+            const auto &impact = p.impacts.front().second;
+            float distance{};
+            for (unsigned i = 0; i < 3; ++i) {
+                const auto d = impact.position[i] - p.render_pose.root.position[i];
+                distance += d * d;
+            }
+            // Only where their skater is: a contact far from it is not theirs to place.
+            if (distance <= 30.f * 30.f) play_impact(impact);
+            p.impacts.pop_front();
+        }
         if (const auto audio = p.audio.sample(now)) {
             // Preserve discrete audio changes immediately, but let
             // unchanged continuous inputs and spatial transforms
@@ -872,6 +892,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, std::string_vi
             if (!install_entity_hooks(base, entity_detail) && !entity_detail.empty())
                 logging::log(logging::Level::warning, logging::Channel::runtime, "Multiplayer: {}", entity_detail);
             prepare_remote_audio(base);
+            prepare_effects(base);
             logging::log(logging::Level::info, logging::Channel::runtime,
                          "Multiplayer: remote-player hooks installed in {} ms (once, before anyone joins).",
                          (now_us() - started) / 1000);

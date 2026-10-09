@@ -144,6 +144,7 @@ class Host {
         VoiceBudget voice_budget;
         OutfitBudget outfit_budget;
         SoundBudget sound_budget;
+        EffectBudget effect_budget;
         ChatRate chat_rate;
         ChatBudget admin_budget, throwdown_budget, party_budget;
         SpeedCheck speed;           // how fast their game runs, from their pose timestamps

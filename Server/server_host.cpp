@@ -367,7 +367,8 @@ void Host::broadcast(const Packet &packet, bool reliable, bool fresh, std::uint6
     outgoing.reserve(guests_.size());
     std::shared_ptr<const std::vector<AudioSample>> sound; // a skater's samples, shared by everyone sent them
     const bool gameplay = packet.kind == PacketKind::pose || packet.kind == PacketKind::audio ||
-                          packet.kind == PacketKind::voice || packet.kind == PacketKind::cosmetics;
+                          packet.kind == PacketKind::voice || packet.kind == PacketKind::cosmetics ||
+                          packet.kind == PacketKind::effects;
     for (auto &[id, guest] : guests_) {
         auto &p = *guest;
         if (!p.handshaken || id == except || (gameplay && !p.world_ready)) continue;
@@ -387,6 +388,15 @@ void Host::broadcast(const Packet &packet, bool reliable, bool fresh, std::uint6
         if (!p.unmet.empty() && (packet.kind == PacketKind::pose || packet.kind == PacketKind::audio || packet.kind == PacketKind::cosmetics) &&
             p.unmet.contains(packet.source))
             continue;
+        // A skater's effects go to those near enough to see them: within 150 m.
+        if (packet.kind == PacketKind::effects && source && source->latest_root && p.latest_root) {
+            float distance{};
+            for (unsigned i = 0; i < 3; ++i) {
+                const auto d = p.latest_root->position[i] - source->latest_root->position[i];
+                distance += d * d;
+            }
+            if (distance > 150.f * 150.f) continue;
+        }
         // A skater's sound goes to those who would hear it: within the full pose rate's reach,
         // and in a crowd only from the nearest (the same players sent at the full rate).
         // A game stops a sound it hears nothing more of after a second.
@@ -577,6 +587,7 @@ void Host::send_roster() {
     p.object_placement = config_.object_placement;
     p.object_limit = config_.object_limit;
     p.object_scaling = config_.object_scaling;
+    p.sync_effects = config_.sync_effects;
     p.guest_noclip = config_.noclip;
     p.guest_no_bail = config_.no_bail;
     p.guest_boosts = config_.boosts;
@@ -743,6 +754,8 @@ bool Host::accept_data(Guest &source, const Packet &p) {
         if (accepted) source.cosmetic_packet = encode_wire(p);
     } else if (p.kind == PacketKind::audio)
         accepted = source.sound_budget.accept(now_, p.audio.size()) && source.audio.push(p, now_);
+    else if (p.kind == PacketKind::effects)
+        accepted = config_.sync_effects && source.effect_budget.accept(now_);
     else if (p.kind == PacketKind::pose)
         accepted = source.poses.push_validated(p, now_);
     // The server never plays anything back: keep only what ordering needs.
