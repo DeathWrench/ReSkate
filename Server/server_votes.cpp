@@ -164,7 +164,7 @@ void Host::start_vote(Guest &guest, VoteKind kind, std::string_view argument) {
     const auto label = vote.label;
     vote_ = std::move(vote);
     send_chat(guest_name(guest) + " started a vote to " + label + " (" + std::to_string(setting.percent) + "% needed, " +
-              std::to_string(config_.votes.seconds) + " s). Vote on the card above chat, or type /yes or /no.");
+              std::to_string(config_.votes.seconds) + " s). Vote on the card at the right of your screen, or type /yes or /no.");
     log_("[vote] " + guest_name(guest) + " started a vote to " + label + ".");
     check_vote(false);
 }
@@ -228,7 +228,7 @@ void Host::check_vote(bool expired) {
     const bool lost = !passed && (expired || yes + (eligible - std::min(eligible, yes + no)) < needed);
     const auto tally = std::to_string(yes) + " yes, " + std::to_string(no) + " no, " + std::to_string(needed) + " needed";
     if (!passed && !lost) {
-        // Games show the tally as it changes (the vote card above chat); chat is not filled with it.
+        // Games show the tally as it changes (the vote card); chat is not filled with it.
         vote.shown_yes = yes;
         vote.shown_no = no;
         show_vote(vote, multiplayer::vote_running, yes, no, needed);
