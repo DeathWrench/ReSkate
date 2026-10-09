@@ -436,6 +436,7 @@ std::string cast_server_vote(Session &s, bool yes);
 std::string answer_server_poll(Session &s, std::size_t answer);
 // Whether a vote the local player may answer is running: read by the game thread for the binds.
 inline std::atomic<bool> server_vote_open_flag{};
+inline std::atomic<unsigned> server_poll_answers_flag{};
 // "/p <message>" in a lobby: one line for the local player's party only, relayed by the host.
 std::string send_party_chat(Session &s, std::string_view typed);
 // The "/" commands this session offers (the chat overlay lists them as the player types "/").

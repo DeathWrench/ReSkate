@@ -455,8 +455,8 @@ void draw_command_list(ChatState& c, ImFont* heading, ImFont* body, ImVec2 botto
 // player answers with their binds (the keycaps on the buttons; F1 and F2 unless changed), or by
 // clicking while the cursor is free.
 // A poll on the same card: its question, then a row for each answer with its count and a bar of
-// its share. The player answers by clicking a row while the cursor is free, or with /1, /2... in
-// chat; their answer is the blue row.
+// its share. The player answers with the number key on the row's keycap, by clicking a row while
+// the cursor is free, or with /1, /2... in chat; their answer is the blue row.
 void draw_poll(const MultiplayerVote& poll, ImFont* heading, ImFont* body, ImVec2 display, float scale, bool clickable) {
     const bool running = poll.outcome == 0;
     const ImU32 accent = running ? theme::blue : poll.outcome == 3 ? theme::muted : skate_theme::good;
@@ -499,18 +499,26 @@ void draw_poll(const MultiplayerVote& poll, ImFont* heading, ImFont* body, ImVec
         if (chosen) draw->AddRectFilled(a, ImVec2(a.x + 3.0f * scale, b.y), theme::blue);
         const auto number = std::to_string(i + 1);
         const float text_y = y + (row - fine) * 0.5f - 1.0f * scale;
-        draw->AddText(heading, fine, ImVec2(a.x + 10.0f * scale, text_y), chosen ? theme::blue : theme::muted, number.c_str());
+        // The key that gives this answer, as the game shows its own keys.
+        {
+            const float cap = 18.0f * scale;
+            const ImVec2 at(a.x + 6.0f * scale, y + (row - cap) * 0.5f);
+            const auto extent = heading->CalcTextSizeA(12.0f * scale, FLT_MAX, 0.0f, number.c_str());
+            draw->AddRectFilled(at, ImVec2(at.x + cap, at.y + cap), chosen ? theme::blue : theme::paper, 3.0f * scale);
+            draw->AddText(heading, 12.0f * scale, ImVec2(at.x + (cap - extent.x) * 0.5f, at.y + (cap - extent.y) * 0.5f),
+                          chosen ? theme::paper : skate_theme::black, number.c_str());
+        }
         const auto counted = std::to_string(count);
         const float count_width = heading->CalcTextSizeA(fine, FLT_MAX, 0.0f, counted.c_str()).x;
-        draw->PushClipRect(ImVec2(a.x + 28.0f * scale, a.y), ImVec2(b.x - count_width - 18.0f * scale, b.y), true);
-        draw->AddText(body, fine + 1.0f * scale, ImVec2(a.x + 28.0f * scale, text_y), theme::paper, poll.answers[i].c_str());
+        draw->PushClipRect(ImVec2(a.x + 32.0f * scale, a.y), ImVec2(b.x - count_width - 18.0f * scale, b.y), true);
+        draw->AddText(body, fine + 1.0f * scale, ImVec2(a.x + 32.0f * scale, text_y), theme::paper, poll.answers[i].c_str());
         draw->PopClipRect();
         draw->AddText(heading, fine, ImVec2(b.x - 10.0f * scale - count_width, text_y), theme::paper, counted.c_str());
         if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) queue_multiplayer_action("vote", number);
         y += row + between;
     }
     if (answers) {
-        const auto hint = "Click an answer, or type /1 to /" + std::to_string(poll.answers.size()) + " in chat.";
+        const auto hint = "Press 1 to " + std::to_string(poll.answers.size()) + " on the keyboard, or click an answer.";
         draw->AddText(body, fine, ImVec2(left, y - between + gap), theme::muted, hint.c_str());
     }
 }

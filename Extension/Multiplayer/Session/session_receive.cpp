@@ -323,9 +323,13 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
         if (p.vote.id != s.vote.id) s.vote_mine = p.vote.id && !poll && p.vote.starter == local && p.vote.yes ? 1 : 0;
         s.vote = p.vote;
         s.vote_ends = now_us() + std::uint64_t{p.vote.seconds} * 1000000;
-        // The Yes and No binds answer a yes/no vote; a poll is answered on its card or with /1, /2...
+        // The Yes and No binds answer a yes/no vote; a poll is answered with the number keys, on
+        // its card or with /1, /2...
         server_vote_open_flag.store(p.vote.id && !poll && p.vote.outcome == vote_running && p.vote.target != local,
                                     std::memory_order_relaxed);
+        server_poll_answers_flag.store(p.vote.id && poll && p.vote.outcome == vote_running
+                                           ? static_cast<unsigned>(std::min(p.vote.answers.size(), max_vote_answers)) : 0U,
+                                       std::memory_order_relaxed);
         if (p.announcement.id != s.announcement.id)
             s.announcement_ends = now_us() + std::uint64_t{p.announcement.seconds} * 1000000;
         s.announcement = p.announcement;
