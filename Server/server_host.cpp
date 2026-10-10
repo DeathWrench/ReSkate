@@ -701,7 +701,13 @@ void Host::send_chat(std::string_view text, Guest *only) {
     else broadcast(message, true, false);
 }
 bool Host::allowed_words(Guest &guest, std::string_view text) {
-    if (!config_.word_warnings || !text::contains_forbidden_words(text)) return true;
+    if (!text::contains_forbidden_words(text)) return true;
+    // Never passed on. Without warnings ("word_warnings": 0) that is all that happens.
+    if (!config_.word_warnings) {
+        log_("[words] " + guest_name(guest) + " said a word that is not allowed; the message was not passed on.");
+        send_chat(multiplayer::word_blocked_notice, &guest);
+        return false;
+    }
     const auto id = guest.member.id;
     const auto count = ++word_warnings_[id];
     if (count > config_.word_warnings) {

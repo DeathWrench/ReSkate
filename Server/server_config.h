@@ -113,9 +113,9 @@ struct ServerConfig {
     // Minutes a player may be away (not moving, talking, typing or building) before the server
     // removes them, 1 to 1440; 0: never. Admins are never removed for it.
     unsigned afk_kick = 0;
-    // A chat message with a word the ReSkate team does not allow at all (word_lists.h) is not
-    // passed on and its player warned; after this many warnings, 1 to 10, the next gets them
-    // kicked. 0: such messages are passed on like any other.
+    // A chat message with a word the ReSkate team does not allow at all (word_lists.h) is never
+    // passed on. Its player is warned; after this many warnings, 1 to 10, the next gets them
+    // kicked. 0: nobody is warned or kicked, and the message is still not passed on.
     unsigned word_warnings = 3;
     // Players whose game runs fast (a speedhack; Server/speed_check.h): "warn" takes them out of
     // throwdowns and coop challenges and tells the admins, "kick" also removes them, "off" does not check.

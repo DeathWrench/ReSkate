@@ -24,4 +24,7 @@ inline constexpr unsigned word_warnings_default = 3, word_warnings_most = 10;
 inline constexpr std::string_view word_kick_notice = "Kicked for using words that are not allowed here.";
 // What the player is told at their `count`th warning of `warnings`.
 std::string word_warning(unsigned count, unsigned warnings);
+// And where nobody is warned or kicked (a server's "word_warnings": 0): the message is still
+// not passed on.
+inline constexpr std::string_view word_blocked_notice = "Your message was not sent: it has a word that is not allowed here.";
 } // namespace dingosdk::multiplayer
