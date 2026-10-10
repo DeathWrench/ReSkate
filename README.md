@@ -141,7 +141,8 @@ accepts `park random` from its console or an admin.
   on an automatically selected port; no internet hosting is needed. The endpoint exposes no filesystem
   routes and retains at most 64 MiB of artwork. Existing content-cache covers keep their priority.
 
-Only install mods you trust. Mods change game data, and custom scripts can run code.
+Only install mods you trust. Mods change game data. Custom Lua scripts (`scripts/Custom`) are
+switched off in this version: nothing in that folder is read or run.
 
 ## Dedicated servers
 

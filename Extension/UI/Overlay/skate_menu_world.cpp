@@ -405,15 +405,16 @@ void world_layers_page(SkateMenu& menu, const Model& model, const CallbacksV3& c
         unsigned visible_layers{};
         for (unsigned i = 0; i < world_layers().size(); ++i) {
             const auto& layer = world_layers()[i];
-            if (layer.map != model.world.map || !model.world.supported[i]) continue;
+            if (layer.map != model.world.map || !model.world.supported[i] || world_layer_kept_off(layer.key)) continue;
             if (menu.world_layer_category && layer.category != categories[menu.world_layer_category]) continue;
-            if (!matches_search(layer.label) && !matches_search(layer.key)) continue;
+            const auto title = world_layer_title(layer.label);
+            if (!matches_search(title) && !matches_search(layer.key)) continue;
             ++visible_layers;
             // Every row owns its checkbox ID, independent of table headers.
             ImGui::PushID(layer.key.data());
             ImGui::TableNextRow(); ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
-            ImGui::TextWrapped("%s", layer.label.data());
+            ImGui::TextWrapped("%s", title.c_str());
             if (ImGui::IsItemHovered()) {
                 ImGui::BeginTooltip(); ImGui::PushTextWrapPos(ImGui::GetFontSize() * 30);
                 ImGui::TextUnformatted(layer.detail.data());

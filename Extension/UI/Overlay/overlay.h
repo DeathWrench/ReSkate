@@ -209,6 +209,12 @@ struct HallOfMeatModel {
     bool available = false, enabled = false;
 };
 
+// Road Rash's switches (Extension/RoadRash/road_rash.h): started, switched on, and whether its
+// worst wounds bleed.
+struct RoadRashModel {
+    bool available = false, enabled = false, blood = false;
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -228,6 +234,7 @@ struct Model {
     ProgressionModel progression;
     PlayerCardModel player_card;
     HallOfMeatModel hall_of_meat;
+    RoadRashModel road_rash;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
@@ -361,6 +368,23 @@ struct Nametags {
 };
 using NametagFeed = Nametags (*)();
 void set_nametag_feed(NametagFeed) noexcept;
+// The skater item grids' favorites, search and filter (item_browser_overlay.cpp): what the host's
+// grids show now, and what the keys ask of them. The view is read while a grid is open; every
+// function is thread-safe and only queues work for the client thread.
+struct ItemBrowserView {
+    bool open{};                // an item grid has the focus
+    std::string search, filter; // the search text and the filter's name
+    unsigned shown{}, total{};  // tiles in the grid that has the focus
+    bool focused_favorite{};    // the highlighted item is a favorite
+};
+struct ItemBrowserHost {
+    ItemBrowserView (*view)(){};
+    void (*toggle_favorite)(){};
+    void (*set_search)(const char *text){};
+    void (*cycle_filter)(){};
+};
+// `host` must stay valid for the life of the process.
+void set_item_browser(const ItemBrowserHost *host) noexcept;
 using ParkSurfaceQueue = bool (*)(const EditorSurfaceRequest &);
 void set_park_surface_queue(ParkSurfaceQueue) noexcept;
 using ParkPreviewQueue = bool (*)(const EditorPreviewRequest &);

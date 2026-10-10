@@ -1,6 +1,8 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -46,6 +48,9 @@ struct ItemContent {
     // nothing.
     std::vector<std::string> shapes;
     std::string data;  // a digest of every field of its item data, to compare whole
+    // A whole costume, worn instead of clothes (its asset is one of the game's full-body
+    // costumes). Its shape is the costume, whatever looks it also names.
+    bool costume{};
 };
 // Empty when the document is not an item (an asset with a Key and ItemData).
 [[nodiscard]] std::optional<ItemContent> item_content(const frostbite::ebx::Document& document);
@@ -56,9 +61,10 @@ public:
     // `sold`: the store sells it, so ReSkate never hands it out.
     void add(const ItemContent& item, bool sold);
     // The key of the store item `item` is a copy of, or empty. It is one when
-    // it has a look only a store item has, when it has no look of its own and
-    // is fitted on a shape only a store item with no look has (a whole
-    // costume), or when its item data is a store item's field for field.
+    // it has a look only a store item has, when it is fitted on a shape only
+    // a store item with no look has (a whole costume, with or without a look
+    // of the mod's own over it), or when its item data is a store item's
+    // field for field.
     // Anything an item the store does not sell has as well is nobody's.
     [[nodiscard]] std::string original(const ItemContent& item) const;
 
@@ -69,6 +75,40 @@ private:
         [[nodiscard]] const std::string* owner(std::string_view part) const;
     };
     Parts looks_, shapes_, data_;
+};
+
+// A costume is its mesh more than anything it names, and a mesh can be shipped again under any
+// name, whole or in part, in an item or beside one. So the meshes a mod ships are also held
+// against the geometry of the costumes the store sells: where their vertices are. A vertex is
+// told by its place to half a millimetre.
+[[nodiscard]] std::uint64_t mesh_point(const std::array<float, 3>& position) noexcept;
+// One level of detail of a mesh, as the places of its vertices: sorted, each once.
+[[nodiscard]] std::vector<std::uint64_t> mesh_points(const std::vector<std::array<float, 3>>& positions);
+
+class StoreMeshes final {
+public:
+    // One level of detail of one of the game's meshes. `key`: the costume's item; any other
+    // mesh of the game's (clothes, a free costume) is added as not sold, under any key.
+    void add(std::string_view key, bool sold, const std::vector<std::uint64_t>& points);
+    [[nodiscard]] bool empty() const noexcept { return owners_.empty(); }
+    // The key of the store costume a mesh with these points takes from, or empty. It does when
+    // enough of them (shared_least) are points only that one costume has, and they are a tenth
+    // of that costume's finest level or three tenths of the mesh. A point two of the game's
+    // meshes have is nobody's: the body under two costumes, the socks one wears that are also
+    // an item anyone has.
+    [[nodiscard]] std::string original(const std::vector<std::uint64_t>& points) const;
+    static constexpr std::size_t shared_least = 300;
+
+private:
+    static constexpr std::uint32_t nobody = 0xffffffffU;
+    struct Owner {
+        std::string key;
+        bool sold{};
+        std::size_t largest{};  // its finest level of detail, in points
+    };
+    std::vector<Owner> owners_;
+    std::map<std::string, std::uint32_t, std::less<>> by_key_;
+    std::map<std::uint64_t, std::uint32_t> points_;  // -> its one owner, or nobody
 };
 
 struct StoreCopies {
@@ -83,6 +123,8 @@ struct StoreCopies {
     std::vector<Source> mods;
     // How many of the game's own items the mods' were held against; none when no mod adds an item.
     std::size_t game_items{};
+    // And how many of the mods' meshes against how many of the game's costumes.
+    std::size_t mod_meshes{}, game_costumes{};
 };
 
 // Whether the store sells the item with this lower-case key.
