@@ -1,9 +1,9 @@
 #include "mod_merge.h"
 
-#include "content_cache.h"
-#include "content_catalogs.h"
+//#include "content_cache.h"
+//#include "content_catalogs.h"
 #include "mod_merge_internal.h"
-#include "mod_store_copies.h"
+//#include "mod_store_copies.h"
 #include "native_db.h"
 
 #include <algorithm>
@@ -45,15 +45,15 @@ constexpr std::array<std::string_view, 2> launch_superbundles{"Win32/globals.toc
 // more than that the mod could not be merged: what was found is not for the
 // mod's author to read. The catalogue is only read once a mod turns out to add
 // an item at all.
-bool store_copy_problems(const Catalog& catalog, MergeReport& report) {
-    std::optional<content_cache::Catalogs> store;
-    const auto found = check_store_copies(catalog, [&store](const std::string& key) {
-        if (!store) store = content_cache::read_catalogs(content_cache::directory());
-        return store->reserved(key);
-    }, &report.notes);
-    for (const auto& source : found.mods) report.problems[source.mod].emplace_back(store_copies_problem);
-    return !found.mods.empty();
-}
+//bool store_copy_problems(const Catalog& catalog, MergeReport& report) {
+//    std::optional<content_cache::Catalogs> store;
+//    const auto found = check_store_copies(catalog, [&store](const std::string& key) {
+//        if (!store) store = content_cache::read_catalogs(content_cache::directory());
+//        return store->reserved(key);
+//    }, &report.notes);
+//    for (const auto& source : found.mods) report.problems[source.mod].emplace_back(store_copies_problem);
+//    return !found.mods.empty();
+//}
 } // namespace
 
 MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, const MergeOptions& options) noexcept {
@@ -83,7 +83,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         // What the store sells comes from the content cache, which the launcher installs.
         const bool storeKnown = content_cache::installed();
         // Disabled mods count too: their archives and map registration are placed at launch.
-        auto fingerprint = merge_fingerprint(catalog, mods, modFiles, storeKnown);
+        auto fingerprint = merge_fingerprint(catalog, mods, modFiles);
         for (const auto& mod : catalog.inactive)
             fingerprint += " inactive " + mod.name + " " + mod_fingerprint(mod.directory);
         if (options.live) {
@@ -95,8 +95,8 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         // anything is built: the caller merges again without it, as it does for a
         // mod that cannot be merged, and the patch on disk stays for that merge to
         // reuse or replace.
-        if (storeKnown && store_copy_problems(catalog, report)) return report;
-        if (!options.live) fs::remove_all(output, error);
+        //if (storeKnown && store_copy_problems(catalog, report)) return report;
+        //if (!options.live) fs::remove_all(output, error);
         lap("checking the mods");
 
         // Progress: each mod's archives, the material grid, a live merge's load
