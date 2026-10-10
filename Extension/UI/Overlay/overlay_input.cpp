@@ -150,6 +150,42 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         const bool release = message == WM_KEYUP || message == WM_SYSKEYUP;
         if (console_character(message) && s.console_character_pending.exchange(false)) return 0;
         if (console_character(message) && s.chat_character_pending.exchange(false)) return 0;
+        if (console_character(message) && s.item_search_character_pending.exchange(false)) return 0;
+        // The skater item grids (item_browser_overlay.cpp): while one has the focus and nothing of ours
+        // is open, F favorites the highlighted item, X steps the filter and "-" (or Ctrl+F) opens the
+        // search box, which then takes the keys until Enter or Esc. (The game uses Q, E, T and G here:
+        // G opens its feedback card.)
+        if (s.item_search_visible.load() || s.item_search_escape_pending.load()) {
+            if (wp == VK_ESCAPE && (key || release) && !s.console_visible.load() && !s.visible.load()) {
+                if (key && (static_cast<ULONG_PTR>(lp) & (1ull << 30)) == 0) {
+                    s.item_search_escape_pending.store(true);
+                    s.item_search_visible.store(false);
+                    item_browser_search_cleared();
+                    sync_menu_cursor();
+                    window_cursor_input(window, message, wp);
+                    std::lock_guard lock(s.input_mutex);
+                    s.input.clear();
+                } else if (release) s.item_search_escape_pending.store(false);
+                return 0;
+            }
+        } else if (key && (static_cast<ULONG_PTR>(lp) & (1ull << 30)) == 0 && !interactive_visible(s) &&
+                   !(GetKeyState(VK_MENU) & 0x8000) && item_browser_open()) {
+            const bool control = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+            const bool minus = wp == VK_SUBTRACT || (MapVirtualKeyW(static_cast<UINT>(wp), MAPVK_VK_TO_CHAR) == L'-' &&
+                                                     !(GetKeyState(VK_SHIFT) & 0x8000));
+            if ((minus && !control) || (wp == 'F' && control)) {
+                s.item_search_character_pending.store(true);
+                s.item_search_visible.store(true);
+                s.item_search_focus_requested.store(true);
+                sync_menu_cursor();
+                window_cursor_input(window, message, wp);
+                std::lock_guard lock(s.input_mutex);
+                s.input.clear();
+                return 0;
+            }
+            if (!control && wp == 'F') item_browser_key(ItemBrowserKey::favorite);
+            if (!control && wp == 'X') item_browser_key(ItemBrowserKey::filter);
+        }
         // T opens the chat, the key the game itself reserves for it
         // (Processor_Keyboard_Gameplay_Chat), while in a session and nothing
         // else of ours is open. Its character is swallowed like the console's.

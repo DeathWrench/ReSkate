@@ -134,6 +134,9 @@ struct State {
     // The map download card is asking (map_download_card.cpp): the overlay has the pointer, with
     // its own cursor, so the card's buttons can be clicked whatever is behind it.
     std::atomic<bool> prompt_pointer{false};
+    // The item grids' search box (item_browser_overlay.cpp): "-" opens it while a grid has the focus.
+    std::atomic<bool> item_search_visible{false}, item_search_focus_requested{false};
+    std::atomic<bool> item_search_character_pending{false}, item_search_escape_pending{false};
     std::atomic<bool> input_attached{false};
     std::atomic<bool> stop{false};
     std::atomic<HWND> window{nullptr};
@@ -304,6 +307,13 @@ void draw_nametags();
 bool perf_hud_pending();
 void draw_perf_hud();
 void draw_perf_window();
+// The skater item grids' search bar and prompts (item_browser_overlay.cpp): polled every presented frame.
+enum class ItemBrowserKey { favorite, filter };
+bool item_browser_pending();
+bool item_browser_open();
+void item_browser_key(ItemBrowserKey key);
+void item_browser_search_cleared(); // Esc in the search box
+void draw_item_browser();
 // Queues a private multiplayer action from outside the menu (multiplayer_menu.cpp).
 bool queue_multiplayer_action(const char* action, const std::string& argument);
 bool queue_multiplayer_action(const char* action, const std::string& argument, const std::string& password);

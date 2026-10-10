@@ -1092,6 +1092,9 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
         if (list.setting("Noclip", on_off(d.noclip), (d.noclip_available || d.noclip) && debugging)) debug({DebugAction::set_noclip, !d.noclip});
         if (list.setting("No bail", on_off(d.no_bail), (d.no_bail_available || d.no_bail) && debugging)) debug({DebugAction::set_no_bail, !d.no_bail});
         if (list.setting("Hall of Meat", on_off(m.hall_of_meat.enabled), m.hall_of_meat.available && console)) act("hall-of-meat");
+        if (list.setting("Road Rash", on_off(m.road_rash.enabled), m.road_rash.available && console)) act("road-rash");
+        if (list.setting("Road Rash blood", on_off(m.road_rash.blood), m.road_rash.available && m.road_rash.enabled && console)) act("road-rash-blood");
+        if (list.setting("Heal Road Rash", {}, m.road_rash.available && m.road_rash.enabled && console)) act("road-rash-heal");
         const auto &wear = m.offline.board_wear;
         if (list.setting("Board wear", on_off(wear.effective), wear.available && cb.queue_offline_feature)) act("board-wear");
         if (list.setting("Reset board wear", {}, wear.available && wear.effective && console)) act("board-wear-reset");
