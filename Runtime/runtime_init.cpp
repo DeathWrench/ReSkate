@@ -11,6 +11,7 @@
 #include "Engine/Vfs/mod_catalog.h"
 #include "Extension/Boot/offline_boot.h"
 #include "Extension/HallOfMeat/hall_of_meat.h"
+#include "Extension/RoadRash/road_rash.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/Progression/entitlement_request_hook.h"
 #include "Extension/Skater/skater_observer.h"
@@ -375,6 +376,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::start_no_bail(r.base);
         const bool meat = dingosdk::hall_of_meat::start(r.base);
         record("{\"event\":\"hall_of_meat_initialized\",\"active\":" + std::string(meat ? "true" : "false") + "}");
+        const bool rash = dingosdk::road_rash::start(r.base);
+        record("{\"event\":\"road_rash_initialized\",\"active\":" + std::string(rash ? "true" : "false") + "}");
         const bool noclip_velocity = dingosdk::start_client_noclip_velocity(r.base);
         record("{\"event\":\"noclip_velocity_initialized\",\"active\":" + std::string(noclip_velocity ? "true" : "false") + "}");
         const bool loading_screens = dingosdk::loading_screen::start(r.base);
