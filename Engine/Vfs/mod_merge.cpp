@@ -54,7 +54,7 @@ constexpr std::array<std::string_view, 2> launch_superbundles{"Win32/globals.toc
 //    for (const auto& source : found.mods) report.problems[source.mod].emplace_back(store_copies_problem);
 //    return !found.mods.empty();
 //}
-//} // namespace
+} // namespace
 
 MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, const MergeOptions& options) noexcept {
     MergeReport report;
