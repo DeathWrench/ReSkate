@@ -41,13 +41,9 @@ HeldInput& held_input() { static auto* value = new HeldInput; return *value; }
 
 struct InputCaptureHooks {
     Hook hid_attributes, read_file, overlapped, overlapped_ex, completion, completion_ex, close_handle;
-    // input_length: the device's own input report length (64 over USB, longer over Bluetooth),
-    // which says how a report is laid out; 0 when Windows would not say, and then the size of
-    // the buffer the game reads into stands in for it.
-    struct HidRead { HANDLE file; void* buffer; DWORD capacity; PlayStationPad kind; std::size_t input_length{}; };
+    struct HidRead { HANDLE file; void* buffer; DWORD capacity; PlayStationPad kind; };
     std::mutex hid_mutex;
     std::map<HANDLE, PlayStationPad> hid_devices;
-    std::map<HANDLE, std::size_t> hid_lengths; // of the PlayStation pads among them, looked up once
     std::map<OVERLAPPED*, HidRead> hid_reads;
     Hook register_raw;
     Hook async_key, key, keyboard, raw_data, raw_buffer, capture, release_capture, cursor, show_cursor, physical_cursor, cursor_position;
@@ -81,27 +77,16 @@ BOOLEAN __stdcall captured_hid_attributes(HANDLE file, PHIDD_ATTRIBUTES attribut
     SetLastError(error);
     return result;
 }
-// The pad's input report length as Windows gives it, or 0.
-std::size_t hid_input_length(HANDLE file) noexcept {
-    const auto error = GetLastError();
-    std::size_t length{};
-    PHIDP_PREPARSED_DATA preparsed{};
-    if (HidD_GetPreparsedData(file, &preparsed) && preparsed) {
-        HIDP_CAPS caps{};
-        if (HidP_GetCaps(preparsed, &caps) == HIDP_STATUS_SUCCESS) length = caps.InputReportByteLength;
-        HidD_FreePreparsedData(preparsed);
-    }
-    SetLastError(error);
-    return length;
-}
 void neutral_hid(const InputCaptureHooks::HidRead& read, DWORD size) {
     if (!block_polled_input() || !read.buffer || size > read.capacity) return;
     auto* bytes = static_cast<std::uint8_t*>(read.buffer);
     // USB or Bluetooth decides where the buttons are in a report with id 1. It is the device's
-    // report length that tells them apart, not how large a buffer the game happens to read
-    // into: a game reading a USB DualSense into a larger buffer had its d-pad byte written as
-    // "up" here, and placed a session marker whenever a menu took the input.
-    const bool bluetooth = playstation_bluetooth(read.input_length ? read.input_length : read.capacity);
+    // report length that tells them apart, and Windows pads every read to that length, so it
+    // is how many bytes were read: not how large a buffer the game happens to read into. A
+    // game reading a USB DualSense into a larger buffer had its d-pad byte written as "up"
+    // here, and placed a session marker whenever a menu took the input. (Nothing is asked of
+    // the game's handle for this: 2.0.4 did, as the pad was first read.)
+    const bool bluetooth = playstation_bluetooth(size);
     if (!parse_playstation_report(read.kind, bluetooth, bytes, size)) return;
     const bool sense_full = read.kind == PlayStationPad::dualsense &&
         (bytes[0] == 0x31 || (bytes[0] == 1 && !bluetooth));
@@ -131,8 +116,8 @@ void neutral_hid(const InputCaptureHooks::HidRead& read, DWORD size) {
     static std::atomic<bool> reported{};
     if (!reported.exchange(true)) logging::printf(logging::Level::info, logging::Channel::input,
         "Native PlayStation HID report neutralized; overlay retains its independent input stream. (%s over %s, report 0x%02x of %lu bytes, "
-        "device report length %zu, the game's buffer %lu.)", read.kind == PlayStationPad::dualsense ? "DualSense" : "DualShock 4",
-        bluetooth ? "Bluetooth" : "USB", bytes[0], size, read.input_length, read.capacity);
+        "the game's buffer %lu.)", read.kind == PlayStationPad::dualsense ? "DualSense" : "DualShock 4",
+        bluetooth ? "Bluetooth" : "USB", bytes[0], size, read.capacity);
 }
 void complete_hid(OVERLAPPED* request, DWORD bytes, bool success, bool finished) {
     auto& h = input_hooks();
@@ -172,9 +157,6 @@ BOOL WINAPI captured_read_file(HANDLE file, LPVOID buffer, DWORD size, LPDWORD b
         const auto found = h.hid_devices.find(file);
         if (found != h.hid_devices.end() && found->second != PlayStationPad::none) {
             read.kind = found->second;
-            const auto length = h.hid_lengths.find(file);
-            if (length != h.hid_lengths.end()) read.input_length = length->second;
-            else read.input_length = h.hid_lengths[file] = hid_input_length(file);
             if (request) h.hid_reads[request] = read;
         }
     }
@@ -218,7 +200,6 @@ BOOL WINAPI captured_close_handle(HANDLE file) {
     auto& h = input_hooks();
     {
         std::lock_guard lock(h.hid_mutex);
-        h.hid_lengths.erase(file);
         if (h.hid_devices.erase(file))
             std::erase_if(h.hid_reads, [&](const auto& entry) { return entry.second.file == file; });
     }
