@@ -5,6 +5,8 @@
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Profiling/profiler.h"
 #include "Extension/Settings/engine_tweaks.h"
+#include "Extension/Settings/replay_guard.h"
+#include "Extension/Console/commands.h"
 #include "Extension/UI/ui_pointer_skip.h"
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/profiler_labels.h"
@@ -310,6 +312,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         start_frame_timing();
         (void)dingosdk::ui_pointer::install(r.base);
         (void)dingosdk::engine_tweaks::install(r.base);
+        (void)dingosdk::replay_guard::install(r.base);
+        dingosdk::console::start_memory_trace_from_environment();
         const bool fixed_stop_provider = (global_offline_hook && progression_guard_armed) &&
             dingosdk::prepare_fixed_stop_entitlement_provider(r.base);
         record("{\"event\":\"fixed_stop_entitlement_provider_initialized\",\"prepared\":" +

@@ -615,6 +615,16 @@ std::string StoreMeshes::original(const std::vector<std::uint64_t>& points) cons
     return most ? *most : std::string();
 }
 
+StoreMeshes::Closest StoreMeshes::closest(const std::vector<std::uint64_t>& points) const {
+    std::vector<std::size_t> shared(owners_.size());
+    for (const auto point : points)
+        if (const auto found = points_.find(point); found != points_.end() && found->second != nobody) ++shared[found->second];
+    Closest most;
+    for (std::size_t owner = 0; owner < owners_.size(); ++owner)
+        if (owners_[owner].sold && shared[owner] > most.shared) most = {owners_[owner].key, shared[owner], owners_[owner].largest};
+    return most;
+}
+
 StoreCopies check_store_copies(const Catalog& catalog, const StoreItem& sold, std::vector<std::string>* notes,
                                std::size_t threads, bool background) noexcept {
     StoreCopies result;
@@ -680,11 +690,13 @@ StoreCopies check_store_copies(const Catalog& catalog, const StoreItem& sold, st
         for (const auto& [mod, items, meshes] : added) {
             StoreCopies::Source source{mod->name};
             for (const auto& mesh : meshes) {
+                result.meshes_seen.push_back({mod->name, mesh.name, mesh.points.size(), costumes.closest(mesh.points)});
                 const auto original = costumes.original(mesh.points);
                 if (original.empty()) continue;
                 if (!source.count++) {
                     source.example = mesh.name;
                     source.original = original;
+                    source.by_mesh = true;
                 }
                 result.items.insert_or_assign(lower(mesh.name), lower(original));
             }

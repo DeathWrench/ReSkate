@@ -35,6 +35,7 @@
 #include "Extension/World/level_loading.h"
 #include "Extension/World/loading_screen.h"
 #include <dxgi.h>
+#include <Psapi.h>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -294,7 +295,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
         r.next_named_settings_publish = settings_now + 250;
         publish_named_settings(r);
     }
-    // RESKATE_STARTUP_COMMANDS="load skate1map;noclip 1" (development): console commands
+    // RESKATE_STARTUP_COMMANDS="load skate1map;noclip 1" (development, and the launcher's
+    // -map <name>, which is a "load" at the front of it): console commands
     // queued in order once the world is up and can accept them, so a build can be exercised
     // without anyone driving the overlay. A load waits for its destination to be listed.
     {
@@ -1186,6 +1188,32 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             dingosdk::map_download::tick();
         }
         dingosdk::multiplayer::refresh_identity_lists();
+        // How much memory the game holds, beside what a session adds to it: said when it has
+        // moved by a quarter of a gigabyte or the players or skaters have changed much, at most
+        // every ten seconds. For telling what a full server's memory goes on (the map, every
+        // player, or only the skaters that are built).
+        if (static std::uint64_t next_memory{}; GetTickCount64() >= next_memory) {
+            next_memory = GetTickCount64() + 10000;
+            PROCESS_MEMORY_COUNTERS_EX counters{};
+            counters.cb = sizeof(counters);
+            if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) {
+                const auto mp = dingosdk::multiplayer::model();
+                const bool session = mp.active && !mp.echo && (mp.hosting || mp.connected);
+                const int players = session ? static_cast<int>(mp.roster.size()) : 0;
+                const int skaters = session ? static_cast<int>(std::ranges::count_if(mp.roster, [](const auto& player) { return player.visible; })) : 0;
+                static std::uint64_t said_private{};
+                static int said_players = -1, said_skaters = -1;
+                const auto moved = counters.PrivateUsage > said_private ? counters.PrivateUsage - said_private : said_private - counters.PrivateUsage;
+                if (moved >= (256ull << 20) || std::abs(players - said_players) >= 5 || std::abs(skaters - said_skaters) >= 5) {
+                    said_private = counters.PrivateUsage; said_players = players; said_skaters = skaters;
+                    const auto gigabytes = [](std::uint64_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0); };
+                    dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
+                        "Memory: %.2f GB committed, %.2f GB in RAM; %d player(s) in the session, %d built as skaters (player distance %.0f m); map %s.",
+                        gigabytes(counters.PrivateUsage), gigabytes(counters.WorkingSetSize), players, skaters, mp.player_distance,
+                        (session && !mp.map.empty() ? mp.map : r.multiplayer_map).c_str());
+                }
+            }
+        }
         // The player's Discord status (discord_presence.h): where they skate and with whom,
         // looked at every couple of seconds.
         if (static std::uint64_t next_presence{}; dingosdk::discord_presence::available() && GetTickCount64() >= next_presence) {

@@ -1345,6 +1345,11 @@ bool hub_page_pending() {
             set_typing(h, 0);
             wipe(h.password), wipe(h.code_password), wipe(h.host_password);
             h.notice.clear();
+        } else {
+            // What is held as the page comes up is not a press on it: the Back that closed the
+            // game's side menu over it would dismiss the page as well.
+            h.keys_before.fill(true);
+            h.pad_before = ~0U;
         }
     }
     // With the overlay's own menu or console open the page stays where it is, behind them, and
