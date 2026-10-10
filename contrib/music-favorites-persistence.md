@@ -150,9 +150,7 @@ Release `dingosdk_runtime` build passed, producing
 `music_favorites`, `profile_changes`, `music_playback_policy`, and
 `music_shelf_lifetime`. `git diff --check` passed.
 
-The user confirmed the preceding song implementation persists across map loads
-and game restarts. The playlist extension has build/regression coverage but
-has not been exercised live. The remaining live check is to like built-in and
-mod playlists, travel to another map, restart the game, then unlike and repeat.
-Check both playlist flags and Liked shelf membership/order. Use the save/restore
-events above to distinguish persistence failures from native apply failures.
+The user confirmed both song favorites and playlist likes work in-game,
+including persistence across map loads and game restarts. This is user-reported
+live validation of the implementation before rebasing onto current upstream
+main; the rebased build is validated separately with the focused checks above.
