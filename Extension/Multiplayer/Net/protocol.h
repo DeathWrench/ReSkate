@@ -26,7 +26,7 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 45;
+constexpr std::uint16_t protocol_version = 46;
 // A dedicated server's chat lines unless its owner says otherwise: violet (#8E5CFF) and lavender (#D9C8FF).
 inline constexpr std::uint32_t default_server_chat_badge = 0xffff5c8eU, default_server_chat_text = 0xffffc8d9U;
 constexpr std::size_t max_throwdown_message = 4096;
@@ -34,18 +34,45 @@ constexpr std::size_t max_throwdown_message = 4096;
 constexpr std::size_t max_physics_tuning = 16384;
 // Votes a dedicated server runs (Packet::server_votes).
 constexpr std::uint8_t server_vote_map = 1, server_vote_kick = 2, server_vote_time = 4;
+// What else a running vote can be (ServerVote::kind; never in Packet::server_votes): a poll,
+// a question with answers that runs nothing, and a vote the server's owner defined.
+constexpr std::uint8_t server_vote_poll = 8, server_vote_custom = 16;
 // The vote a dedicated server is running, or has just finished (Packet::vote): games show it
 // with its tally and let the player answer. `id` is 0 when there is none. `kind` is one of the
-// server_vote_* bits; `seconds` is what is left of a running one.
+// server_vote_* bits; `seconds` is what is left of a running one. A poll has its answers and a
+// count for each instead of yes, no and needed.
 constexpr std::size_t max_vote_label = 120;
+constexpr std::size_t max_vote_answers = 6, max_vote_answer = 48;
 constexpr std::uint8_t vote_running = 0, vote_passed = 1, vote_failed = 2, vote_cancelled = 3;
 struct ServerVote {
     std::uint32_t id{};
     std::uint8_t kind{}, outcome{vote_running};
     std::uint16_t yes{}, no{}, needed{}, seconds{};
     std::uint64_t starter{}, target{}; // target: the player a kick vote is about, who has no vote in it
-    std::string label;                 // "change the map to ..."
+    std::string label;                 // "change the map to ...", or a poll's question
+    std::vector<std::string> answers;  // poll: 2 to max_vote_answers
+    std::vector<std::uint16_t> counts; // poll: one per answer
     bool operator==(const ServerVote &) const = default;
+};
+// Who may start a poll on a dedicated server (Packet::server_polls).
+enum class ServerPolls : std::uint8_t { off = 0, admins = 1, everyone = 2 };
+// A vote a dedicated server's owner defined: "/vote <name> [choice]" (Packet::server_custom_votes).
+// The name and each choice are valid_server_vote_name; the description is chat text or empty.
+constexpr std::size_t server_custom_vote_limit = 16, server_vote_name_bytes = 16, server_vote_description_bytes = 80,
+                      server_vote_max_choices = 8;
+struct ServerCustomVote {
+    std::string name;                 // "restart"
+    std::string description;          // "Reload the current map"
+    std::vector<std::string> choices; // what the player picks from; empty: the vote takes no argument
+    bool operator==(const ServerCustomVote &) const = default;
+};
+// A dedicated server's announcement, shown as a card for `seconds` (Packet::announcement).
+// `id` tells one from the next; 0 is none. `text` is one chat line.
+struct ServerAnnouncement {
+    std::uint32_t id{};
+    std::uint16_t seconds{};
+    std::string text;
+    bool operator==(const ServerAnnouncement &) const = default;
 };
 enum class PacketKind : std::uint16_t {
     hello = 1,
@@ -221,6 +248,9 @@ struct Packet {
     bool enforce_tuning = true;
     // roster: the votes a dedicated server lets players start (server_vote_* bits)
     std::uint8_t server_votes{};
+    std::uint8_t server_polls{};                       // roster: who may start a poll (ServerPolls)
+    std::vector<ServerCustomVote> server_custom_votes; // roster: the owner's own votes that are on
+    ServerAnnouncement announcement;                   // roster
     std::vector<MultiplayerBan> bans;         // bans: newest first
     std::uint32_t ban_total{};                // bans: how many the server has in all
     std::vector<std::string> maps;            // maps: level assets
@@ -249,6 +279,10 @@ bool valid_chat_text(std::string_view) noexcept;
 // A player name in a hello or roster: UTF-8 without control characters.
 bool valid_member_name(std::string_view) noexcept;
 bool valid_admin_text(std::string_view) noexcept;
+// 1 to server_vote_name_bytes of a-z, 0-9, - and _.
+bool valid_server_vote_name(std::string_view) noexcept;
+bool valid_server_custom_vote(const ServerCustomVote &) noexcept;
+bool valid_server_vote(const ServerVote &) noexcept; // its label and, for a poll, its answers
 // The message a player typed, made valid: control characters and broken UTF-8
 // dropped, surrounding blanks trimmed, cut to the byte limit on a character boundary.
 std::string clean_chat_text(std::string_view);
@@ -267,6 +301,18 @@ void coarsen_rotations(Pose &pose, unsigned bits) noexcept;
 // that resizes part of a skater (a head four times the size) does it with a bone's scale,
 // which travels in the pose and so shows to everyone, mod or not.
 void limit_bone_scale(Pose &pose, float limit) noexcept;
+// Keeps every bone of the body and the board within `limit` metres of the bone it hangs from
+// (0: no limit). A bone's place is relative to its parent and, on the game's rigs, never
+// changes: the longest is a thigh, 0.44 m. A hacked client that moves them stretches its
+// skater across the map for everyone. The skater's few bones that follow the board and the
+// body's place in a fall (free_skater_bones) do move, by metres, and are held to
+// free_bone_reach instead; so is the board's own rig from the board.
+inline constexpr std::array<std::uint16_t, 14> free_skater_bones{3, 50, 283, 375, 376, 377, 378, 379, 380, 390, 391, 392, 393, 394};
+inline constexpr float free_bone_reach = 100.f;
+// What a game holds every pose it is sent to, whatever sent it: twice the server's standard
+// reach, and the most a server may allow a bone to be resized.
+inline constexpr float client_bone_reach = 2.f, client_bone_scale = 8.f;
+void limit_bone_reach(Pose &pose, float limit) noexcept;
 // The same, with a pose encoded at another update interval (a recipient thinned by
 // distance) instead of the packet's own, so the packet need not be copied for it.
 std::vector<std::uint8_t> encode(const Packet &, bool compact_pose, std::uint32_t pose_interval_us);

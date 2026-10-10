@@ -97,6 +97,7 @@ add_library(dingosdk_runtime SHARED
     Extension/World/level_loading.cpp
     Extension/World/loading_screen.cpp
     Extension/Customization/preset_lookup_guard.cpp
+    Extension/Boot/exit_watch.cpp
     Extension/Customization/developer_hoodie.cpp
     Extension/Customization/developer_board.cpp
     Extension/Skater/skater_model.cpp
@@ -173,6 +174,7 @@ add_library(dingosdk_runtime SHARED
     Extension/World/visual_environment.cpp
     Extension/World/local_population_controls.cpp
     Extension/World/native_route_lookahead.cpp
+    Extension/World/unload_guard.cpp
     Extension/World/local_world_controls.cpp
     Extension/World/local_atmosphere_controls.cpp
     Extension/Rendering/local_graphics_controls.cpp

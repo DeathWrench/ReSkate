@@ -57,6 +57,10 @@ bool initialize_bootstrap(std::uintptr_t base) {
     if (!stage(Channel::world, "Physics world pools (65000 static bodies)", ready, error)) return false;
     error.clear(); ready = start_native_route_lookahead(base, error);
     if (!stage(Channel::world, "NPC route cycle and endpoint guards", ready, error)) return false;
+    // The level unload guard (unload_guard.h) is not installed: stepping over an entry with no
+    // asset stopped the crash, but that entry had been registered when the level loaded, and
+    // left registered it kept the level from ever finishing its unload (a map change that never
+    // ends, which is worse than the crash). It goes back in once it can release what it skips.
     if (!stage(Channel::graphics, "Display startup settings", start_display_settings(base), {})) return false;
     error.clear(); ready = start_user_data_redirect(error);
     if (!stage(Channel::runtime, "Separate game user data", ready, error)) return false;

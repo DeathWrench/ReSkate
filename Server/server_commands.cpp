@@ -15,9 +15,13 @@ namespace {
 constexpr std::string_view help_text =
     "status | net [player] | players | say <text> | msg <player> <text> | msg-party <player> <text> | msg-admins <text> | kick <player> | ban <player or SteamID64> [name] | unban <SteamID64> | bans\n"
     "map <name, e.g. San Vansterdam> | maps | name <text> | password <text|off> | welcome <text|off> | listed on|off\n"
-    "voice on|off | voice-range <50-1000> | distances <full> <half> <half-return> <low> | crowd <n>|off | rate <KB/s> | bone-scale <1-8>|off\n"
+    "voice on|off | voice-range <50-1000> | distances <full> <half> <half-return> <low> | crowd <n>|off | rate <KB/s> | bone-scale <1-8>|off | bone-reach <0.5-20>|off\n"
     "placement everyone|admins|nobody | objects <number>|off | object-scaling on|off | effects on|off | clear-objects | noclip on|off | nobail on|off | boosts on|off | tuning on|off\n"
-    "tpall [player] | tphere <player> | votes [map|kick|tod on|off|<percent>] | vote-cancel\n"
+    "tpall [player] | tphere <player> | votes [<vote> on|off|<percent>|seconds|cooldown|min-players <n>] | vote-cancel\n"
+    "votes polls off|admins|everyone | votes poll-seconds <n> | votes starter-yes on|off\n"
+    "vote <map|kick|tod|<custom vote>> [argument] | poll <question> | <answer> | <answer>... | poll end\n"
+    "poll-run <command with {answer}> | <question> | <answer> | <answer>...\n"
+    "announce <text> | announcements [list|add <text>|remove <n>|clear|interval <minutes>|off|card on|off]\n"
     "map-pool [add|remove <map>|clear] | rotation [<minutes>|off]\n"
     "park <lot> <layout> | park random | layer-sync on|off | layer <key> default|on|off | tod <time|default>\n"
     "activity-log on|off | announce-throwdowns on|off | parties [on|off] | party-size <2-8> | afk-kick <minutes>|off | speed-check off|warn|kick\n"
@@ -352,6 +356,20 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
                            : value == 1.f ? std::string("Skaters show at the game's own proportions: resized body parts are not passed on.")
                                           : "Resized body parts show at up to " + std::to_string(value).substr(0, 4) + "x.");
     }
+    if (name == "bone-reach") {
+        const bool off = argument == "off";
+        float value{};
+        const auto parsed = std::from_chars(argument.data(), argument.data() + argument.size(), value);
+        if (!off && (parsed.ec != std::errc{} || parsed.ptr != argument.data() + argument.size() || !(value >= .5f && value <= 20.f)))
+            return "bone-reach <0.5-20>|off: how many metres a bone of a skater may be from the one it hangs from (now " +
+                   (config_.bone_reach_limit > 0.f ? std::to_string(config_.bone_reach_limit).substr(0, 4) : std::string("off")) + ")";
+        config_.bone_reach_limit = off ? 0.f : value;
+        // Whole states go again so that nobody keeps a reference with the old places in it.
+        for (auto &[id, guest] : guests_)
+            for (const auto &[other, unused] : guests_) guest->sender.forget(other, PacketKind::pose);
+        return changed(off ? std::string("Skaters' bones may be moved any distance.")
+                           : "Skaters' bones show at most " + std::to_string(value).substr(0, 4) + " m from where they hang.");
+    }
     if (name == "crowd") {
         // crowd <poses a second>|off: the most one player is sent (crowd_limits).
         auto value = number(argument);
@@ -467,47 +485,56 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
                               : "Players no longer see each other's skater effects. Ones already showing stay until that player's skater is shown again.");
     }
     if (name == "votes") {
-        // votes | votes <map|kick|tod> on|off|<percent> | votes seconds|cooldown <n>
-        const auto [what_text, value_text] = split(argument);
-        const auto what = lower(what_text);
-        const auto describe = [&](const char *label, const VoteSetting &v) {
-            return std::string(label) + ": " + (v.enabled ? "on, " + std::to_string(v.percent) + "% to pass" : "off");
-        };
-        if (what.empty())
-            return describe("map votes", config_.votes.map) + "\n" + describe("kick votes", config_.votes.kick) + "\n" +
-                   describe("time of day votes", config_.votes.time) +
-                   (config_.world_layer_sync ? "" : " (needs layer-sync on)") + "\nvotes last " +
-                   std::to_string(config_.votes.seconds) + " s; a player waits " + std::to_string(config_.votes.cooldown) +
-                   " s between votes" + (vote_ ? "\nrunning: a vote to " + vote_->label : std::string{});
-        const auto value = lower(value_text);
-        if (what == "seconds" || what == "cooldown") {
-            const auto n = number(value);
-            const bool seconds = what == "seconds";
-            if (!n || (seconds ? *n < 10 || *n > 300 : *n > 3600))
-                return seconds ? "votes seconds <10-300>" : "votes cooldown <0-3600>";
-            (seconds ? config_.votes.seconds : config_.votes.cooldown) = static_cast<unsigned>(*n);
-            return changed(seconds ? "Votes now last " + std::to_string(*n) + " s."
-                                   : "Players now wait " + std::to_string(*n) + " s between votes.");
-        }
-        VoteSetting *setting = what == "map" ? &config_.votes.map : what == "kick" ? &config_.votes.kick
-                             : what == "tod" || what == "time" ? &config_.votes.time : nullptr;
-        if (!setting) return "votes [map|kick|tod on|off|<percent>] | votes seconds <n> | votes cooldown <n>";
-        const auto label = what == "map" ? std::string("Map votes") : what == "kick" ? std::string("Kick votes")
-                                                                                     : std::string("Time of day votes");
-        if (const auto toggle = on_off(value)) {
-            setting->enabled = *toggle;
-            if (!*toggle && vote_ && vote_setting(vote_->kind).enabled == false) cancel_vote("that vote was switched off");
-            return changed(label + (*toggle ? " are on (" + std::to_string(setting->percent) + "% to pass)." : " are off."));
-        }
-        const auto percent = number(value.ends_with("%") ? std::string_view(value).substr(0, value.size() - 1) : std::string_view(value));
-        if (!percent || *percent < 1 || *percent > 100) return "votes " + what + " on|off|<1-100>";
-        setting->percent = static_cast<unsigned>(*percent);
-        return changed(label + " now need " + std::to_string(*percent) + "% to pass.");
+        const auto [text, did] = votes_command(argument);
+        return did ? changed(text) : text;
+    }
+    if (name == "announcements") {
+        const auto [text, did] = announcements_command(argument);
+        return did ? changed(text) : text;
+    }
+    if (name == "announce") {
+        if (argument.empty()) return "announce <text>";
+        announce(argument);
+        return "Announced.";
     }
     if (name == "vote-cancel") {
         if (!vote_) return "No vote is running.";
         cancel_vote(console ? "the server cancelled it" : "an admin cancelled it");
         return "Vote cancelled.";
+    }
+    if (name == "vote") {
+        // A vote started by the server: the same card and checks as /vote, without a cooldown or a vote of its own.
+        Guest *by = console ? nullptr : find(admin);
+        const auto [what_text, rest] = split(argument);
+        const auto what = lower(what_text);
+        const auto started = [](std::string why) { return why.empty() ? std::string("Vote started.") : why; };
+        if (what.empty()) return vote_ ? running_vote_text() : std::string("vote <map|kick|tod|<custom vote>> [argument]");
+        if (what == "map") return started(start_vote(by, VoteKind::map, rest));
+        if (what == "kick") return started(start_vote(by, VoteKind::kick, rest));
+        if (what == "tod" || what == "time") return started(start_vote(by, VoteKind::time, rest));
+        for (std::size_t i = 0; i < config_.votes.custom.size(); ++i)
+            if (config_.votes.custom[i].name == what) return started(start_vote(by, VoteKind::custom, rest, i));
+        return "No vote is called \"" + what + "\": vote map, kick, tod or a custom vote's name (votes lists them).";
+    }
+    if (name == "poll") {
+        Guest *by = console ? nullptr : find(admin);
+        if (lower(trim(argument)) == "end") {
+            const auto why = end_poll(by);
+            return why.empty() ? "Poll ended." : why;
+        }
+        const auto why = start_poll(by, argument);
+        return why.empty() ? "Poll started." : why;
+    }
+    if (name == "poll-run") {
+        // "poll-run <command with {answer}> | <question> | <answer>...": the winner's command runs as
+        // the console's, so only the console may set one up.
+        if (!console) return "poll-run is for the server console only.";
+        const auto bar = argument.find('|');
+        const auto run = trim(argument.substr(0, bar == std::string_view::npos ? 0 : bar));
+        if (run.empty())
+            return "poll-run <command with {answer}> | <question> | <answer> | <answer>..., e.g. poll-run tod {answer} | Time of day? | morning | night";
+        const auto why = start_poll(nullptr, argument.substr(bar + 1), std::string(run));
+        return why.empty() ? "Poll started; the winning answer runs: " + std::string(run) : why;
     }
     if (name == "tpall" || name == "tphere") {
         // Where they go: the admin who asked, or (tpall from the console) the named player.
