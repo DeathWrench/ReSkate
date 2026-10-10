@@ -179,6 +179,10 @@ void publish(Session &s, const NativeFrame *local) {
                        static_cast<int>(s.host_preferences.capacity), s.host_preferences.tps, s.host_preferences.lobby_name};
     view.nametags = s.nametags;
     if (const auto social = steam_social_snapshot())
+        view.steam_ids_shown = identity_listed(social->local.id, IdentityList::developer) ||
+                               identity_listed(social->local.id, IdentityList::staff) ||
+                               identity_listed(social->local.id, IdentityList::homie);
+    if (const auto social = steam_social_snapshot())
         if (const auto mark = identity_mark(social->local.id)) {
             std::tie(view.identity_tag_colour, view.identity_tag) = mark_role(*mark);
             view.identity_animation =

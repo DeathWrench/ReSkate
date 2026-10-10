@@ -205,6 +205,9 @@ struct MultiplayerModel {
     // Local: the tag the ReSkate backend gives this player ("Dev", "Staff", "Content Creator", "Centrix" or "Homie"; empty
     // for most players) and its role colour, and whether they show it, and the animated items
     // that come with it, to everyone.
+    // The local player is on the ReSkate team's developer, staff or homie list: the player list
+    // gives each player's Steam ID.
+    bool steam_ids_shown{};
     std::string identity_tag;
     std::uint32_t identity_tag_colour{};
     bool identity_tag_shown{true}, identity_items_shown{true};
