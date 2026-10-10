@@ -213,6 +213,10 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
     add_executable(dingosdk_ea_service_block_tests Extension/Boot/Test/ea_service_block_tests.cpp)
     target_include_directories(dingosdk_ea_service_block_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME ea_service_block COMMAND dingosdk_ea_service_block_tests)
+    add_executable(dingosdk_discord_presence_tests Extension/Boot/Test/discord_presence_tests.cpp Extension/Boot/discord_presence.cpp)
+    target_include_directories(dingosdk_discord_presence_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_discord_presence_tests PRIVATE dingosdk_json dingosdk_logging)
+    add_test(NAME discord_presence COMMAND dingosdk_discord_presence_tests)
     # The dedicated server's host under a full server of simulated players, over a transport
     # that is not Steam's: what its passes cost, and a hash of what it sent (not run by ctest).
     add_executable(dingosdk_server_load_tests Server/Test/server_load_tests.cpp Server/server_host.cpp Server/server_party.cpp

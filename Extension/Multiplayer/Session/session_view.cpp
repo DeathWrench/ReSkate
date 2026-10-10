@@ -263,6 +263,7 @@ void publish(Session &s, const NativeFrame *local) {
     view.sent_bytes = t.sent_bytes;
     view.raw_sent_bytes = t.raw_sent_bytes;
     view.invite = s.invite;
+    if ((s.mode == Mode::host || s.mode == Mode::join) && s.host_id && s.secret) view.join_code = format_invite({s.host_id, s.secret});
     view.map = s.map_name.empty() ? s.available_map : s.map_name;
     view.local_ready = s.gameplay_ready && !s.available_map.empty();
     const auto &lobby = s.lobbies.status();

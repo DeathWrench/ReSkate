@@ -179,6 +179,7 @@ struct Settings {
     int height{1080};
     bool loose_files{true};
     bool gpu_diagnostics{};
+    bool discord_status{true};
     bool offline{};
     int menu_key{static_cast<int>(launcher::default_menu_key)};
     int console_key{static_cast<int>(launcher::default_console_key)};
