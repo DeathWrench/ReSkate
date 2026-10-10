@@ -74,7 +74,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         // Disabled mods count too: their archives and map registration are placed at launch.
         auto fingerprint = merge_fingerprint(catalog, mods, modFiles, storeKnown);
         for (const auto& mod : catalog.inactive)
-            fingerprint += "\ninactive " + mod.name + " " + mod_fingerprint(mod.directory);
+            fingerprint += " inactive " + mod.name + " " + mod_fingerprint(mod.directory);
         if (options.live) {
             fs::remove(output / stamp_file, error);
         } else if (auto previous = previous_merge(output, fingerprint)) {
