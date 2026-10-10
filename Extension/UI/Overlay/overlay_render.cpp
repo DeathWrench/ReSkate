@@ -103,11 +103,48 @@ Binding* find_binding(IUnknown* identity) {
     return found == bindings.end() ? nullptr : &*found;
 }
 
+// A swapchain that presents without the overlay having seen it made (on some Intel systems
+// the game's menus never drew: the chain that was registered at creation is not the one that
+// reaches Present). A D3D12 swapchain gives the queue it was made with, which is all a binding
+// needs. Render thread, with the render lock held.
+Binding* bind_presented(IDXGISwapChain* presented, IUnknown* identity) {
+    auto& s = state();
+    static std::atomic<unsigned> refused{};
+    const auto refuse = [&](const char* why) -> Binding* {
+        if (refused.fetch_add(1) < 3)
+            dingosdk::logging::printf(dingosdk::logging::Level::warning, dingosdk::logging::Channel::graphics,
+                "Overlay: a swapchain it did not see created is presenting, and it cannot draw on it (%s).", why);
+        return nullptr;
+    };
+    DXGI_SWAP_CHAIN_DESC description{};
+    if (FAILED(presented->GetDesc(&description)) || !description.OutputWindow) return refuse("no description or window");
+    if (description.BufferCount < 2 || description.BufferCount > 8) return refuse("an unusual buffer count");
+    DWORD process = 0;
+    GetWindowThreadProcessId(description.OutputWindow, &process);
+    if (process != GetCurrentProcessId()) return refuse("another process's window");
+    ComPtr<ID3D12CommandQueue> queue;
+    if (FAILED(presented->GetDevice(IID_PPV_ARGS(&queue))) || !queue) return refuse("it gives no D3D12 queue");
+    if (queue->GetDesc().Type != D3D12_COMMAND_LIST_TYPE_DIRECT) return refuse("its queue is not a direct one");
+    if (s.bindings.size() >= maximum_bindings) {
+        const auto evict = std::find_if(s.bindings.begin(), s.bindings.end(),
+            [&](const Binding& candidate) { return candidate.identity != s.swapchain_identity; });
+        if (evict == s.bindings.end()) return refuse("too many swapchains");
+        s.bindings.erase(evict);
+    }
+    s.bindings.push_back({identity, queue, description.OutputWindow});
+    dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::graphics,
+        "Registered a DX12 swapchain first seen as it presented (%ux%u, %u buffers, format %d).",
+        description.BufferDesc.Width, description.BufferDesc.Height, description.BufferCount,
+        static_cast<int>(description.BufferDesc.Format));
+    return &s.bindings.back();
+}
+
 bool select_presented_swapchain(IDXGISwapChain* presented) {
     auto& s = state();
     const auto identity = object_identity(presented);
     if (!identity) return false;
     Binding* binding = find_binding(identity.Get());
+    if (!binding) binding = bind_presented(presented, identity.Get());
     if (!binding) return false;
 
     const auto now = std::chrono::steady_clock::now();
@@ -555,6 +592,10 @@ void render(IDXGISwapChain* presented, UINT flags) {
     if (flags & DXGI_PRESENT_TEST) return;
     dingosdk::profiler::record_present();
     std::lock_guard lock(s.render_mutex);
+    // Said once: a log without this line is a game whose presentations never reach the overlay.
+    if (static bool said{}; !std::exchange(said, true))
+        dingosdk::logging::write(dingosdk::logging::Level::info, dingosdk::logging::Channel::graphics,
+            "The game's first presentation reached the overlay.");
     if (s.stop.load()) {
         if (!s.swapchain || completed(s.next_fence, 0)) {
             restore_input(true);

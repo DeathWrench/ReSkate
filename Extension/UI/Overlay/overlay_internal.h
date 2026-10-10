@@ -158,6 +158,11 @@ struct State {
     HANDLE provider_event = nullptr;
     void* dll_notification_cookie = nullptr;
     Hook factory, create, create_hwnd, present, present1, resize, resize1, fullscreen;
+    // The same four of other swapchain implementations: DXGI's own under a wrapper the game
+    // was given (Streamline's), which is what presents when something else presents for the
+    // game (Intel's frame generation does).
+    static constexpr std::size_t more_swapchains = 3;
+    std::array<Hook, more_swapchains> present_more, present1_more, resize_more, resize1_more;
     Hook clip_cursor, set_cursor_pos;
     std::vector<Binding> bindings;
     IUnknown* swapchain_identity = nullptr;
