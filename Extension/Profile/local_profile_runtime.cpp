@@ -529,6 +529,9 @@ bool initialize_local_profile(std::uintptr_t base, bool authored_offline,
         hook(object_subscribe_contract, &object_categories_hook, object_runtime().functions.subscribe);
         if (music_ready) {
             hook(music_ui_initialize_contract, &music_ui_initialize_hook, music_ui_runtime().functions.initialize);
+            if (music_ui_runtime().functions.favorite_apply)
+                hook(addr::local_music::favorite_change_contract, &music_favorite_change_hook,
+                    music_ui_runtime().functions.favorite_change);
             std::array<unsigned char, 32> construct_bytes{};
             if (read(base + music_model_construct_contract.rva, construct_bytes) &&
                 construct_bytes == music_model_construct_contract.bytes)
