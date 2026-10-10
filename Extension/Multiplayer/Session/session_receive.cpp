@@ -454,6 +454,15 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         stop(s, "This host is banned from ReSkate multiplayer.");
         return;
     }
+    // The same for a player who may not host (banned_host): theirs stops, and nobody stays in it.
+    if (s.mode == Mode::host && banned_host(s.transport.status().local_id)) {
+        stop(s, std::string(banned_host_notice));
+        return;
+    }
+    if (s.mode == Mode::join && banned_host(s.host_id)) {
+        stop(s, std::string(banned_host_lobby_notice));
+        return;
+    }
     for (const auto &link : links) {
         if (s.mode == Mode::host && s.banned.contains(link.id)) {
             s.transport.disconnect(link.id, "You were kicked from this session.");

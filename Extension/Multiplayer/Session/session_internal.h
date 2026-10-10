@@ -215,7 +215,7 @@ struct Session {
     std::mutex request_mutex;
     std::deque<std::unique_ptr<PrivateRequest>> requests;
     SteamTransport transport;
-    SteamLobbies lobbies{make_steam_lobby_api()};
+    SteamLobbies lobbies{make_steam_lobby_api(), [](std::uint64_t host) { return banned_host(host) || reskate_banned(host); }};
     SteamServerBrowser servers;
     // Guest of a dedicated server: whether the roster lists us as an admin,
     // and the server's voice range from it.
