@@ -296,7 +296,7 @@ Server votes       The console (and scripts that talk to it) starts the same
 messages           Lines the server posts in turn, one every "interval_minutes"
                    (0: off) while players are on. Each is at most one chat line.
                    Announcements show as a card at the top of the screen, not
-                   in chat. Admins announce something once with announce <text>,
+                   in chat; :emotes: in them (and in polls) show as images. Admins announce something once with announce <text>,
                    or to one player only with announce-to <player> <text>.
 
 "commands" - Chat commands of your own, e.g. /discord or /rules. A list, each:
