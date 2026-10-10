@@ -325,7 +325,11 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
     panel.worker = std::thread([&panel, root, packages = std::move(packages)] {
         std::string name, error, note;
         std::size_t done = 0;
+        // One that fails does not stop the ones after it: each is its own download, and the
+        // list ends with what could not be installed. Cancelling does stop the rest.
+        std::vector<std::string> failed;
         for (const auto& package : packages) {
+            if (panel.cancel) break;
             try {
                 const bool update = fs::exists(root / wide(ts::folder_for(package.full_name)));
                 name = install_package(panel, root, package);
@@ -337,9 +341,23 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
                     : std::format("{} {} v{}. It loads the next time Skate starts.", update ? "Updated" : "Installed",
                                   package.title(), package.latest().number);
             } catch (const std::exception& failure) {
-                error = package.title() + ": " + failure.what();
                 log(logging::Level::warning, "Thunderstore install of " + package.full_name + " failed: " + failure.what());
-                break;
+                if (panel.cancel) {
+                    error = package.title() + ": " + failure.what();
+                    break;
+                }
+                failed.push_back(package.title() + ": " + failure.what());
+            }
+        }
+        if (error.empty() && !failed.empty()) {
+            // The first few by name and reason; the log has every one.
+            constexpr std::size_t shown = 3;
+            error = packages.size() == 1 ? failed.front()
+                : std::format("{} of {} could not be installed{}. ", failed.size(), packages.size(),
+                              done ? std::format(" ({} were)", done) : std::string());
+            if (packages.size() > 1) {
+                for (std::size_t i = 0; i < failed.size() && i < shown; ++i) error += (i ? " | " : "") + failed[i];
+                if (failed.size() > shown) error += std::format(" | and {} more", failed.size() - shown);
             }
         }
         std::lock_guard lock(panel.mutex);

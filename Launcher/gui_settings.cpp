@@ -165,6 +165,8 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       "Used automatically whenever Steam isn't running.", settings.offline);
         setting_check("Loose files", "Export the game's scripts/ and config/ beside Skate.exe so you can edit them.",
                       settings.loose_files);
+        setting_check("Discord status", "Show on your Discord profile where you are skating: the map, the server or lobby "
+                      "and how many are in it. Off, the game does not talk to Discord at all.", settings.discord_status);
         ImGui::Spacing();
         section_caption(fonts, "EXTRA GAME ARGUMENTS");
         std::array<char, 1024> arguments{};
