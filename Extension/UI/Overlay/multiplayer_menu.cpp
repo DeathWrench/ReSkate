@@ -23,6 +23,11 @@ bool queue_multiplayer_action(const char* action, const std::string& argument) {
     std::array<char, 256> result{};
     return callback && callback(action, argument.c_str(), "", result.data(), result.size());
 }
+bool queue_multiplayer_action(const char* action, const std::string& argument, const std::string& password) {
+    const auto callback = private_queue.load();
+    std::array<char, 256> result{};
+    return callback && callback(action, argument.c_str(), password.c_str(), result.data(), result.size());
+}
 } // namespace dingosdk::overlay::detail
 
 namespace dingosdk::overlay::menu::multiplayer_detail {

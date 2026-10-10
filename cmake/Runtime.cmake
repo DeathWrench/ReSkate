@@ -23,6 +23,7 @@ add_library(dingosdk_runtime SHARED
     Extension/UI/NativeMenu/native_menu.cpp
     Extension/UI/NativeMenu/native_menu_rows.cpp
     Extension/UI/NativeMenu/native_menu_multiplayer.cpp
+    Extension/UI/NativeMenu/ui_sound.cpp
     Extension/UI/NativeMenu/native_menu_dump.cpp
     Extension/UI/NativeMenu/native_hub.cpp
     Extension/UI/NativeMenu/native_menu_data.cpp
