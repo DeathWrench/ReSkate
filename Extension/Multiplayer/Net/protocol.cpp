@@ -169,8 +169,11 @@ struct Reader {
 };
 } // namespace
 bool valid_roster(std::span<const Member> members, unsigned capacity) noexcept {
-    if (capacity < 2 || capacity > max_players || members.empty() || members.size() > capacity)
+    if (capacity < 2 || capacity > max_players || members.empty() || members.size() > max_players)
         return false;
+    // A lobby holds no more than it was opened for. A dedicated server can hold a few more than
+    // it says: its reserved players and admins join past its limit (33 of 32).
+    if (members.size() > capacity && !game_server_steam_id(members[0].id)) return false;
     for (std::size_t i = 0; i < members.size(); ++i) {
         const auto &m = members[i];
         // The host comes first, and may be a dedicated server rather than a player.
@@ -315,6 +318,69 @@ std::string_view greeting_error(const Packet &p, std::uint64_t session, std::uin
         return "Peer changed level or session. Join again.";
     return {};
 }
+namespace {
+void coarsen(Transform &t, unsigned bits) noexcept {
+    if (!bits) return;
+    unsigned largest{};
+    float norm{};
+    for (unsigned i = 0; i < 4; ++i) {
+        norm += t.rotation[i] * t.rotation[i];
+        if (std::abs(t.rotation[i]) > std::abs(t.rotation[largest])) largest = i;
+    }
+    if (!(norm > 0.f) || !std::isfinite(norm)) return;
+    // As Writer::compact_transform packs it: the three smaller components, the largest positive.
+    constexpr float scale = 46339.5358f;
+    const float factor = (t.rotation[largest] < 0 ? -1.f : 1.f) * scale / std::sqrt(norm);
+    const float step = static_cast<float>(1U << bits);
+    const float most = std::floor(32767.f / step) * step; // a rounded value must still fit 16 bits
+    float sum{};
+    for (unsigned i = 0; i < 4; ++i) {
+        if (i == largest) continue;
+        const float packed = std::clamp(std::round(t.rotation[i] * factor / step) * step, -most, most);
+        t.rotation[i] = packed / scale;
+        sum += t.rotation[i] * t.rotation[i];
+    }
+    t.rotation[largest] = std::sqrt(std::max(0.f, 1.f - sum));
+}
+} // namespace
+void limit_bone_scale(Pose &pose, float limit) noexcept {
+    if (!(limit >= 1.f)) return;
+    const auto hold = [&](Transform &t) {
+        for (float &axis : t.scale) axis = std::isfinite(axis) ? std::clamp(axis, 1.f / limit, limit) : 1.f;
+    };
+    hold(pose.root);
+    for (auto &t : pose.skater) hold(t);
+    for (auto &t : pose.board) hold(t);
+}
+void limit_bone_reach(Pose &pose, float limit) noexcept {
+    if (!(limit > 0.f)) return;
+    const auto hold = [](std::array<float, 3> &position, const std::array<float, 3> &from, float most) {
+        float squared{};
+        for (unsigned i = 0; i < 3; ++i) squared += (position[i] - from[i]) * (position[i] - from[i]);
+        if (!(squared > most * most)) return;
+        const float factor = most / std::sqrt(squared);
+        for (unsigned i = 0; i < 3; ++i) position[i] = from[i] + (position[i] - from[i]) * factor;
+    };
+    constexpr std::array<float, 3> parent{};
+    // Bone 1 is the rig's place in the world (offset_pose): it goes with the root.
+    for (std::size_t i = 0; i < pose.skater.size(); ++i) {
+        if (i == 1) continue;
+        const bool free = std::find(free_skater_bones.begin(), free_skater_bones.end(), i) != free_skater_bones.end();
+        hold(pose.skater[i].position, parent, free ? std::max(limit, free_bone_reach) : limit);
+    }
+    // The board is its own actor (0) with its rig's place in the world (2): wherever it was
+    // left, but in one piece.
+    for (std::size_t i = 1; i < pose.board.size(); ++i) {
+        if (i == 2) hold(pose.board[i].position, pose.board[0].position, std::max(limit, 5.f));
+        else hold(pose.board[i].position, parent, limit);
+    }
+}
+void coarsen_rotations(Pose &pose, unsigned bits) noexcept {
+    bits = std::min(bits, 12U);
+    coarsen(pose.root, std::min(bits, 6U)); // which way they face matters from further off than a finger does
+    for (auto &t : pose.skater) coarsen(t, bits);
+    for (auto &t : pose.board) coarsen(t, bits);
+}
 std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose) {
     return encode(p, compact_pose, p.pose_interval_us);
 }
@@ -332,6 +398,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         throw std::invalid_argument("Invalid object update");
     if (p.kind == PacketKind::voice && (!p.map || !p.source || !valid_voice(p.voice)))
         throw std::invalid_argument("Invalid voice packet");
+    if (p.kind == PacketKind::effects && (!p.map || !p.source || !valid_impacts(p.impacts)))
+        throw std::invalid_argument("Invalid effects packet");
     if (p.kind == PacketKind::chat && (!p.source || !valid_chat_text(p.text)))
         throw std::invalid_argument("Invalid chat message");
     if (p.kind == PacketKind::admin && (!p.source || !valid_admin_text(p.text)))
@@ -384,7 +452,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         p.kind != PacketKind::objects && p.kind != PacketKind::voice && p.kind != PacketKind::chat &&
         p.kind != PacketKind::admin && p.kind != PacketKind::bans && p.kind != PacketKind::maps &&
         p.kind != PacketKind::throwdown && p.kind != PacketKind::teleport && p.kind != PacketKind::physics_tuning &&
-        p.kind != PacketKind::party && p.kind != PacketKind::scoring && p.kind != PacketKind::physics_extras)
+        p.kind != PacketKind::party && p.kind != PacketKind::scoring && p.kind != PacketKind::physics_extras &&
+        p.kind != PacketKind::effects)
         throw std::invalid_argument("Unknown packet kind");
     const auto payload = greeting ? 72
                          : p.kind == PacketKind::away
@@ -507,6 +576,17 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         w.integer(p.tuning.size(), 2);
         w.bytes.insert(w.bytes.end(), p.tuning.begin(), p.tuning.end());
     }
+    if (p.kind == PacketKind::effects) {
+        w.integer(p.impacts.size(), 1);
+        for (const auto &impact : p.impacts) {
+            for (const auto v : impact.position) w.integer(std::bit_cast<std::uint32_t>(v), 4);
+            for (const auto v : impact.velocity)
+                w.integer(static_cast<std::uint16_t>(static_cast<std::int16_t>(std::lround(v * 100.f))), 2);
+            for (const auto v : impact.normal)
+                w.integer(static_cast<std::uint8_t>(static_cast<std::int8_t>(std::lround(v * 127.f))), 1);
+            w.integer(impact.material, 2);
+        }
+    }
     if (p.kind == PacketKind::physics_extras) {
         w.integer(p.extras.size(), 2);
         w.bytes.insert(w.bytes.end(), p.extras.begin(), p.extras.end());
@@ -557,7 +637,37 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         w.integer(p.object_clears, 4);
         if (!valid_multiplayer_tps(p.tps)) throw std::invalid_argument("Invalid session TPS");
         w.integer(p.tps, 1);
+        w.integer(p.chat_badge & 0xffffff, 3); // red, green, blue
+        w.integer(p.chat_text & 0xffffff, 3);
+        // Short text: its length in `width` bytes, then the text.
+        const auto text = [&w](std::string_view value, unsigned width) {
+            w.integer(value.size(), width);
+            w.bytes.insert(w.bytes.end(), value.begin(), value.end());
+        };
+        w.integer(p.vote.id, 4);
+        if (p.vote.id) {
+            if (!valid_server_vote(p.vote) || p.vote.outcome > vote_cancelled) throw std::invalid_argument("Invalid server vote");
+            w.integer(p.vote.kind, 1);
+            w.integer(p.vote.outcome, 1);
+            w.integer(p.vote.yes, 2);
+            w.integer(p.vote.no, 2);
+            w.integer(p.vote.needed, 2);
+            w.integer(p.vote.seconds, 2);
+            w.integer(p.vote.starter, 8);
+            w.integer(p.vote.target, 8);
+            w.integer(p.vote.label.size(), 1);
+            w.bytes.insert(w.bytes.end(), p.vote.label.begin(), p.vote.label.end());
+            w.integer(p.vote.answers.size(), 1);
+            for (std::size_t i = 0; i < p.vote.answers.size(); ++i) {
+                text(p.vote.answers[i], 1);
+                w.integer(p.vote.counts[i], 2);
+            }
+        }
         w.integer(static_cast<std::uint8_t>(p.object_placement), 1);
+        if (!valid_object_limit(p.object_limit)) throw std::invalid_argument("Invalid object limit");
+        w.integer(p.object_limit, 2);
+        w.integer(p.object_scaling ? 1 : 0, 1);
+        w.integer(p.sync_effects ? 1 : 0, 1);
         w.integer(p.force_world_layers, 1);
         // One mode per world-layer catalog row; both peers read the same catalog
         // from the same game build.
@@ -575,6 +685,23 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         if (p.server_votes > 7) throw std::invalid_argument("Invalid server votes");
         w.integer((p.guest_noclip ? 1U : 0U) | (p.guest_no_bail ? 2U : 0U) | (p.guest_boosts ? 4U : 0U) |
                       (static_cast<unsigned>(p.server_votes) << 3) | (p.enforce_tuning ? 64U : 0U), 1);
+        if (p.server_polls > static_cast<std::uint8_t>(ServerPolls::everyone) || p.server_custom_votes.size() > server_custom_vote_limit ||
+            !std::all_of(p.server_custom_votes.begin(), p.server_custom_votes.end(), [](const auto &v) { return valid_server_custom_vote(v); }))
+            throw std::invalid_argument("Invalid server votes");
+        w.integer(p.server_polls, 1);
+        w.integer(p.server_custom_votes.size(), 1);
+        for (const auto &vote : p.server_custom_votes) {
+            text(vote.name, 1);
+            text(vote.description, 1);
+            w.integer(vote.choices.size(), 1);
+            for (const auto &choice : vote.choices) text(choice, 1);
+        }
+        w.integer(p.announcement.id, 4);
+        if (p.announcement.id) {
+            if (!valid_chat_text(p.announcement.text)) throw std::invalid_argument("Invalid server announcement");
+            w.integer(p.announcement.seconds, 2);
+            text(p.announcement.text, 1);
+        }
     }
     if (p.kind == PacketKind::routes) {
         w.integer(p.members.size(), 1);
@@ -608,6 +735,14 @@ static bool read_map_label(Reader &r, std::span<const std::uint8_t> bytes, Packe
     p.map_label.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
     r.at += static_cast<std::size_t>(length);
     return valid_map_label(p.map_label);
+}
+// Short text written by encode's `text`: nothing when it is longer than `limit` or the packet.
+static std::optional<std::string> read_text(Reader &r, std::span<const std::uint8_t> bytes, unsigned width, std::size_t limit) {
+    const auto length = r.integer(width);
+    if (length > limit || length > bytes.size() - r.at) return {};
+    std::string value(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
+    r.at += static_cast<std::size_t>(length);
+    return value;
 }
 std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
     try {
@@ -765,6 +900,20 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
                 return {};
             p.tuning.assign(bytes.begin() + static_cast<std::ptrdiff_t>(r.at), bytes.end());
             r.at = bytes.size();
+        } else if (p.kind == PacketKind::effects) {
+            const auto count = r.integer(1);
+            if (!p.map || !p.source || !count || count > max_impacts || count * impact_wire_size != bytes.size() - r.at)
+                return {};
+            p.impacts.resize(static_cast<std::size_t>(count));
+            for (auto &impact : p.impacts) {
+                for (auto &v : impact.position) v = r.number();
+                for (auto &v : impact.velocity)
+                    v = static_cast<float>(static_cast<std::int16_t>(static_cast<std::uint16_t>(r.integer(2)))) / 100.f;
+                for (auto &v : impact.normal)
+                    v = static_cast<float>(static_cast<std::int8_t>(static_cast<std::uint8_t>(r.integer(1)))) / 127.f;
+                impact.material = static_cast<std::uint16_t>(r.integer(2));
+            }
+            if (!valid_impacts(p.impacts)) return {};
         } else if (p.kind == PacketKind::physics_extras) {
             const auto length = r.integer(2);
             if (!p.source || length > max_physics_extras || length != bytes.size() - r.at)
@@ -861,9 +1010,44 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             p.object_clears = static_cast<std::uint32_t>(r.integer(4));
             p.tps = static_cast<unsigned>(r.integer(1));
             if (!valid_multiplayer_tps(p.tps)) return {};
+            p.chat_badge = 0xff000000U | static_cast<std::uint32_t>(r.integer(3));
+            p.chat_text = 0xff000000U | static_cast<std::uint32_t>(r.integer(3));
+            p.vote.id = static_cast<std::uint32_t>(r.integer(4));
+            if (p.vote.id) {
+                p.vote.kind = static_cast<std::uint8_t>(r.integer(1));
+                p.vote.outcome = static_cast<std::uint8_t>(r.integer(1));
+                p.vote.yes = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.no = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.needed = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.seconds = static_cast<std::uint16_t>(r.integer(2));
+                p.vote.starter = r.integer(8);
+                p.vote.target = r.integer(8);
+                const auto length = r.integer(1);
+                if (p.vote.outcome > vote_cancelled || length > max_vote_label || length > bytes.size() - r.at) return {};
+                p.vote.label.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
+                r.at += static_cast<std::size_t>(length);
+                const auto answers = r.integer(1);
+                if (answers > max_vote_answers) return {};
+                for (std::uint64_t i = 0; i < answers; ++i) {
+                    auto answer = read_text(r, bytes, 1, max_vote_answer);
+                    if (!answer) return {};
+                    p.vote.answers.push_back(std::move(*answer));
+                    p.vote.counts.push_back(static_cast<std::uint16_t>(r.integer(2)));
+                }
+                if (!valid_server_vote(p.vote)) return {};
+            }
             const auto placement = r.integer(1);
             if (!valid_object_placement(placement)) return {};
             p.object_placement = static_cast<ObjectPlacement>(placement);
+            const auto object_limit = r.integer(2);
+            if (!valid_object_limit(object_limit)) return {};
+            p.object_limit = static_cast<unsigned>(object_limit);
+            const auto scaling = r.integer(1);
+            if (scaling > 1) return {};
+            p.object_scaling = scaling != 0;
+            const auto shared_effects = r.integer(1);
+            if (shared_effects > 1) return {};
+            p.sync_effects = shared_effects != 0;
             const auto forced = r.integer(1);
             if (forced > 1) return {};
             p.force_world_layers = forced != 0;
@@ -889,6 +1073,33 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             p.guest_boosts = (tools & 4) != 0;
             p.server_votes = static_cast<std::uint8_t>((tools >> 3) & 7);
             p.enforce_tuning = (tools & 64) != 0;
+            const auto polls = r.integer(1), custom = r.integer(1);
+            if (polls > static_cast<std::uint8_t>(ServerPolls::everyone) || custom > server_custom_vote_limit) return {};
+            p.server_polls = static_cast<std::uint8_t>(polls);
+            for (std::uint64_t i = 0; i < custom; ++i) {
+                ServerCustomVote vote;
+                auto name = read_text(r, bytes, 1, server_vote_name_bytes);
+                auto description = name ? read_text(r, bytes, 1, server_vote_description_bytes) : std::nullopt;
+                if (!description) return {};
+                vote.name = std::move(*name);
+                vote.description = std::move(*description);
+                const auto choices = r.integer(1);
+                if (choices > server_vote_max_choices) return {};
+                for (std::uint64_t c = 0; c < choices; ++c) {
+                    auto choice = read_text(r, bytes, 1, server_vote_name_bytes);
+                    if (!choice) return {};
+                    vote.choices.push_back(std::move(*choice));
+                }
+                if (!valid_server_custom_vote(vote)) return {};
+                p.server_custom_votes.push_back(std::move(vote));
+            }
+            p.announcement.id = static_cast<std::uint32_t>(r.integer(4));
+            if (p.announcement.id) {
+                p.announcement.seconds = static_cast<std::uint16_t>(r.integer(2));
+                auto line = read_text(r, bytes, 1, multiplayer_chat_max_bytes);
+                if (!line || !valid_chat_text(*line)) return {};
+                p.announcement.text = std::move(*line);
+            }
             if (!valid_roster(p.members, p.capacity) || !p.distances.valid())
                 return {};
         } else if (p.kind == PacketKind::routes) {
@@ -967,6 +1178,28 @@ bool valid_chat_text(std::string_view text) noexcept {
         at += length;
     }
     return visible;
+}
+bool valid_server_vote_name(std::string_view name) noexcept {
+    return !name.empty() && name.size() <= server_vote_name_bytes && std::all_of(name.begin(), name.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_';
+    });
+}
+bool valid_server_custom_vote(const ServerCustomVote &vote) noexcept {
+    if (!valid_server_vote_name(vote.name) || vote.choices.size() > server_vote_max_choices) return false;
+    if (!vote.description.empty() &&
+        (vote.description.size() > server_vote_description_bytes || !valid_chat_text(vote.description)))
+        return false;
+    return std::all_of(vote.choices.begin(), vote.choices.end(), [](const std::string &c) { return valid_server_vote_name(c); });
+}
+bool valid_server_vote(const ServerVote &vote) noexcept {
+    if (vote.label.size() > max_vote_label || vote.answers.size() > max_vote_answers || vote.answers.size() != vote.counts.size())
+        return false;
+    // A poll has two answers at least; nothing else has any.
+    if ((vote.kind == server_vote_poll) != !vote.answers.empty() || (vote.kind == server_vote_poll && vote.answers.size() < 2))
+        return false;
+    return std::all_of(vote.answers.begin(), vote.answers.end(), [](const std::string &answer) {
+        return answer.size() <= max_vote_answer && valid_chat_text(answer);
+    });
 }
 bool valid_member_name(std::string_view text) noexcept {
     if (text.size() > max_member_name) return false;

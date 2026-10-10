@@ -1,6 +1,7 @@
 #pragma once
 #include "Engine/Game/Multiplayer/chat_rate.h"
 #include "session.h"
+#include "Extension/Multiplayer/developer_identity.h"
 #include "Extension/Customization/developer_hoodie.h"
 #include "Extension/Customization/developer_board.h"
 #include "Extension/Multiplayer/Remote/native_skater.h"
@@ -12,14 +13,19 @@
 #include "room.h"
 #include "party_book.h"
 #include "Extension/Multiplayer/Net/delta_codec.h"
+#include "Extension/Multiplayer/Net/pose_batch.h"
+#include "Extension/Multiplayer/Net/sound_codec.h"
 #include "password.h"
 #include "client_timing.h"
 #include "monotonic_clock.h"
+#include <atomic>
 #include <algorithm>
+#include <fstream>
 #include <array>
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -91,6 +97,8 @@ struct Peer {
     // A skater removed for lack of poses is not spawned again before this: a spawn is a heavy
     // native pass, and a player's poses may stop and start again and again.
     std::uint64_t next_spawn{};
+    // Near enough to be shown as a skater; and whether a pose has placed them yet.
+    bool shown_wanted = true, placed{};
     ReceiveBudget budget;
     PoseBuffer poses;
     Pose render_pose;
@@ -109,6 +117,10 @@ struct Peer {
     VoiceBudget voice_budget;
     OutfitBudget outfit_budget;
     SoundBudget sound_budget;
+    EffectBudget effect_budget;
+    // Their skater's contacts with the world (effects.h), each with when to show it: as late
+    // as their poses are shown, so the sparks are where their skater is.
+    std::deque<std::pair<std::uint64_t, Impact>> impacts;
     ChatRate chat_rate;
     // Chat proofs (session_receive.cpp): the copies of their lines this player sent us over
     // their own Steam connection, and the lines the host passed on as theirs that wait for one.
@@ -146,6 +158,9 @@ struct Session {
     std::uint64_t next_publish{}, last_client_log{}, next_party_update{};
     MultiplayerDistances distances;
     ObjectPlacement object_placement = ObjectPlacement::everyone;
+    unsigned object_limit{}; // objects each player may have placed; 0: no limit
+    bool object_scaling{true}; // the dedicated server lets players resize what they place
+    bool sync_effects{true};   // the dedicated server has players see each other's skater effects
     // What guests may use: the host's choice, or the host's roster for a guest.
     bool guest_noclip = true, guest_no_bail = true, guest_boosts = true;
     // Host: guests skate with its physics tuning. Guest: the host's roster says so (a
@@ -175,6 +190,8 @@ struct Session {
     std::vector<std::uint8_t> extras_packet;
     std::uint64_t next_extras_check{};
     std::uint8_t server_votes{}; // guest of a dedicated server: the votes it runs
+    std::uint8_t server_polls{}; // ... who may start a poll there (ServerPolls)
+    std::vector<ServerCustomVote> server_custom_votes; // ... and its owner's own votes
     // Host: bumped per "delete all guest objects". Guest: the last value seen
     // (unset until the first roster) and whether a local wipe is outstanding.
     std::optional<std::uint32_t> object_clears;
@@ -204,6 +221,16 @@ struct Session {
     // and the server's voice range from it.
     bool server_admin{};
     float roster_voice_range = default_voice_range;
+    // The colours of the dedicated server's own chat lines, as its roster gives them.
+    std::uint32_t server_chat_badge = default_server_chat_badge, server_chat_text = default_server_chat_text;
+    // The dedicated server's vote as its roster last gave it, when it ends by this game's clock,
+    // and what this player answered in it (0 nothing yet, 1 yes, 2 no; in a poll 1 + the answer).
+    ServerVote vote;
+    std::uint64_t vote_ends{};
+    std::uint8_t vote_mine{};
+    // The dedicated server's announcement as its roster last gave it, and when it goes by this game's clock.
+    ServerAnnouncement announcement;
+    std::uint64_t announcement_ends{};
     // The server's ban list, as sent to us while we are one of its admins.
     std::vector<MultiplayerBan> server_bans;
     std::uint32_t server_ban_total{};
@@ -227,8 +254,34 @@ struct Session {
     unsigned capacity = max_players;
     // Local display preferences, loaded once from the profile. Never sent to peers.
     bool nametags = true, chat_visible = true, display_preferences_loaded{};
-    bool custom_nametags = true; // ReSkate's nametags instead of the game's (Hud/custom_nametags.h)
+    float nametag_distance = 120.f; // names within this many metres, dots past it
+    // Only players within this many metres have a skater (session.cpp); checked a few times a second.
+    float player_distance = 120.f;
+    bool prefer_direct = true; // straight to servers that offer it, not through the relays
+    // Poses from a dedicated server (pose_batch.h): each player's stream as this game holds it,
+    // and which of the server's messages were read in full, which it is told once a tick.
+    std::unordered_map<std::uint16_t, pose_batch::Stream> pose_streams;
+    pose_batch::Ack pose_ack;
+    bool pose_ack_due{};
+    // This game's own poses go to a dedicated server the same way: what was sent and what the
+    // server acked, and the last poses sent, to build the next on.
+    pose_batch::Sender pose_upload;
+    std::deque<pose_batch::Stream::Held> own_poses;
+    // Skaters' sound to and from a dedicated server (sound_codec.h).
+    std::unordered_map<std::uint16_t, sound_codec::In> sound_streams;
+    sound_codec::Sender sound_upload;
+    // pose-dump: this player's own poses, as encoded for sending, written to a file for a
+    // while. Real poses to measure encodings against (tools/research).
+    std::ofstream pose_dump;
+    std::uint64_t pose_dump_until{};
+    std::size_t pose_dump_count{};
+    std::uint64_t next_shown_rank{};
+    bool nametag_dots = true, nametags_friends{};
     bool chat_filter = true;     // bad words in chat show as **** (Engine/Core/Text/word_filter.h)
+    // Chat bubbles above each skater's head (Hud/custom_nametags.h, nametag_overlay.cpp).
+    bool chat_bubbles = true, chat_bubbles_own{};
+    float chat_bubbles_distance = 40.f, chat_bubbles_duration = 5.f;
+    int chat_bubbles_history = 3;
     bool game_menu{};            // a game menu is up or the game's UI is hidden: no chat on screen
     bool hooks_prepared{};       // the remote-player hooks were installed (once per process)
     // Host settings remembered between sessions and game restarts.
@@ -238,6 +291,7 @@ struct Session {
         std::string lobby_name;
         MultiplayerDistances distances;
         ObjectPlacement placement = ObjectPlacement::everyone;
+        unsigned object_limit = default_object_limit;
         float voice_range = default_voice_range;
         bool guest_noclip = true, guest_no_bail = true, guest_boosts = true;
         bool enforce_tuning = true;
@@ -318,9 +372,12 @@ inline bool dedicated_host(const Session &s) { return s.mode == Mode::join && ga
 // Whether Steam itself vouches for this player's identity to this PC: a host's guests and a
 // guest's host are connected directly, and so is another guest once the direct handshake is
 // done. Anyone else is known only from the host's roster, which a host can fill as it likes,
-// so what rests on who a player is (the developer and friend marks) waits for this.
+// so what rests on who a player is (the developer and friend marks) waits for this. An
+// official server is the exception: Steam vouches for it to this PC and for each player to
+// it, and it is ours, so its roster is taken at its word. On a busy one a player is
+// connected directly to only the few nearest, and the rest would show no tag.
 inline bool steam_vouched(const Session &s, const Peer &peer) {
-    return s.mode != Mode::join || peer.member.id == s.host_id || peer.direct_ready;
+    return s.mode != Mode::join || peer.member.id == s.host_id || peer.direct_ready || official_server(s.host_id);
 }
 // Whether a player shows the tag the backend gives them, and whether the items that come with
 // it animate: not until their appearance has arrived, and not when it says they turned that
@@ -355,11 +412,17 @@ void save_bans(const Session &s);
 bool is_banned(Session &s, std::uint64_t id);
 // Re-reads friend_ids when the Steam social snapshot has changed.
 void refresh_friends(Session &s);
+// On a dedicated server games do not send each other anything: all of it goes through the
+// server, which holds it to its rules. The one thing a server cannot do for a game is prove
+// who another player is, which the marks rest on (steam_vouched). So two games still link,
+// for that proof alone, when one of the two players has a mark the other would show: either is
+// on one of the backend's lists, or they are Steam friends. Both games decide the same.
+bool identity_link(Session &s, std::uint64_t other);
 // `marks`: whether the line may show the badge the backend gives its sender (player_role).
 void add_chat(Session &s, std::uint64_t sender, std::string name, std::string text, bool local = false, bool marks = true);
 // The colour and badge of one of the backend's categories.
 std::pair<std::uint32_t, std::string> mark_role(IdentityList list);
-// A player's role colour and badge ("Dev", "Creator", "Homie", "Admin", "Host", "Friend" or none), shown in chat
+// A player's role colour and badge ("Dev", "Staff", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend" or none), shown in chat
 // and on their nametag. `local`: the local player.
 std::pair<std::uint32_t, std::string> player_role(Session &s, std::uint64_t id, bool local, bool marks = true);
 // Sends one line from this player; returns why not when it cannot.
@@ -367,6 +430,13 @@ std::string send_chat(Session &s, std::string_view typed);
 // A "/" command for a dedicated server (votes, and any server command for its admins): sent
 // like chat but never shown as a line; the server answers in chat.
 std::string send_chat_command(Session &s, std::string_view typed);
+// Answers the dedicated server's running vote, as /yes or /no in chat does.
+std::string cast_server_vote(Session &s, bool yes);
+// Answers the dedicated server's running poll (0: its first answer), as /1, /2... in chat does.
+std::string answer_server_poll(Session &s, std::size_t answer);
+// Whether a vote the local player may answer is running: read by the game thread for the binds.
+inline std::atomic<bool> server_vote_open_flag{};
+inline std::atomic<unsigned> server_poll_answers_flag{};
 // "/p <message>" in a lobby: one line for the local player's party only, relayed by the host.
 std::string send_party_chat(Session &s, std::string_view typed);
 // The "/" commands this session offers (the chat overlay lists them as the player types "/").
@@ -429,6 +499,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now);
 // session_commands.cpp
 void apply_distances(Session &s, const MultiplayerDistances &distances);
 void apply_object_placement(Session &s, ObjectPlacement policy);
+// The session's limit, and this game's own share of it: none while hosting or as a server's admin.
+void apply_object_limit(Session &s, unsigned limit);
 // Stores what guests may use and applies it to the local player (the host and a dedicated
 // server's admins are exempt).
 void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts);

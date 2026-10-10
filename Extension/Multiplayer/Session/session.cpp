@@ -15,11 +15,13 @@
 #include "Extension/Objects/network_object_runtime.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "Extension/Multiplayer/Remote/native_audio.h"
+#include "Extension/Multiplayer/Remote/native_vfx.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/no_bail.h"
 #include "Extension/Skater/physics_tuning.h"
 #include "Extension/Multiplayer/Remote/remote_collision.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Text/word_filter.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "Engine/Game/UI/game_view.h"
 #include <Windows.h>
@@ -72,6 +74,10 @@ void stop(Session &s, std::string reason) {
     s.voice_policy = {};
     s.tps = multiplayer_default_tps;
     s.object_placement = ObjectPlacement::everyone;
+    s.object_limit = 0;
+    s.object_scaling = true;
+    s.sync_effects = true;
+    set_lobby_object_limit(0);
     s.server_admin = false;
     s.server_bans.clear();
     s.server_ban_total = 0;
@@ -96,6 +102,8 @@ void stop(Session &s, std::string reason) {
     set_session_tuning_enforced(false);
     set_host_physics_extras({});
     s.server_votes = 0;
+    s.server_polls = 0;
+    s.server_custom_votes.clear();
     set_session_tools_allowed(true, true, true);
     s.object_clears.reset();
     s.clear_pending = false;
@@ -126,6 +134,7 @@ void stop(Session &s, std::string reason) {
     s.used_slots = 0;
     s.object_owners_valid = false;
     reset_audio();
+    reset_effects();
     s.public_host = s.started_map = s.roster_dirty = false;
     s.awaiting_map = s.join_map_authorized = s.map_load_submitted = false;
     s.join_started = s.last_map_request = s.last_map_load_check = 0;
@@ -152,6 +161,22 @@ void stop(Session &s, std::string reason) {
     s.next_send = s.last_hello = s.last_roster = s.last_cosmetic_capture = s.last_routes =
         s.last_network_log = 0;
     s.sequence = s.roster_sequence = 0;
+    s.server_chat_badge = default_server_chat_badge;
+    s.server_chat_text = default_server_chat_text;
+    s.vote = {};
+    s.vote_ends = 0;
+    s.vote_mine = 0;
+    s.announcement = {};
+    s.announcement_ends = 0;
+    server_vote_open_flag.store(false, std::memory_order_relaxed);
+    server_poll_answers_flag.store(0, std::memory_order_relaxed);
+    s.pose_streams.clear();
+    s.pose_ack = {};
+    s.pose_ack_due = false;
+    s.pose_upload = {};
+    s.own_poses.clear();
+    s.sound_streams.clear();
+    s.sound_upload = {};
     s.local_pose_count = s.logged_local_pose_count = 0;
     s.status = std::move(reason);
 }
@@ -159,6 +184,14 @@ void stop(Session &s, std::string reason) {
 // admission, password challenges and stable member slots intact.
 void clear_world(Session &s, std::uint64_t now) {
     s.voice.reset();
+    // The server starts its pose streams and message numbers over with the world.
+    s.pose_streams.clear();
+    s.pose_ack = {};
+    s.pose_ack_due = false;
+    s.pose_upload.restart();
+    s.own_poses.clear();
+    s.sound_streams.clear();
+    s.sound_upload.restart();
     clear_remote_network_objects();
     s.object_owners_valid = false;
     s.local_objects = {}; s.next_object_update = 0;
@@ -178,6 +211,7 @@ void clear_world(Session &s, std::uint64_t now) {
         peer.last_packet = now;
     }
     reset_audio();
+    reset_effects();
     s.started_map = false;
     s.context = s.parent = 0;
     s.sent_appearance.reset();
@@ -258,9 +292,23 @@ void publish_party(Session &s) {
     if (!s.display_preferences_loaded) {
         s.display_preferences_loaded = true;
         s.nametags = profile_runtime::local_preference("Nametags").value_or(true);
-        s.custom_nametags = profile_runtime::local_preference("CustomNametags").value_or(true);
+        if (const auto saved = profile_runtime::local_value("NametagDistance"); saved && saved->is_number())
+            s.nametag_distance = std::clamp(saved->get<float>(), 10.f, 500.f);
+        s.nametag_dots = profile_runtime::local_preference("NametagDots").value_or(true);
+        s.prefer_direct = profile_runtime::local_preference("DirectConnections").value_or(true);
+        if (const auto saved = profile_runtime::local_value("PlayerDistance"); saved && saved->is_number())
+            s.player_distance = std::clamp(saved->get<float>(), player_distance_least, player_distance_unlimited);
+        s.nametags_friends = profile_runtime::local_preference("NametagsFriendsOnly").value_or(false);
         s.chat_visible = profile_runtime::local_preference("ChatVisible").value_or(true);
         s.chat_filter = profile_runtime::local_preference("ChatFilter").value_or(true);
+        s.chat_bubbles = profile_runtime::local_preference("ChatBubbles").value_or(true);
+        s.chat_bubbles_own = profile_runtime::local_preference("ChatBubblesOwn").value_or(false);
+        if (const auto saved = profile_runtime::local_value("ChatBubblesDistance"); saved && saved->is_number())
+            s.chat_bubbles_distance = std::clamp(saved->get<float>(), 5.f, 500.f);
+        if (const auto saved = profile_runtime::local_value("ChatBubblesDuration"); saved && saved->is_number())
+            s.chat_bubbles_duration = std::clamp(saved->get<float>(), 1.f, 30.f);
+        if (const auto saved = profile_runtime::local_value("ChatBubblesHistory"); saved && saved->is_number())
+            s.chat_bubbles_history = std::clamp(static_cast<int>(saved->get<double>()), 1, 8);
         show_own_tag(profile_runtime::local_preference("IdentityTag").value_or(true));
         show_own_items(profile_runtime::local_preference("IdentityItems").value_or(true));
         if (const auto saved = profile_runtime::local_value("IdentityStyles"); saved && saved->is_string())
@@ -385,10 +433,43 @@ std::uint64_t far_sample_interval(const Peer &p, float distance) {
 void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::uint64_t now) {
     if (!world_playing(s, local)) return;
     const auto view = latest_game_view();
-    // ReSkate's nametags: every shown player, placed above their head each frame.
+    // ReSkate's nametags and chat bubbles: every shown player, placed above their head
+    // each frame.
     std::vector<NametagPlayer> nametags;
-    const bool labels = s.nametags && s.custom_nametags;
+    const bool bubbles = s.chat_bubbles;
+    const bool labels = s.nametags || bubbles;
     if (labels) refresh_friends(s);
+    // The newest chat lines from `sender` still inside the bubble duration, oldest first,
+    // filtered the same way the chat panel filters them, each with the opacity it has left
+    // (it fades over the last half second). At most `chat_bubbles_history` lines.
+    const auto recent_bubbles = [&](std::uint64_t sender) {
+        std::vector<NametagBubble> result;
+        if (!bubbles) return result;
+        const int limit = std::max(1, s.chat_bubbles_history);
+        const auto duration = static_cast<std::uint64_t>(std::max(0.5f, s.chat_bubbles_duration) * 1e6f);
+        const auto fade_from = std::min<std::uint64_t>(duration, 500000);
+        for (auto it = s.chat.rbegin(); it != s.chat.rend() && static_cast<int>(result.size()) < limit; ++it) {
+            if (it->sender != sender) continue;
+            // Older lines are older still: once one has expired, stop.
+            if (now < it->received || now - it->received >= duration) break;
+            NametagBubble line;
+            line.text = it->text;
+            if (s.chat_filter) {
+                const auto masked = s.chat_masked.find(it->sequence);
+                auto filtered = masked != s.chat_masked.end() ? masked->second.second : text::mask_bad_words(it->text);
+                if (filtered != it->text) line.raw = std::exchange(line.text, std::move(filtered));
+            }
+            if (line.text.find_first_not_of(' ') == std::string::npos) continue;
+            const auto age = now - it->received;
+            // Pops in over the first few frames, fades over the last half second.
+            constexpr std::uint64_t pop_us = 220000;
+            line.appear = std::min(1.0f, static_cast<float>(age) / static_cast<float>(pop_us));
+            line.fade = fade_from ? std::min(1.0f, static_cast<float>(duration - age) / static_cast<float>(fade_from)) : 1.0f;
+            result.push_back(std::move(line));
+        }
+        std::reverse(result.begin(), result.end()); // oldest first
+        return result;
+    };
     // Who is talking, as last published for the UI (10 Hz), without copying the voice model.
     const auto &voices = s.view.voice.players;
     const auto label = [&](const Peer &p) {
@@ -398,7 +479,10 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
         tag.name = p.member.name.empty() ? s.transport.name(p.member.id) : p.member.name;
         // The same role colour and badge the player's chat lines get.
         std::tie(tag.color, tag.tag) = player_role(s, p.member.id, false);
+        // Friends only: everyone else keeps their chat bubbles and loses the name and dot.
+        tag.nameless = s.nametags_friends && !std::binary_search(s.friend_ids.begin(), s.friend_ids.end(), p.member.id);
         tag.talking = std::any_of(voices.begin(), voices.end(), [&](const auto &v) { return v.id == p.member.id && v.speaking; });
+        tag.bubbles = recent_bubbles(p.member.id);
         nametags.push_back(std::move(tag));
     };
     // Creating a player's actor (skater, skateboard and both recipes) or re-applying a
@@ -412,11 +496,27 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
             native_pass = true;
         }
         update_remote_cosmetics(s.base, local, *p.appearance.value(), p.cosmetic_status);
+        // The effects their costume and board items come with follow the outfit.
+        if (p.applied_cosmetics != p.cosmetic_revision && s.sync_effects) note_remote_outfit(now);
         p.last_cosmetic_apply = now;
         p.applied_cosmetics = p.cosmetic_revision;
     };
-    // The player's sound for this frame, every frame they are shown.
+    // The player's sound for this frame, every frame they are shown, and the effects of their
+    // skater's contacts that are due.
     const auto present_audio = [&](Peer &p) {
+        tick_remote_effects(now);
+        if (!s.sync_effects) p.impacts.clear();
+        while (!p.impacts.empty() && p.impacts.front().first <= now) {
+            const auto &impact = p.impacts.front().second;
+            float distance{};
+            for (unsigned i = 0; i < 3; ++i) {
+                const auto d = impact.position[i] - p.render_pose.root.position[i];
+                distance += d * d;
+            }
+            // Only where their skater is: a contact far from it is not theirs to place.
+            if (distance <= 30.f * 30.f) play_impact(impact);
+            p.impacts.pop_front();
+        }
         if (const auto audio = p.audio.sample(now)) {
             // Preserve discrete audio changes immediately, but let
             // unchanged continuous inputs and spatial transforms
@@ -437,6 +537,20 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
     const auto developer_id = [&](const Peer &p) {
         return steam_vouched(s, p) && shows_items(p) ? p.member.id : std::uint64_t{};
     };
+    // Only players within `player_distance` get a skater: each one costs memory and frame time
+    // whether or not it is in view, and on a full server most are far across the map, too small
+    // to see. Checked twice a second; a player already shown stays until a little further
+    // out, so one skating along the edge is not built and taken down over and over (building
+    // a skater is the expensive part). Before a pose has placed them, nobody is too far.
+    if (now >= s.next_shown_rank) {
+        s.next_shown_rank = now + 500000;
+        const bool everyone = s.player_distance >= player_distance_unlimited;
+        for (auto &p : active_peers(s)) {
+            if (!p.member.id || (dedicated_host(s) && p.member.id == s.host_id)) continue;
+            p.shown_wanted = everyone || !p.placed ||
+                             nearest_distance(p, local, view) <= s.player_distance * (p.visible ? 1.15f : 1.f);
+        }
+    }
     each_active_peer(s, [&](Peer &p) {
         // A dedicated server has no skater to show.
         if (!p.member.id || (dedicated_host(s) && p.member.id == s.host_id))
@@ -458,13 +572,20 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
         if (local.ready && !p.render_failed) {
             const bool sampled = s.mode == Mode::echo ? p.poses.sample(now, p.render_pose)
                                                        : p.poses.sample_remote(now, p.render_pose);
+            // Nothing new from them for over a second (a stall here, at the host or on the way):
+            // their skater stays where it was for a while longer. Taking it down and building
+            // it again three seconds later is the most expensive thing a frame can do, and on
+            // a busy server one slow frame made it happen to everyone at once, which made
+            // the next frames slower still.
+            const bool held = !sampled && was_visible && p.poses.heard_within(now, 8000000);
             // Showing a player without an actor spawns one (native_skater_spawn.cpp).
-            const bool spawning = sampled && p.appearance.value() && !was_visible && !remote_skater_entity();
+            if (sampled) p.placed = true;
+            const bool spawning = sampled && p.shown_wanted && p.appearance.value() && !was_visible && !remote_skater_entity();
             if (spawning && now < p.next_spawn) {
                 p.native_status = "Waiting to show the player again.";
             } else if (spawning && native_pass) {
                 p.native_status = "Waiting for another player's skater to finish spawning.";
-            } else if (sampled && p.appearance.value()) {
+            } else if ((sampled || held) && p.shown_wanted && p.appearance.value()) {
                 if (spawning) {
                     native_pass = true;
                     p.applied_cosmetics = 0; // the new actor wears no recipe yet
@@ -520,8 +641,11 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
                     remove_remote(s.base);
                     p.next_spawn = now + 3000000;
                 }
-                p.native_status =
-                    sampled ? "Waiting for the player's cosmetic recipe." : "Waiting for player poses.";
+                p.native_status = !p.shown_wanted ? "Further away than players are shown."
+                                  : sampled       ? "Waiting for the player's cosmetic recipe."
+                                                  : "Waiting for player poses.";
+                // No skater for them, but still their name or dot where they are.
+                if (!p.shown_wanted && sampled && labels) label(p);
             }
         }
         update_developer_hoodie(s.base, p.visible ? remote_skater_entity() : 0, developer_id(p),
@@ -539,9 +663,23 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
             }
         }
     });
+    // The local player's own lines, above their own skater, when asked for.
+    if (labels && bubbles && s.chat_bubbles_own && local.ready) {
+        auto own = recent_bubbles(s.transport.status().local_id);
+        if (!own.empty()) {
+            NametagPlayer tag;
+            tag.head = local.pose.root.position;
+            tag.head[1] += 1.0f;
+            tag.self = true;
+            tag.bubbles = std::move(own);
+            nametags.push_back(std::move(tag));
+        }
+    }
     if (labels)
         publish_custom_nametags(s.base, std::move(nametags),
-                                local.ready ? std::optional(local.pose.root.position) : std::nullopt);
+                                local.ready ? std::optional(local.pose.root.position) : std::nullopt,
+                                s.nametags, bubbles, s.chat_bubbles_distance, s.nametag_distance,
+                                s.nametag_dots);
 }
 } // namespace
 MultiplayerModel model() {
@@ -759,6 +897,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, std::string_vi
             if (!install_entity_hooks(base, entity_detail) && !entity_detail.empty())
                 logging::log(logging::Level::warning, logging::Channel::runtime, "Multiplayer: {}", entity_detail);
             prepare_remote_audio(base);
+            prepare_effects(base);
             logging::log(logging::Level::info, logging::Channel::runtime,
                          "Multiplayer: remote-player hooks installed in {} ms (once, before anyone joins).",
                          (now_us() - started) / 1000);
@@ -799,6 +938,8 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, std::string_vi
         s.client_timing.record(ClientTiming::capture, now, receive_at);
         if (s.mode != Mode::echo)
             networking(s, local, receive_at);
+        for (const auto &note : s.transport.take_direct_notes())
+            logging::log(logging::Level::info, logging::Channel::runtime, "Multiplayer: {}", note);
         relay_throwdowns(s, world_playing(s, local));
         // A S.K.A.T.E. player waiting for their turn stays off the board.
         update_board_lock(client, local.entity, local.ready && throwdown_relay_waits_offboard());

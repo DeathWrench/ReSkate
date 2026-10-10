@@ -1,6 +1,7 @@
 #include "session_internal.h"
 #include "Extension/Multiplayer/Remote/native_cosmetics.h"
 #include "Extension/Multiplayer/Remote/native_audio.h"
+#include "Extension/Multiplayer/Remote/native_vfx.h"
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Objects/network_object_runtime.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
@@ -26,6 +27,8 @@ void publish_guest_objects(Session &s) {
         if (peer.handshaken && peer.objects.revision() != peer.shared_from) {
             auto layout = peer.objects.layout();
             std::erase_if(layout, [&](const auto &object) { return peer.cleared.contains(object.id); });
+            // The host's limit on each guest's objects, which a patched client cannot place past.
+            layout = limited_layout(std::move(layout), peer.shared.objects(), s.object_limit);
             peer.shared.replace(layout);
             peer.shared_from = peer.objects.revision();
         }
@@ -220,10 +223,45 @@ std::string send_chat_command(Session &s, std::string_view typed) {
     if (!send_packet(s, s.host_id, message, true, false)) return "Could not reach the server.";
     // Party chat: the server relays it to the rest of the party, not back to us.
     const std::string_view sent = message.text;
+    // An answer to the vote typed in chat shows on the vote card like one given there.
+    if (s.vote.id && s.vote.outcome == vote_running) {
+        if (s.vote.kind == server_vote_poll) {
+            // "/2" or "/vote 2"
+            const auto number = sent.starts_with("/vote ") ? sent.substr(6) : sent.substr(1);
+            if (number.size() == 1 && number[0] >= '1' && static_cast<std::size_t>(number[0] - '0') <= s.vote.answers.size())
+                s.vote_mine = static_cast<std::uint8_t>(number[0] - '0');
+        } else if (sent == "/yes" || sent == "/y" || sent == "/vote yes" || sent == "/vote y") s.vote_mine = 1;
+        else if (sent == "/no" || sent == "/n" || sent == "/vote no" || sent == "/vote n") s.vote_mine = 2;
+    }
     if (sent.starts_with("/p ") && s.local_party) {
         const auto local = s.transport.status().local_id;
         add_chat(s, local, s.transport.name(local), "[Party] " + std::string(sent.substr(3)), true);
     }
+    return {};
+}
+std::string answer_server_poll(Session &s, std::size_t answer) {
+    if (!dedicated_host(s) || !s.vote.id || s.vote.outcome != vote_running || s.vote.kind != server_vote_poll)
+        return "No poll is running.";
+    if (answer >= s.vote.answers.size()) return "The poll has " + std::to_string(s.vote.answers.size()) + " answers.";
+    if (s.vote_mine == answer + 1) return {};
+    // Sent as the chat command, as an answer to a vote is.
+    auto message = packet(s, PacketKind::chat, now_us());
+    message.text = "/" + std::to_string(answer + 1);
+    if (!send_packet(s, s.host_id, message, true, false)) return "Could not reach the server.";
+    s.vote_mine = static_cast<std::uint8_t>(answer + 1);
+    return {};
+}
+std::string cast_server_vote(Session &s, bool yes) {
+    if (!dedicated_host(s) || !s.vote.id || s.vote.outcome != vote_running) return "No vote is running.";
+    if (s.vote.kind == server_vote_poll) return "This is a poll: answer it on its card, or with /1, /2...";
+    if (s.vote.target == s.transport.status().local_id) return "You cannot vote on your own kick.";
+    if (s.vote_mine == (yes ? 1 : 2)) return {};
+    // The server takes the answer as the chat command (server_votes.cpp); it is not a chat
+    // line, so the pace kept for those does not hold it back.
+    auto message = packet(s, PacketKind::chat, now_us());
+    message.text = yes ? "/yes" : "/no";
+    if (!send_packet(s, s.host_id, message, true, false)) return "Could not reach the server.";
+    s.vote_mine = yes ? 1 : 2;
     return {};
 }
 std::string send_party_chat(Session &s, std::string_view typed) {
@@ -256,6 +294,25 @@ void send_throwdown(Session &s, std::vector<std::uint8_t> message) {
     p.throwdown = std::move(message);
     broadcast(s, p, true, false, now);
 }
+// This game's pose to a dedicated server: its differences from a pose of its own the server has
+// said it holds (pose_batch.h), as the server sends everyone else's.
+void upload_pose(Session &s, const Packet &packet, std::uint64_t now) {
+    auto &kept = s.own_poses;
+    if (!kept.empty() && kept.back().sequence >= packet.sequence) return;
+    kept.push_back({packet.sequence, packet.time_us, pose_codec::quantize(packet.pose)});
+    while (kept.size() > 64) kept.pop_front();
+    const auto find = [&](std::uint32_t sequence) -> std::optional<pose_batch::KeptView> {
+        for (auto it = kept.rbegin(); it != kept.rend(); ++it)
+            if (it->sequence == sequence) return pose_batch::KeptView{it->sequence, it->time_us, &it->pose};
+        return {};
+    };
+    const auto emit = [&](std::span<const std::uint8_t> message, bool reliable) {
+        return s.transport.send(s.host_id, message, reliable, !reliable, TrafficLane::gameplay);
+    };
+    s.pose_upload.begin(s.world, s.map);
+    s.pose_upload.add(packet.source, packet.epoch, *find(packet.sequence), find, false, packet.player_collision, pose_batch::Rate::full, now, emit);
+    s.pose_upload.flush(emit);
+}
 void broadcast(Session &s, const Packet &packet, bool reliable, bool fresh, std::uint64_t now,
                std::uint64_t except) {
     const auto *source = find_peer(s, packet.source);
@@ -279,15 +336,16 @@ void broadcast(Session &s, const Packet &packet, bool reliable, bool fresh, std:
     std::vector<Outgoing> outgoing;
     unsigned direct_sent{};
     const bool gameplay = packet.kind == PacketKind::pose || packet.kind == PacketKind::audio ||
-                          packet.kind == PacketKind::voice || packet.kind == PacketKind::cosmetics;
+                          packet.kind == PacketKind::voice || packet.kind == PacketKind::cosmetics ||
+                          packet.kind == PacketKind::effects;
     for (auto &p : active_peers(s)) {
         if (!p.handshaken || p.member.id == except ||
             (s.mode == Mode::host && gameplay && !p.world_ready) ||
-            (s.mode == Mode::join && p.member.id != s.host_id && !p.direct_ready))
+            (s.mode == Mode::join && p.member.id != s.host_id && (!p.direct_ready || dedicated_host(s))))
             continue;
         // Chat and throwdown messages always travel through the host, which relays
         // them once to everyone else; a direct copy as well would deliver them twice.
-        if ((packet.kind == PacketKind::chat || packet.kind == PacketKind::throwdown) && s.mode == Mode::join &&
+        if ((packet.kind == PacketKind::chat || packet.kind == PacketKind::throwdown || packet.kind == PacketKind::effects) && s.mode == Mode::join &&
             p.member.id != s.host_id)
             continue;
         if (packet.kind == PacketKind::voice) {
@@ -314,6 +372,19 @@ void broadcast(Session &s, const Packet &packet, bool reliable, bool fresh, std:
             (packet.kind == PacketKind::pose || packet.kind == PacketKind::audio) &&
             !needs_relay(p.direct_routes, p.route_reported, source->member, now))
             continue;
+        if (packet.kind == PacketKind::pose && dedicated_host(s) && p.member.id == s.host_id) {
+            upload_pose(s, packet, now);
+            continue;
+        }
+        // This game's skater's sound to a dedicated server (sound_codec.h): what changed since
+        // the last samples it was sent.
+        if (packet.kind == PacketKind::audio && dedicated_host(s) && p.member.id == s.host_id) {
+            s.sound_upload.begin(s.world, s.map);
+            s.sound_upload.add(packet.source, packet.epoch, packet.sequence, packet.time_us, packet.audio, now);
+            if (s.sound_upload.pending())
+                s.sound_upload.sent(s.transport.send(s.host_id, s.sound_upload.message(), true, fresh, traffic_lane(packet.kind)));
+            continue;
+        }
         PoseDelivery *delivery{};
         std::uint32_t interval = multiplayer_pose_interval(s.tps);
         if (packet.kind == PacketKind::pose) {
@@ -429,6 +500,7 @@ void send_roster(Session &s, std::uint64_t now) {
     p.voice_range = s.voice_range;
     p.distances = s.distances;
     p.object_placement = s.object_placement;
+    p.object_limit = s.object_limit;
     p.guest_noclip = s.guest_noclip;
     p.guest_no_bail = s.guest_no_bail;
     p.guest_boosts = s.guest_boosts;
@@ -632,12 +704,41 @@ void send_local(Session &s, const NativeFrame &local, std::uint64_t now, std::ui
     if (captured_at) p.time_us = captured_at;
     p.pose = local.pose;
     ++s.local_pose_count;
+    if (s.pose_dump.is_open()) {
+        // A record: when it was captured (8 bytes), its length (4), and the compact encoding.
+        const auto raw = encode(p, true);
+        const std::uint64_t time = p.time_us;
+        const auto length = static_cast<std::uint32_t>(raw.size());
+        s.pose_dump.write(reinterpret_cast<const char *>(&time), sizeof time);
+        s.pose_dump.write(reinterpret_cast<const char *>(&length), sizeof length);
+        s.pose_dump.write(reinterpret_cast<const char *>(raw.data()), static_cast<std::streamsize>(raw.size()));
+        ++s.pose_dump_count;
+        if (now >= s.pose_dump_until) {
+            s.pose_dump.close();
+            logging::log(logging::Level::info, logging::Channel::runtime, "Multiplayer: pose dump finished, {} poses.", s.pose_dump_count);
+        }
+    }
     deliver(p, false, true);
     auto samples = drain_audio_capture(now);
     if (!samples.empty()) {
         auto a = packet(s, PacketKind::audio, now);
         a.audio = std::move(samples);
+        if (s.pose_dump.is_open()) {
+            // The skater's sound is recorded with the poses, in the same records.
+            const auto raw = encode(a, true);
+            const std::uint64_t time = a.time_us;
+            const auto length = static_cast<std::uint32_t>(raw.size());
+            s.pose_dump.write(reinterpret_cast<const char *>(&time), sizeof time);
+            s.pose_dump.write(reinterpret_cast<const char *>(&length), sizeof length);
+            s.pose_dump.write(reinterpret_cast<const char *>(raw.data()), static_cast<std::streamsize>(raw.size()));
+        }
         deliver(a, std::any_of(a.audio.begin(), a.audio.end(), [](const auto &sample) { return sample.event; }), true);
+    }
+    // This skater's contacts with the world, for the sparks and dust others see on it.
+    if (auto impacts = drain_impacts(); !impacts.empty() && s.sync_effects) {
+        auto e = packet(s, PacketKind::effects, now);
+        e.impacts = std::move(impacts);
+        deliver(e, false, true);
     }
 }
 } // namespace session_detail

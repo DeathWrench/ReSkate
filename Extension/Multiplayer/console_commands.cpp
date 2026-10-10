@@ -3,6 +3,7 @@
 #include "Extension/Multiplayer/Hud/native_party.h"
 #include "Extension/Multiplayer/Remote/native_skater.h"
 #include "Extension/Multiplayer/Remote/remote_collision.h"
+#include "Extension/Multiplayer/Remote/native_vfx.h"
 #include "Extension/Throwdowns/throwdown_lab.h"
 #include "Extension/Throwdowns/throwdown_debug_text.h"
 #include "Extension/Throwdowns/throwdown_relay.h"
@@ -31,7 +32,19 @@ void register_multiplayer_commands(Commands &registry) {
                           Command{"tpall", "Host or server admin: teleport everyone to you"},
                           Command{"tphere", "Host or server admin: teleport one player to you"},
                           Command{"nametags", "Show or hide player nametags (on, off, toggle)"},
-                          Command{"nametag-style", "ReSkate nametags or the game's own (reskate, game, toggle)"},
+                          Command{"pose-dump", "Research: record your own poses for a number of seconds (1-600) to logs/poses-*.bin"},
+                          Command{"vote", "Answer the vote a dedicated server is running (yes, no), or its poll (1, 2...)"},
+                          Command{"voice-chat", "Your own voice chat (on, off, toggle)"},
+                          Command{"direct-connections", "Connect straight to servers that offer it, not through Steam's relays (on, off, toggle)"},
+                          Command{"player-distance", "How far away another player still gets a skater, in metres (50-1000; 1000: every player). Past it: a nametag or dot"},
+                          Command{"nametag-distance", "How far away a player's name still shows, in metres (10-500); past it they are a dot"},
+                          Command{"nametag-dots", "Show far and off-screen players as dots (on, off, toggle)"},
+                          Command{"nametags-friends", "Only your Steam friends have nametags (on, off, toggle)"},
+                          Command{"chat-bubbles", "Show or hide chat bubbles above skaters (on, off, toggle)"},
+                          Command{"chat-bubbles-own", "Also show your own chat messages above your skater (on, off, toggle)"},
+                          Command{"chat-bubbles-distance", "How far away a player may be and still show a chat bubble, in metres (5-500)"},
+                          Command{"chat-bubbles-duration", "How many seconds a chat bubble stays before it fades (1-30)"},
+                          Command{"chat-bubbles-history", "How many recent messages stack above a skater (1-8)"},
                           Command{"score-check", "Host: keep players whose mods change scoring or physics out of throwdowns and "
                                                  "coop challenges (on, off, toggle; on by default)"},
                           Command{"retry", "Retry remote skater creation after an error"},
@@ -46,9 +59,21 @@ void register_multiplayer_commands(Commands &registry) {
         }
         if (std::string_view(c.name) == "join-lobby")
             args.push_back(argument("lobby_id"));
-        if (std::string_view(c.name) == "nametags" || std::string_view(c.name) == "nametag-style" ||
+        if (std::string_view(c.name) == "nametags" ||
+            std::string_view(c.name) == "chat-bubbles" || std::string_view(c.name) == "chat-bubbles-own" ||
+            std::string_view(c.name) == "nametag-dots" || std::string_view(c.name) == "nametags-friends" ||
+            std::string_view(c.name) == "direct-connections" || std::string_view(c.name) == "vote" ||
+            std::string_view(c.name) == "voice-chat" ||
             std::string_view(c.name) == "score-check")
             args.push_back(argument("choice"));
+        if (std::string_view(c.name) == "chat-bubbles-distance" || std::string_view(c.name) == "nametag-distance")
+            args.push_back(argument("metres"));
+        if (std::string_view(c.name) == "chat-bubbles-duration" || std::string_view(c.name) == "pose-dump")
+            args.push_back(argument("seconds"));
+        if (std::string_view(c.name) == "player-distance")
+            args.push_back(argument("metres"));
+        if (std::string_view(c.name) == "chat-bubbles-history")
+            args.push_back(argument("lines"));
         if (std::string_view(c.name) == "chat" || std::string_view(c.name) == "server" || std::string_view(c.name) == "party" ||
             std::string_view(c.name) == "tp" || std::string_view(c.name) == "tphere") {
             auto message = argument("message");
@@ -139,6 +164,11 @@ void register_multiplayer_commands(Commands &registry) {
         out(multiplayer::puppet_saving_status());
     };
     registry.add(std::move(savings));
+    auto effects = action("mp effects",
+                          "Skater effects shared with other players: what has been captured and played",
+                          Group::gameplay, {});
+    effects.run = [](const Model &, const Values &, const Output &out) { out(multiplayer::native_effects_status()); };
+    registry.add(std::move(effects));
     auto hud_choice = argument("reskate|game", Type::text, true);
     hud_choice.complete = [](const Model &, auto) { return std::vector<std::string>{"reskate", "game"}; };
     auto hud = action("throwdown-hud",

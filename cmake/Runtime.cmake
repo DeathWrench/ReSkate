@@ -31,6 +31,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Remote/puppet_cost.cpp
     Extension/Multiplayer/Remote/native_cosmetics.cpp
     Extension/Multiplayer/Remote/native_audio.cpp
+    Extension/Multiplayer/Remote/native_vfx.cpp
     Extension/Multiplayer/Voice/voice_chat.cpp
     Extension/Multiplayer/Voice/native_voice.cpp
     Extension/Multiplayer/Hud/native_player_ui.cpp
@@ -96,6 +97,7 @@ add_library(dingosdk_runtime SHARED
     Extension/World/level_loading.cpp
     Extension/World/loading_screen.cpp
     Extension/Customization/preset_lookup_guard.cpp
+    Extension/Boot/exit_watch.cpp
     Extension/Customization/developer_hoodie.cpp
     Extension/Customization/developer_board.cpp
     Extension/Skater/skater_model.cpp
@@ -110,12 +112,22 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/physics_tuning.cpp
     Extension/Multiplayer/Remote/remote_collision.cpp
     Extension/Skater/physics_tuning_model.cpp
+    Extension/HallOfMeat/hall_of_meat.cpp
+    Extension/HallOfMeat/hall_of_meat_card.cpp
+    Extension/HallOfMeat/hall_of_meat_commands.cpp
+    Extension/HallOfMeat/hall_of_meat_hud.cpp
+    Extension/HallOfMeat/hall_of_meat_model.cpp
+    Extension/HallOfMeat/hall_of_meat_render.cpp
+    Extension/HallOfMeat/hall_of_meat_skater.cpp
+    Extension/HallOfMeat/hall_of_meat_skeleton.cpp
+    Extension/HallOfMeat/hall_of_meat_slow_motion.cpp
     Extension/Trainer/trainer.cpp
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp
     Extension/Trainer/trainer_classes.cpp
     Extension/Trainer/trainer_commands.cpp
     Extension/Trainer/trainer_session.cpp
+    Extension/Trainer/trainer_waypoint.cpp
     Extension/Skater/offboard_flight.cpp
     Extension/Skater/camera_observer.cpp
     Extension/Boot/offline_boot.cpp
@@ -142,6 +154,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Objects/local_object_runtime.cpp
     Extension/Music/local_music_assets.cpp
     Extension/Music/local_music_safety.cpp
+    Extension/Music/local_music_playback.cpp
     Extension/Music/music_artwork.cpp
     Extension/Music/local_music_ui.cpp
     Extension/Music/local_music_shelf.cpp
@@ -161,6 +174,7 @@ add_library(dingosdk_runtime SHARED
     Extension/World/visual_environment.cpp
     Extension/World/local_population_controls.cpp
     Extension/World/native_route_lookahead.cpp
+    Extension/World/unload_guard.cpp
     Extension/World/local_world_controls.cpp
     Extension/World/local_atmosphere_controls.cpp
     Extension/Rendering/local_graphics_controls.cpp
@@ -173,7 +187,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Progression/fixed_stop_entitlement_observation.cpp
     Extension/Progression/neighborhood_unlock_override.cpp
     Extension/Boot/user_data_redirect.cpp
-    Extension/Boot/ea_app_block.cpp)
+    Extension/Boot/ea_app_block.cpp
+    Extension/Boot/ea_service_block.cpp)
 
 target_link_libraries(dingosdk_runtime PRIVATE dingosdk_logging dingosdk_profiler dingosdk_supported_build dingosdk_overlay dingosdk_console_core dingosdk_steam_restart_guard
     dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt

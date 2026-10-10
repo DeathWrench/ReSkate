@@ -135,9 +135,11 @@ struct State {
     std::atomic<bool> started{false};
     bool ready = false;
     bool ui_was_interactive = false;
+    std::uint32_t mapped_mouse_event = 0; // Render thread: the last queued mouse position mapped into the back buffer.
     std::atomic<bool> failed{false};
     bool win32_ready = false;
     bool dx12_ready = false;
+    std::atomic<bool> freecam_controller_active{false};
     bool show_on_ready = false;
     bool force_windowed = false;
     HANDLE stop_event = nullptr;

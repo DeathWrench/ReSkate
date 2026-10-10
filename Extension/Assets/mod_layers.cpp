@@ -6,6 +6,7 @@
 #include "Engine/Vfs/mod_scoring.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/mod_layers.h"
 #include "Extension/UI/Startup/startup_window.h"
@@ -126,7 +127,7 @@ bool read_memory(std::uintptr_t address, void* destination, std::size_t size) no
         destination, size, &read) && read == size;
 }
 
-// Supported September 8 build, checked after runtime image validation.
+// Supported game build, checked after runtime image validation.
 bool validate_contract(std::uintptr_t base) noexcept {
     struct Contract { std::uintptr_t rva; std::span<const std::uint8_t> bytes; };
     const Contract contracts[]{
@@ -134,7 +135,8 @@ bool validate_contract(std::uintptr_t base) noexcept {
         {layers::layout_bootstrap, layers::layout_bootstrap_prefix}};
     for (const auto& contract : contracts) {
         std::array<std::uint8_t, 32> actual{};
-        if (!read_memory(base + contract.rva, actual.data(), contract.bytes.size()) ||
+        if (contract.bytes.size() > actual.size() || // a longer prefix would overrun actual
+            !read_memory(base + contract.rva, actual.data(), contract.bytes.size()) ||
             std::memcmp(actual.data(), contract.bytes.data(), contract.bytes.size())) return false;
     }
     std::uintptr_t slot{};
@@ -268,7 +270,7 @@ bool start_mod_layers(std::uintptr_t base, std::string& error) {
     }
     if (!catalog.present) {
         logging::log(logging::Level::info, logging::Channel::assets,
-            "No Mods folder at {}; only Patch and Data are layered.", catalog.root.string());
+            "No Mods folder at {}; only Patch and Data are layered.", path_utf8(catalog.root));
         return true;
     }
     if (!catalog.merged) {
@@ -322,7 +324,7 @@ bool start_mod_layers(std::uintptr_t base, std::string& error) {
     }
     installed_base = base;
     logging::log(logging::Level::info, logging::Channel::assets,
-        "Merged mod patch ready at {}", state().merged_root.string());
+        "Merged mod patch ready at {}", path_utf8(state().merged_root));
     return true;
 }
 LayoutObjects layout_objects() noexcept { return {seen_manager.load(), seen_layers.load()}; }

@@ -15,6 +15,8 @@ inline constexpr std::array nametag_gradients{
     NametagGradient{multiplayer::nametag_developer_start, multiplayer::nametag_developer},
     NametagGradient{multiplayer::nametag_creator_start, multiplayer::nametag_creator},
     NametagGradient{multiplayer::nametag_homie_start, multiplayer::nametag_homie},
+    NametagGradient{multiplayer::nametag_centrix_start, multiplayer::nametag_centrix},
+    NametagGradient{multiplayer::nametag_staff_start, multiplayer::nametag_staff},
 };
 inline const NametagGradient* nametag_gradient(ImU32 colour) noexcept {
     for (const auto& gradient : nametag_gradients)

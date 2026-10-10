@@ -52,6 +52,8 @@ enum class DebugAction {
     set_park_editor,
     add_up_velocity,
     set_up_velocity_speed,
+    add_offboard_up_velocity,
+    set_offboard_up_velocity_speed,
     set_first_person,
     set_first_person_fov,
     set_first_person_spring,
@@ -65,6 +67,13 @@ enum class DebugAction {
     set_first_person_spring_down,
     set_first_person_spring_left,
     set_first_person_spring_right,
+    set_first_person_stabilize,
+    set_first_person_follow_flips,
+    set_first_person_smoothing,
+    set_first_person_head_pitch,
+    set_first_person_head_roll,
+    set_first_person_bob,
+    set_first_person_board_only,
     reset_first_person_arm,
     set_free_camera_fov,  // 0 = the game's own FOV
     // Keep the last action in sync with the bound in request_scheduler.h.
@@ -100,20 +109,24 @@ struct DebugModel {
     bool noclip = false, noclip_available = false;
     bool forward_velocity_available = false;
     bool up_velocity_available = false;
+    bool offboard_up_velocity_available = false;
     std::string camera_unavailable = "Waiting for local controls.";
     std::string noclip_unavailable = "Waiting for local controls.";
     std::string forward_velocity_unavailable = "Waiting for local controls.";
     std::string up_velocity_unavailable = "Waiting for local controls.";
+    std::string offboard_up_velocity_unavailable = "Waiting for local controls.";
     bool no_bail = false, no_bail_available = false, no_bail_active = false;
     std::uint64_t noclip_velocity_updates = 0, noclip_motion_updates = 0;
     std::uint64_t forward_velocity_updates = 0;
     std::uint64_t up_velocity_updates = 0;
+    std::uint64_t offboard_up_velocity_updates = 0;
     bool game_ui_hidden = false;
     bool settings_owned = false;
     // ReSkate free-flight speed in world units per second.
     float camera_speed = 15.0f;
     float forward_velocity_speed = 20.0f;
     float up_velocity_speed = 20.0f;
+    float offboard_up_velocity_speed = 20.0f;
     bool camera_position_valid = false;
     bool skater_position_valid = false;
     std::array<float, 3> camera_position{};
@@ -191,6 +204,11 @@ struct MissionRow {
     int completed = -1;
 };
 
+// Hall of Meat's switch (Extension/HallOfMeat/hall_of_meat.h): started, and switched on.
+struct HallOfMeatModel {
+    bool available = false, enabled = false;
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -209,6 +227,7 @@ struct Model {
     WorldControlsModel world_controls;
     ProgressionModel progression;
     PlayerCardModel player_card;
+    HallOfMeatModel hall_of_meat;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
@@ -301,17 +320,33 @@ void set_skate_hud_feed(SkateHudFeed) noexcept;
 // ReSkate's own nametags: one per other player, placed over the world with the camera the
 // client last used. Close ones show a name and distance, far ones a dot, and players off
 // screen a dot at the screen's edge. Empty = nothing to draw (off, or the game hides its UI).
+// One line in a player's bubble stack: the text (masked when the chat filter is on), the line
+// as sent when the filter changed it (same length; emote names are taken back from it), how
+// far its pop-in has come (0 just arrived, 1 settled) and how opaque it still is (1 down to 0).
+struct NametagBubble {
+    std::string text, raw;
+    float appear{1}, fade{1};
+};
 struct Nametag {
     std::array<float, 3> position{}; // above the skater's head, world space
     std::string name;
     std::uint32_t color{0xffffffffU}; // R, G, B, A bytes (IM_COL32)
-    std::string tag;                  // role badge before the name ("Dev", "Creator", "Homie", "Admin", "Host", "Friend")
+    std::string tag;                  // role badge before the name ("Dev", "Staff", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
     float distance{};                 // metres from the local skater
     bool talking{};
+    // Recent chat lines to show as bubbles above the head, oldest first ("" = none).
+    std::vector<NametagBubble> bubbles;
+    bool self{};                      // the local player: bubbles only, never a name or dot
+    bool nameless{};                  // another player whose name is not shown: bubbles only too
 };
 struct Nametags {
     std::array<float, 16> camera{}; // world matrix: right, up, back, position rows
     float vertical_fov{};
+    bool show_names{true};          // draw the name, distance and role badge
+    bool show_bubbles{};            // draw chat bubbles above the heads
+    float bubble_distance{40.f};    // furthest a player may be and still show a bubble (metres)
+    float name_distance{120.f};     // furthest a player's name shows; past it they are a dot
+    bool dots{true};                // draw those dots, and the ones at the edge for off-screen players
     std::vector<Nametag> tags;
 };
 using NametagFeed = Nametags (*)();
@@ -375,6 +410,7 @@ extern "C" __declspec(dllexport) void DingoSDKOverlayGetStatus(dingosdk::overlay
 // Poll only on the client update thread. Returns no input while either overlay
 // surface is open, the game is unfocused, or the overlay has stopped.
 extern "C" void DingoSDKOverlayReadFlightInput(dingosdk::overlay::FlightInput* input, bool flight_active, bool player_flight = false);
+extern "C" void DingoSDKOverlaySetFreecamInputCapture(bool active);
 // allow_menu is used only by the Binds page while recording. Focus and lifetime
 // gates still apply. Gameplay callers leave it false.
 extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* input, bool allow_menu = false);

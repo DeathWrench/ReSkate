@@ -8,10 +8,25 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dingosdk {
 constexpr unsigned max_map_rotation = 1440; // minutes a server's rotation keeps one map, at most
+// A dedicated server's name: 1 to 64 letters, digits, spaces and - _ / [ ] ( ), with a
+// letter or digit among them and no space at either end. A server refuses any other
+// name, and the server browser does not show one.
+inline constexpr char server_name_rule[] = "1 to 64 letters, numbers, spaces and - _ / [ ] ( )";
+[[nodiscard]] constexpr bool valid_server_name(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 64 || name.front() == ' ' || name.back() == ' ') return false;
+    bool named{};
+    for (const auto c : name) {
+        const bool word = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9');
+        if (!word && std::string_view(" -_/[]()").find(c) == std::string_view::npos) return false;
+        named |= word;
+    }
+    return named;
+}
 struct MultiplayerLobby {
     std::uint64_t id{}, owner{};
     std::string name, map, code;
@@ -19,8 +34,23 @@ struct MultiplayerLobby {
     int players = 1, capacity = multiplayer_player_limit;
     // A dedicated server rather than a player's lobby: joined by its code.
     bool dedicated{};
+    // A dedicated server the ReSkate team runs (developer_identity.h): first in the browser.
+    bool official{};
     int ping = -1; // ms, when the server answered directly
+    // A dedicated server that takes direct connections: its address (host byte order) and UDP
+    // port, 0 for none.
+    std::uint32_t direct_ip{};
+    int direct_port{};
+    // Steam friends skating there now, by name (steam_social.h).
+    std::vector<std::string> friends;
 };
+// "Ana, Ben and 2 more": the friends in a server, as a browser row has room for.
+inline std::string lobby_friends_text(const MultiplayerLobby &lobby, std::size_t named = 2) {
+    std::string text;
+    for (std::size_t i = 0; i < lobby.friends.size() && i < named; ++i) text += (i ? ", " : "") + lobby.friends[i];
+    if (lobby.friends.size() > named) text += " and " + std::to_string(lobby.friends.size() - named) + " more";
+    return text;
+}
 struct MultiplayerPlayer {
     std::uint64_t id{};
     std::string name;
@@ -67,12 +97,20 @@ inline constexpr std::size_t multiplayer_chat_history = 50;
 struct MultiplayerChatLine {
     std::uint64_t sequence{};   // local arrival order, increasing within the process
     std::uint64_t sender{};     // Steam id; 0 for a notice from ReSkate itself
+    std::uint64_t received{};   // local monotonic time (microseconds) the line arrived
     std::string name, text;
     bool local{};               // sent by this player
     // The sender's role, as their nametag shows it: its colour (IM_COL32 layout, 0 = none)
-    // and a tag shown in a box before the name ("Dev", "Creator", "Homie", "Admin", "Host", "Friend" or empty).
+    // and a tag shown in a box before the name ("Dev", "Staff", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend", "Server" or empty).
     std::uint32_t color{};
     std::string tag;
+    // With the chat filter on, `text` is masked and this is the line as sent (same length), so
+    // the overlay can keep emote names the filter caught; empty when nothing was masked.
+    std::string unmasked;
+    bool server{}; // said by the dedicated server itself: its console, welcome or answers
+    // The colour of the line's own text when it is not the usual one (IM_COL32 layout, 0 = usual):
+    // a dedicated server's lines, in the colour its owner chose.
+    std::uint32_t text_color{};
 };
 // A command typed into chat with a leading "/" (shown as the player types "/").
 struct MultiplayerChatCommand {
@@ -82,12 +120,34 @@ struct MultiplayerChatCommand {
     std::string argument;    // what Tab completes after it: "player", "map", "time" or ""
 };
 // What the chat overlay reads each frame: cheap to copy, unlike the full model.
+// The vote a dedicated server is running or has just finished, for the card above chat.
+struct MultiplayerVote {
+    std::uint32_t id{};          // 0: none
+    std::string label;           // "change the map to ..."
+    unsigned yes{}, no{}, needed{}, seconds{}; // seconds: left of a running one
+    std::uint8_t outcome{};      // 0 running, 1 passed, 2 failed, 3 cancelled
+    std::uint8_t mine{};         // this player's answer: 0 none yet, 1 yes, 2 no; in a poll, 1 + the answer's index
+    bool may_vote{};             // not the player a kick vote is about
+    std::uint32_t yes_bind{}, no_bind{}; // the player's binds for Yes and No (controller_bindings.h), 0: none
+    // A poll: a question (`label`) with answers and a count for each, instead of yes and no.
+    bool poll{};
+    std::vector<std::string> answers;
+    std::vector<unsigned> counts;
+};
+// A dedicated server's announcement, for its card. `id` 0: none showing.
+struct MultiplayerAnnouncement {
+    std::uint32_t id{};
+    std::string text;
+    unsigned seconds{}; // how long it still shows
+};
 struct MultiplayerChat {
     bool available{};           // in a session that can carry chat
     std::uint64_t latest{};     // sequence of the newest line, 0 when empty
     std::vector<MultiplayerChatLine> lines;
     std::vector<MultiplayerChatCommand> commands; // what "/" offers in this session
     std::vector<std::string> players, maps;       // what their arguments complete to
+    MultiplayerVote vote;
+    MultiplayerAnnouncement announcement;
 };
 // A player this PC's lobbies never admit, kept in the local profile.
 struct MultiplayerBan {
@@ -95,11 +155,18 @@ struct MultiplayerBan {
     std::string name;          // as they were known when banned; may be empty
     std::int64_t added{};      // Unix time
 };
+inline constexpr float player_distance_least = 50.f, player_distance_unlimited = 1000.f;
 struct MultiplayerModel {
     VoiceModel voice;
     std::vector<MultiplayerBan> bans;
     unsigned tps = multiplayer_default_tps;
     ObjectPlacement object_placement = ObjectPlacement::everyone;
+    // Objects each player may have placed in this session (0: no limit), the limit this
+    // player is held to (0 for the host and a server's admins), and how many they have placed.
+    unsigned object_limit{}, object_limit_own{}, objects_placed{};
+    // This player may resize the objects they place (a dedicated server can turn it off for its
+    // players; its admins always may).
+    bool object_scaling{true};
     // Host setting: whether guests may use noclip / No Bail (the host and server admins always may).
     bool guest_noclip{true}, guest_no_bail{true}, guest_boosts{true};
     // Host setting: guests skate with the host's physics tuning (on a dedicated server: the
@@ -108,13 +175,34 @@ struct MultiplayerModel {
     std::string tuning_status;
     // Local display preference: the floating name label above each peer.
     bool nametags{true};
-    // Nametag style: ReSkate's own (name, distance, role colours, dots) or the game's.
-    bool custom_nametags{true};
     // Local: whether session text chat shows at all (and T opens it).
     bool chat_visible{true};
     // Local: bad words in chat names and messages show as **** (on by default).
     bool chat_filter{true};
-    // Local: the tag the ReSkate backend gives this player ("Dev", "Creator" or "Homie"; empty
+    // Local, for ReSkate's nametags: `nametag_distance` is how far away a player's name still
+    // shows (past it they are a dot), `nametag_dots` whether those dots and the ones at the
+    // screen's edge for off-screen players show at all, `nametags_friends` names only the
+    // player's Steam friends.
+    // Local: how far away another player still gets a skater built for them, in metres. Past
+    // it they keep their nametag or dot. Each skater costs memory and frame time, in view or
+    // not. `player_distance_unlimited` and above: every player, however far.
+    float player_distance{120.f};
+    // Local: connect straight to dedicated servers that offer it (their "connection": "direct")
+    // instead of through Steam's relays. Off: always the relays, and no server sees this PC's address.
+    bool prefer_direct{true};
+    float nametag_distance{120.f};
+    bool nametag_dots{true};
+    bool nametags_friends{};
+    // Local: chat bubbles above each skater's head. `chat_bubbles_distance` is how far away
+    // a player may be and still show one, `chat_bubbles_duration` how many seconds a line
+    // stays before it fades, `chat_bubbles_history` how many recent lines stack up.
+    // `chat_bubbles_own` also shows this player's own lines.
+    bool chat_bubbles{true};
+    bool chat_bubbles_own{};
+    float chat_bubbles_distance{40.f};
+    float chat_bubbles_duration{5.f};
+    int chat_bubbles_history{3};
+    // Local: the tag the ReSkate backend gives this player ("Dev", "Staff", "Content Creator", "Centrix" or "Homie"; empty
     // for most players) and its role colour, and whether they show it, and the animated items
     // that come with it, to everyone.
     std::string identity_tag;
@@ -122,15 +210,16 @@ struct MultiplayerModel {
     bool identity_tag_shown{true}, identity_items_shown{true};
     // Local: how each of this player's marked cosmetics is coloured, for the Special page: what
     // they wear in each slot ("Top", "Shoes", ...), then the parts of their board. mode: 0 what
-    // their list gives (`identity_animation`: "RAINBOW", "RED" or "GOLD"), 1 off, 2 a gradient
-    // between the two colours they picked, 3 the first of them alone. speed: 0 normal, 1 slow,
-    // 2 fast.
+    // their list gives (`identity_animation`: "RAINBOW", "GREEN", "RED", "BLUE" or "GOLD"), 1 off, 2 a gradient
+    // between the two colours they picked, 3 the first of them alone, 4 the rainbow (offered
+    // when `identity_rainbow`: to the staff). speed: 0 normal, 1 slow, 2 fast.
     struct IdentityStyle {
         std::string name;
         int mode{}, speed{};
         std::array<float, 3> from{}, to{};
     };
     std::vector<IdentityStyle> identity_styles;
+    bool identity_rainbow{};
     std::string identity_animation;
     float voice_range = default_voice_range;  // how far the host (or server) forwards proximity voice
     // In a dedicated server's session: the server is the host but not a player.

@@ -26,6 +26,16 @@ namespace fb = frostbite;
 std::string lower(std::string_view text);
 
 std::vector<std::byte> read_file(const fs::path& path);
+// A hash of `name` that ignores case (ASCII), to rule a name out before a lower-case copy of
+// it is made to look it up: most names a merge looks at are in no table.
+constexpr std::uint64_t name_hash(std::string_view name) noexcept {
+    std::uint64_t value = 0xCBF29CE484222325ULL;
+    for (char c : name) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + ('a' - 'A'));
+        value = (value ^ static_cast<unsigned char>(c)) * 0x100000001B3ULL;
+    }
+    return value;
+}
 void write_file(const fs::path& path, std::span<const std::byte> bytes);
 using vfs::archive_file;
 void unshare(const fs::path& path);
@@ -102,16 +112,47 @@ public:
     CasStore(fs::path baseRoot, fs::path output, const native_db::Node& layout);
 
     // Appends an encoded payload to the merged patch's own archive for that
-    // install chunk, returning where it landed.
+    // install chunk, returning where it landed. A waiting store (below) keeps it
+    // instead and says where it is among what it holds.
     [[nodiscard]] fb::BundleFileInfo write(std::uint32_t installChunk, std::uint16_t archive,
                                            std::span<const std::byte> encoded);
+
+    // Superbundles are merged on several threads, and what each writes has to land
+    // where it would have had they been merged one after another. So each is merged
+    // with a waiting copy of the store. It reads as the store does and keeps what it
+    // is given, placing it in an archive index no file has (waiting_archive) at the
+    // offset within what it holds for that file. When every superbundle before its
+    // own has been settled, settle() appends what it holds to the real archives, and
+    // settled() then moves a placement that points into it to where that went.
+    static constexpr std::uint16_t waiting_archive = 0xFFFF;
+    [[nodiscard]] CasStore waiting() const;
+    [[nodiscard]] bool holding() const noexcept { return !held_.empty(); }
+    [[nodiscard]] static bool waits(const fb::CasIdentifier& location) noexcept {
+        return location.patch && location.archive == waiting_archive;
+    }
+    void settle(CasStore& waiting);
+    // True when the placement was one of this waiting store's; it now names the archive.
+    bool settled(fb::CasIdentifier& location, std::uint32_t& offset) const;
 
     void shift(fb::CasIdentifier& location, std::uint32_t& offset,
                const ArchivePlacement* placement) const;
 
 private:
+    // Appends to one of the patch's own archives; returns where the bytes start.
+    std::uint64_t append(const fs::path& path, std::span<const std::byte> encoded);
+    [[nodiscard]] fs::path archive_path(std::uint32_t installChunk, std::uint16_t archive) const;
+
     fs::path output_;
     std::map<std::wstring, std::uint64_t> offsets_;
+    // A waiting store: what it holds for each archive file, the one archive index it
+    // was asked to write to, and where each file's bytes went once settled.
+    struct Held {
+        std::vector<std::byte> bytes;
+        std::uint64_t at{};
+    };
+    bool waiting_{};
+    std::optional<std::uint16_t> archive_;
+    std::map<std::wstring, Held> held_;
 };
 
 using ArchiveUse = std::set<std::pair<std::uint32_t, std::uint16_t>>;
@@ -226,6 +267,40 @@ AssetOverrides collect_asset_overrides(const std::vector<const Mod*>& mods,
                                        const std::map<const Mod*, RelativeFiles>& modFiles,
                                        const CasStore& store, const fs::path& baseRoot,
                                        const fs::path& gameRoot, MergeReport& report);
+
+// A bundle's chunk metadata is a list with one record for each of its chunks: the
+// hash of the name of the resource the chunk belongs to ("h64") and what the
+// engine needs before it streams the chunk (a texture's first mip). In the game's
+// own bundles the records are in the order of the chunks' guids, not the order
+// the chunks are listed in. A mod's copy starts from the game's list as it is and
+// has, at the place each chunk it adds or replaces is listed at, a record its
+// tool wrote: for an added chunk that is the chunk's own record, but for a
+// replaced one it has taken the place of another chunk's (and older tools left
+// its hash empty), so the game's record for that other chunk is gone from the
+// mod's list.
+struct ChunkRecord {
+    static constexpr std::size_t none = static_cast<std::size_t>(-1);
+    fb::Guid guid;
+    std::size_t copy{none};     // the list of the copy this version of the chunk came in; none when that copy has no list
+    std::size_t index{};        // where that copy lists the chunk
+    std::size_t shipped{none};  // where the game's copy lists it; none for a chunk mods add
+};
+// The list for a merged bundle, written as the game writes one: a record for each
+// of `chunks` (the bundle's chunks, as listed), in the order of their guids. A
+// chunk of the game's keeps the game's record for it, whichever copy carries it
+// (`game` is the game's list among `lists`, `shipped` the chunks the game's copy
+// lists); when the kept version is one a mod replaced it with, the first mip that
+// mod's record gives goes into it. A chunk a mod adds has that mod's record, and
+// one nothing describes gets a record that says nothing. In a bundle the game
+// does not ship, or ships without a list, every chunk is one a mod adds. When
+// every chunk is the game's own where the game lists it, the game's list comes
+// back as it is; so does one mod's, for a bundle without a list in the game that
+// is that mod's copy alone.
+// Throws when a list that is needed cannot be read.
+[[nodiscard]] std::vector<std::byte> merge_chunk_metadata(std::span<const std::vector<std::byte>> lists,
+                                                          std::span<const ChunkRecord> chunks,
+                                                          std::size_t game = ChunkRecord::none,
+                                                          std::span<const fb::Guid> shipped = {});
 
 fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         std::vector<Source>& sources, MergeReport& report,

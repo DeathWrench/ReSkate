@@ -53,6 +53,7 @@ void receive_cosmetics(Session &s, const NativeFrame &local, std::uint64_t now) 
                 link.pending_cosmetics.push_back(std::move(item));
                 continue;
             }
+            if (direct && dedicated_host(s)) continue; // only what the server passed on (identity_link)
             if (p.map == s.map &&
                 routed_source(p, source->member, link.member.id, s.mode == Mode::host, s.host_id, direct) &&
                 accept_data(*source, p, now) && s.mode == Mode::host)
@@ -73,7 +74,8 @@ constexpr std::size_t chat_proofs_kept = 8;
 // Whether a line the host passed on as this player's would show a badge that rests on who
 // they are: another guest's, known to Steam, on one of the backend's lists and showing it.
 bool owes_proof(const Session &s, const Peer &sender) {
-    return s.mode == Mode::join && sender.member.id != s.host_id && steam_vouched(s, sender) && shows_tag(sender) &&
+    // Their own copy only comes over a direct connection: without one there is none to wait for.
+    return s.mode == Mode::join && sender.member.id != s.host_id && sender.direct_ready && shows_tag(sender) &&
            identity_mark(sender.member.id);
 }
 std::string chat_name(Session &s, const Peer &sender) {
@@ -129,6 +131,73 @@ void proven_chat(Session &s, Peer &sender, const Packet &p, std::uint64_t now) {
 // of one stream in a batch can be dropped undecoded. Keep the newest ones playback may
 // still interpolate between (its delay plus a frame each side) among those whose baseline
 // is already here; baselines and every other kind are always read.
+// The poses in one message from a dedicated server (pose_batch.h), each as the packet it would
+// have been had it come alone. A message read in full is noted for the ack; one with a pose
+// this game could not rebuild (it never got what that pose builds on) is not, so the server
+// goes on building on what this game does hold.
+std::vector<Packet> unpack_poses(Session &s, std::span<const std::uint8_t> bytes) {
+    std::vector<Packet> out;
+    const auto batch = pose_batch::read(bytes);
+    if (!batch || batch->world != static_cast<std::uint32_t>(s.world) || batch->map != static_cast<std::uint32_t>(s.map)) return out;
+    // Streams of players who left are dropped once there are many more than there are players.
+    if (s.pose_streams.size() > 2 * max_players)
+        std::erase_if(s.pose_streams, [&](const auto &stream) { return !find_peer(s, stream.second.source); });
+    bool complete = true;
+    out.reserve(batch->entries.size());
+    for (const auto &entry : batch->entries) {
+        auto rebuilt = pose_batch::rebuild(s.pose_streams, entry);
+        if (!rebuilt) {
+            complete = false;
+            continue;
+        }
+        if (rebuilt->repeat) continue;
+        Packet p;
+        p.kind = PacketKind::pose;
+        p.session = s.secret;
+        p.map = s.map;
+        p.world = s.world;
+        p.source = rebuilt->source;
+        p.epoch = rebuilt->epoch;
+        p.sequence = rebuilt->sequence;
+        p.time_us = rebuilt->time_us;
+        p.player_collision = rebuilt->collision;
+        p.pose_interval_us = rebuilt->rate == pose_batch::Rate::full   ? multiplayer_pose_interval(s.tps)
+                             : rebuilt->rate == pose_batch::Rate::half ? 100000U
+                                                                       : 200000U;
+        p.pose = pose_codec::restore(rebuilt->pose);
+        out.push_back(std::move(p));
+    }
+    if (complete) {
+        s.pose_ack.note(batch->number);
+        s.pose_ack_due = true;
+    }
+    return out;
+}
+// The skaters' sound in one message from a dedicated server (sound_codec.h), each player's as
+// the packet it would have been had it come alone.
+std::vector<Packet> unpack_sound(Session &s, std::span<const std::uint8_t> bytes) {
+    std::vector<Packet> out;
+    if (s.sound_streams.size() > 2 * max_players)
+        std::erase_if(s.sound_streams, [&](const auto &stream) { return !find_peer(s, stream.second.source); });
+    auto heard = sound_codec::read(s.sound_streams, bytes, s.world, s.map);
+    if (!heard) return out;
+    out.reserve(heard->size());
+    for (auto &one : *heard) {
+        if (!valid_audio_batch(one.samples)) continue;
+        Packet p;
+        p.kind = PacketKind::audio;
+        p.session = s.secret;
+        p.map = s.map;
+        p.world = s.world;
+        p.source = one.source;
+        p.epoch = one.epoch;
+        p.sequence = one.sequence;
+        p.time_us = one.time_us;
+        p.audio = std::move(one.samples);
+        out.push_back(std::move(p));
+    }
+    return out;
+}
 std::vector<bool> stale_pose_deltas(Session &s, const std::vector<TransportMessage> &messages) {
     std::vector<bool> stale(messages.size());
     struct Stream {
@@ -138,6 +207,8 @@ std::vector<bool> stale_pose_deltas(Session &s, const std::vector<TransportMessa
     std::vector<Stream> streams;
     for (auto i = messages.size(); i-- > 0;) {
         const auto &bytes = messages[i].bytes;
+        // (A dedicated server sends none of these: what it sends that starts the same is sound.)
+        if (dedicated_host(s) && messages[i].peer == s.host_id) continue;
         // Sparse pose patches (delta_codec.cpp): "RMS1"/"RMS2", source at 4, kind at 20.
         if (bytes.size() <= 34 || bytes[0] != 'R' || bytes[1] != 'M' || bytes[2] != 'S' ||
             (bytes[3] != '1' && bytes[3] != '2'))
@@ -202,9 +273,15 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
         for (auto &peer : active_peers(s)) peer.pose_delivery = {};
     }
     apply_object_placement(s, p.object_placement);
+    apply_object_limit(s, p.object_limit); // after server_admin, which exempts an admin
+    s.object_scaling = !dedicated_host(s) || p.object_scaling;
+    s.sync_effects = !dedicated_host(s) || p.sync_effects;
     apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts);
     s.enforce_tuning = p.enforce_tuning;
     s.server_votes = dedicated_host(s) ? p.server_votes : 0;
+    s.server_polls = dedicated_host(s) ? p.server_polls : 0;
+    if (dedicated_host(s)) s.server_custom_votes = p.server_custom_votes;
+    else s.server_custom_votes.clear();
     publish_chat(s); // the "/" list follows the server's votes, its players and its maps
     if (s.object_clears && *s.object_clears != p.object_clears) s.clear_pending = true;
     s.object_clears = p.object_clears;
@@ -236,12 +313,39 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     }
     s.capacity = p.capacity;
     s.roster_voice_range = p.voice_range;
+    s.server_chat_badge = p.chat_badge;
+    s.server_chat_text = p.chat_text;
+    // The server's vote. A new one starts with no answer from this player, unless they started
+    // it and the server counts that as a yes. A poll they started they still answer.
+    if (dedicated_host(s)) {
+        const auto local = s.transport.status().local_id;
+        const bool poll = p.vote.kind == server_vote_poll;
+        if (p.vote.id != s.vote.id) s.vote_mine = p.vote.id && !poll && p.vote.starter == local && p.vote.yes ? 1 : 0;
+        s.vote = p.vote;
+        s.vote_ends = now_us() + std::uint64_t{p.vote.seconds} * 1000000;
+        // The Yes and No binds answer a yes/no vote; a poll is answered with the number keys, on
+        // its card or with /1, /2...
+        server_vote_open_flag.store(p.vote.id && !poll && p.vote.outcome == vote_running && p.vote.target != local,
+                                    std::memory_order_relaxed);
+        server_poll_answers_flag.store(p.vote.id && poll && p.vote.outcome == vote_running
+                                           ? static_cast<unsigned>(std::min(p.vote.answers.size(), max_vote_answers)) : 0U,
+                                       std::memory_order_relaxed);
+        if (p.announcement.id != s.announcement.id)
+            s.announcement_ends = now_us() + std::uint64_t{p.announcement.seconds} * 1000000;
+        s.announcement = p.announcement;
+    }
     ++s.party_revision; // anyone's party may have changed
     // A dedicated server knows players only by the name each sent in their hello.
     for (auto &peer : active_peers(s))
         if (peer.member.id && peer.member.name.empty() && individual_steam_id(peer.member.id))
             peer.member.name = s.transport.name(peer.member.id);
-    s.transport.allow_peers(p.members);
+    // On a dedicated server games link only to prove who a player is (identity_link).
+    if (dedicated_host(s)) {
+        std::vector<Member> known;
+        for (const auto &member : p.members)
+            if (identity_link(s, member.id)) known.push_back(member);
+        s.transport.allow_peers(known);
+    } else s.transport.allow_peers(p.members);
     s.last_routes = 0;
     s.status = "Connected through Steam. Network updates: " + std::to_string(s.tps) + " TPS.";
 }
@@ -255,7 +359,14 @@ bool accept_data(Peer &peer, const Packet &p, std::uint64_t now) {
         }
     } else if (p.kind == PacketKind::audio)
         accepted = peer.sound_budget.accept(now, p.audio.size()) && peer.audio.push(p, now);
-    else if (p.kind == PacketKind::pose)
+    else if (p.kind == PacketKind::effects) {
+        accepted = peer.effect_budget.accept(now);
+        if (accepted) {
+            const auto due = now + std::max<std::uint64_t>(100000, peer.received_pose_interval + 50000);
+            for (const auto &impact : p.impacts) peer.impacts.emplace_back(due, impact);
+            while (peer.impacts.size() > 64) peer.impacts.pop_front();
+        }
+    } else if (p.kind == PacketKind::pose)
         accepted = peer.poses.push_validated(p, now);
     if (accepted) {
         peer.last_packet = now;
@@ -320,7 +431,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             } else {
                 if (p.connected_at || p.direct_ready)
                     reset_direct(s, p, now);
-                if (p.handshaken && now >= p.next_dial &&
+                if (p.handshaken && now >= p.next_dial && (!dedicated_host(s) || identity_link(s, id)) &&
                     dial_peer(s.transport.status().local_id, id, s.host_id)) {
                     p.next_dial = now + 3000000;
                     s.transport.connect_peer(id);
@@ -410,12 +521,23 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
     }
     const auto messages = s.transport.receive();
     const auto stale = stale_pose_deltas(s, messages);
-    for (std::size_t index = 0; index < messages.size(); ++index) {
+    // A message of several poses from a dedicated server is taken apart, and the loop goes
+    // round once for each pose in it as if it had come alone.
+    std::vector<Packet> batch;
+    std::size_t batch_at{};
+    for (std::size_t index = 0; index < messages.size(); batch_at < batch.size() ? index : ++index) {
         const auto &message = messages[index];
         auto *link = find_peer(s, message.peer);
-        if (!link)
+        if (!link) {
+            batch.clear();
+            batch_at = 0;
             continue;
+        }
         const bool direct_link = s.mode == Mode::join && message.peer != s.host_id;
+        const bool resumed = batch_at < batch.size();
+        if (!resumed) {
+            batch.clear();
+            batch_at = 0;
         if (!link->budget.accept(message.arrived ? message.arrived : now, message.bytes.size(),
                                  s.mode == Mode::join && !direct_link ? max_remote_players : 1U)) {
             disconnect(s, message.peer, "Peer exceeded the multiplayer packet limit.");
@@ -425,8 +547,29 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         }
         if (stale[index])
             continue;
+            // A dedicated server's own messages (pose_batch.h, sound_codec.h). Only what comes
+            // from the server is read as one: sound_codec's first four bytes are also those of
+            // the pose updates games send each other directly (delta_codec's "RMS1"), which
+            // must go on to be decoded as what they are.
+            if (s.mode == Mode::join && !direct_link && dedicated_host(s)) {
+                // The server saying which of this game's own pose messages it read.
+                if (const auto ack = pose_batch::Ack::read(message.bytes)) {
+                    s.pose_upload.ack(*ack);
+                    continue;
+                }
+                if (sound_codec::is_sound(message.bytes)) {
+                    batch = unpack_sound(s, message.bytes);
+                    if (batch.empty()) continue;
+                } else if (pose_batch::is_batch(message.bytes)) {
+                    batch = unpack_poses(s, message.bytes);
+                    if (batch.empty()) continue;
+                }
+            }
+        }
         bool missing_reference{};
-        auto decoded = link->receiver.receive(message.bytes, missing_reference, s.world);
+        std::optional<Packet> decoded;
+        if (batch_at < batch.size()) decoded = std::move(batch[batch_at++]);
+        else decoded = link->receiver.receive(message.bytes, missing_reference, s.world);
         if (missing_reference)
             continue;
         if (!decoded || decoded->session != s.secret ||
@@ -598,7 +741,8 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             if (p.kind == PacketKind::peer_hello)
                 send_required(s, message.peer, encode_wire(packet(s, PacketKind::peer_welcome, now)));
             if (first) {
-                send_required(s, message.peer, s.cosmetic_packet);
+                // An outfit, like everything else, reaches a dedicated server's players through it.
+                if (!dedicated_host(s)) send_required(s, message.peer, s.cosmetic_packet);
                 s.last_routes = 0;
             }
             continue;
@@ -848,6 +992,10 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         }
         if (direct_link && p.kind == PacketKind::pose)
             link->last_direct_pose = now;
+        // A dedicated server sends everything itself, held to its rules (how far a body part may
+        // be resized, say). A link between two of its games is there to prove who they are
+        // (identity_link); nothing else that arrives over one is taken.
+        if (direct_link && dedicated_host(s)) continue;
         if (p.kind == PacketKind::objects) {
             if (direct_link) { disconnect(s, message.peer, "Object updates must use the host route."); continue; }
             const auto result = source->objects.receive(p.objects);
@@ -877,6 +1025,12 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 (p.kind == PacketKind::audio && std::any_of(p.audio.begin(), p.audio.end(),
                     [](const auto &sample) { return sample.event; })),
                 p.kind != PacketKind::cosmetics, now, p.source);
+    }
+    // Tell the server which of its pose messages arrived, once for everything read this tick.
+    if (s.pose_ack_due && s.mode == Mode::join) {
+        const auto ack = s.pose_ack.bytes();
+        s.transport.send(s.host_id, ack, false, true, TrafficLane::gameplay);
+        s.pose_ack_due = false;
     }
     receive_cosmetics(s, local, now);
     for (std::size_t i = 0; i < s.used_slots; ++i) {

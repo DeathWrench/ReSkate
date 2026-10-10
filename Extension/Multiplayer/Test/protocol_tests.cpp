@@ -3,6 +3,7 @@
 #include "Extension/Multiplayer/Net/protocol.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
 #include "Extension/Throwdowns/throwdown_wire.h"
+#include "Engine/Game/World/park_randomization.h"
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -46,6 +47,23 @@ void tick_rates_codec() {
             check(decoded && decoded->tps == rate, "Roster lost host TPS");
         }
     }
+}
+void random_parks_codec() {
+    std::mt19937 generator{9147};
+    auto p = frame(1, 0);
+    p.kind = PacketKind::roster;
+    p.members = {{76561198000000001ULL, p.epoch, "Host"}};
+    for (unsigned roll = 0; roll < 1000; ++roll) {
+        p.parks = dingosdk::random_park_choices(generator);
+        const auto decoded = decode_wire(encode_wire(p));
+        check(decoded && decoded->parks == p.parks, "A random park selection changed in the host roster");
+    }
+    // This variant exists at Historic, but not Construction: lot-specific
+    // validation must also hold when sharing randomized layouts.
+    p.parks[0] = "flumppark_10";
+    bool rejected{};
+    try { (void)encode(p); } catch (const std::invalid_argument&) { rejected = true; }
+    check(rejected, "A park layout for another lot was shared");
 }
 void compressed_codec() {
     auto p = frame(1, 125);
@@ -559,6 +577,72 @@ void object_codec() {
     check(decode(encode(roster))->members.size() == 32, "A 32-player roster failed to round-trip");
     roster.members.push_back({76561198000000033ULL, 50, "Extra"});
     check(reject(roster), "A 33rd roster member was accepted");
+    // A dedicated server lists its reserved players and admins past its limit, and the vote it runs.
+    Packet served = roster;
+    served.members.insert(served.members.begin(), Member{0x0130000100000001ULL, 7, "Server"});
+    check(dingosdk::multiplayer::game_server_steam_id(served.members[0].id), "The test's server ID is not a game server's");
+    served.vote = {7, server_vote_kick, vote_running, 3, 1, 5, 21, 76561198000000002ULL, 76561198000000003ULL, "kick Skater"};
+    const auto listed = decode(encode(served));
+    check(listed && listed->members.size() == 34 && listed->capacity == 32, "A server's roster past its limit failed to round-trip");
+    check(listed && listed->vote == served.vote, "A server's vote failed to round-trip");
+    served.sync_effects = false;
+    const auto plain = decode(encode(served));
+    check(plain && !plain->sync_effects && listed && listed->sync_effects, "The roster's skater effects rule failed to round-trip");
+    served.object_scaling = false;
+    const auto fixed = decode(encode(served));
+    check(fixed && !fixed->object_scaling && listed && listed->object_scaling, "The roster's object scaling rule failed to round-trip");
+    served.vote = {};
+    const auto quiet = decode(encode(served));
+    check(quiet && quiet->vote == ServerVote{}, "A roster without a vote did not come back without one");
+    served.vote.id = 1;
+    served.vote.label.assign(max_vote_label + 1, 'a');
+    check(reject(served), "An overlong vote label was encoded");
+    // A poll on the card: its question and answers, a count for each, and no yes or no.
+    served.vote = {8, server_vote_poll, vote_running, 0, 0, 0, 40, 76561198000000002ULL, 0, "Next map?",
+                   {"Grom", "San Vansterdam", "Stadium"}, {3, 1, 0}};
+    const auto polled = decode(encode(served));
+    check(polled && polled->vote == served.vote, "A server's poll failed to round-trip");
+    auto bad_poll = served;
+    bad_poll.vote.counts.pop_back();
+    check(reject(bad_poll), "A poll with a count missing was encoded");
+    bad_poll = served;
+    bad_poll.vote.answers = {"Only one"};
+    bad_poll.vote.counts = {1};
+    check(reject(bad_poll), "A poll with one answer was encoded");
+    bad_poll = served;
+    bad_poll.vote.answers[1].assign(max_vote_answer + 1, 'b');
+    check(reject(bad_poll), "An overlong poll answer was encoded");
+    bad_poll = served;
+    bad_poll.vote.answers.resize(max_vote_answers + 1, "x");
+    bad_poll.vote.counts.resize(max_vote_answers + 1);
+    check(reject(bad_poll), "A poll with seven answers was encoded");
+    bad_poll = served;
+    bad_poll.vote.kind = server_vote_map;
+    check(reject(bad_poll), "A yes/no vote with answers was encoded");
+    // Who may start polls, the owner's own votes, and an announcement ride on the roster too.
+    served.vote = {};
+    served.server_polls = static_cast<std::uint8_t>(ServerPolls::everyone);
+    served.server_custom_votes = {{"restart", "Reload the current map", {}}, {"noclip", "", {"on", "off"}}};
+    served.announcement = {4, 12, "Tournament starts in 10 minutes!"};
+    const auto extras = decode(encode(served));
+    check(extras && extras->server_polls == served.server_polls && extras->server_custom_votes == served.server_custom_votes &&
+              extras->announcement == served.announcement,
+          "Polls, custom votes or the announcement failed to round-trip");
+    auto bad_extras = served;
+    bad_extras.server_custom_votes[0].name = "Restart now";
+    check(reject(bad_extras), "A custom vote name with capitals and a space was encoded");
+    bad_extras = served;
+    bad_extras.server_custom_votes.resize(server_custom_vote_limit + 1, served.server_custom_votes[0]);
+    check(reject(bad_extras), "Too many custom votes were encoded");
+    bad_extras = served;
+    bad_extras.server_polls = 3;
+    check(reject(bad_extras), "An unknown poll setting was encoded");
+    bad_extras = served;
+    bad_extras.announcement.text = "two\nlines";
+    check(reject(bad_extras), "An announcement that is not one chat line was encoded");
+    const auto announced = encode(served);
+    for (std::size_t length = announced.size() - 40; length < announced.size(); ++length)
+        check(!decode(std::span(announced).first(length)), "A truncated roster with an announcement decoded");
 }
 void chat_codec() {
     const auto reject = [](const Packet &packet) {
@@ -721,6 +805,7 @@ void dedicated_server_codec() {
     roster.members = {{server, 10, "My server"}, {player, 20, "Skater", true}, {other, 30, "Other"}};
     roster.voice_range = 450;
     roster.guest_noclip = false;
+    roster.object_limit = 50;
     Packet teleport;
     teleport.kind = PacketKind::teleport; teleport.session = 9; teleport.epoch = 10; teleport.map = 11; teleport.source = server;
     teleport.teleport = {612.5f, 199.25f, -1075.75f};
@@ -744,6 +829,47 @@ void dedicated_server_codec() {
           "Server roster, admin flags or voice range lost");
     check(decoded && !decoded->guest_noclip && decoded->guest_no_bail && decoded->guest_boosts,
           "Guest noclip / No Bail / boost permissions lost");
+    // The limit on each player's objects rides in the roster too; one past the protocol's own is refused.
+    check(decoded && decoded->object_limit == 50, "The object limit was lost");
+    {
+        auto unlimited = roster;
+        unlimited.object_limit = 0;
+        const auto back = decode(encode(unlimited));
+        check(back && back->object_limit == 0, "No object limit did not stay none");
+        auto over = roster;
+        over.object_limit = dingosdk::max_object_limit + 1;
+        bool refused{};
+        try {
+            encode(over);
+        } catch (const std::exception &) {
+            refused = true;
+        }
+        check(refused, "An object limit past the protocol's was sent");
+        check(dingosdk::parse_object_limit("25") == 25U && dingosdk::parse_object_limit("off") == 0U &&
+                  dingosdk::parse_object_limit("1024") == 1024U && !dingosdk::parse_object_limit("1025") &&
+                  !dingosdk::parse_object_limit("") && !dingosdk::parse_object_limit("-1") && !dingosdk::parse_object_limit("ten"),
+              "Object limits were not read");
+        // What a host shows of a layout under a limit: what is already shown stays, the rest fills up in order.
+        const auto object = [](std::uint64_t id) {
+            dingosdk::NetworkObject value;
+            value.id = id;
+            value.item = "own_bk_test";
+            return value;
+        };
+        const auto ids = [](const std::vector<dingosdk::NetworkObject> &layout) {
+            std::vector<std::uint64_t> out;
+            for (const auto &entry : layout) out.push_back(entry.id);
+            return out;
+        };
+        const std::vector<dingosdk::NetworkObject> uploaded{object(1), object(2), object(3), object(4), object(5)};
+        std::map<std::uint64_t, dingosdk::NetworkObject> shown{{4, object(4)}, {5, object(5)}};
+        check(ids(limited_layout(uploaded, {}, 0)) == std::vector<std::uint64_t>{1, 2, 3, 4, 5} &&
+                  ids(limited_layout(uploaded, {}, 9)) == std::vector<std::uint64_t>{1, 2, 3, 4, 5},
+              "A layout within the limit was cut");
+        check(ids(limited_layout(uploaded, {}, 3)) == std::vector<std::uint64_t>{1, 2, 3}, "A layout over the limit was not cut to it");
+        check(ids(limited_layout(uploaded, shown, 3)) == std::vector<std::uint64_t>{4, 5, 1},
+              "Objects already shown lost their place to newer ones");
+    }
     // Parties ride in the roster: each has one leader and at least two members; a server is in none.
     auto party = roster;
     party.members[1].party = party.members[2].party = 7;
@@ -812,6 +938,33 @@ void dedicated_server_codec() {
     tuning.tuning.assign(max_physics_tuning + 1, 0);
     check(reject(tuning), "Oversized physics tuning encoded");
     Packet extras;
+    // Skater effects: a player's contacts with the world, a few to a packet.
+    {
+        Packet fx;
+        fx.kind = PacketKind::effects; fx.session = 9; fx.epoch = 10; fx.map = 11; fx.source = 12;
+        dingosdk::multiplayer::Impact slide;
+        slide.position = {594.5f, 199.15f, 1070.1f};
+        slide.velocity = {16.97f, -8.44f, 0.f};
+        slide.normal = {0.f, 1.f, 0.f};
+        slide.material = 49;
+        fx.impacts = {dingosdk::multiplayer::wire_impact(slide), dingosdk::multiplayer::wire_impact(slide)};
+        const auto back = decode(encode(fx));
+        check(back && back->kind == PacketKind::effects && back->impacts == fx.impacts, "Skater effects failed to round-trip");
+        fx.impacts.assign(dingosdk::multiplayer::max_impacts + 1, slide);
+        bool refused{};
+        try { encode(fx); } catch (const std::invalid_argument &) { refused = true; }
+        check(refused, "More contacts than a packet carries were encoded");
+        fx.impacts = {slide};
+        fx.impacts[0].velocity = {60.f, 0.f, 0.f};
+        refused = false;
+        try { encode(fx); } catch (const std::invalid_argument &) { refused = true; }
+        check(refused, "A contact faster than the game allows was encoded");
+        fx.impacts[0] = slide;
+        fx.impacts[0].material = 0x2000;
+        refused = false;
+        try { encode(fx); } catch (const std::invalid_argument &) { refused = true; }
+        check(refused, "A material past the game's table was encoded");
+    }
     extras.kind = PacketKind::physics_extras; extras.session = 9; extras.epoch = 10; extras.map = 11; extras.source = player;
     check(decode(encode(extras)) && decode(encode(extras))->kind == PacketKind::physics_extras && decode(encode(extras))->extras.empty(),
           "Empty physics extras (the game's own) lost");
@@ -934,6 +1087,7 @@ int main() {
     try {
         codec();
         tick_rates_codec();
+        random_parks_codec();
         compressed_codec();
         sender_timeline();
         greetings();
