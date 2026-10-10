@@ -8,6 +8,7 @@
 #include "chat_emotes.h"
 #include "input_capture.h"
 #include "cursor.h"
+#include <dxgi1_6.h>
 #include <imgui_internal.h>
 
 namespace dingosdk::overlay::detail {
@@ -221,8 +222,15 @@ bool setup_graphics() {
     // queue-type validation are the portable checks here.
     const auto format = description.BufferDesc.Format;
     if (format != DXGI_FORMAT_R8G8B8A8_UNORM && format != DXGI_FORMAT_B8G8R8A8_UNORM
-        && format != DXGI_FORMAT_R10G10B10A2_UNORM && format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+        && format != DXGI_FORMAT_R10G10B10A2_UNORM && format != DXGI_FORMAT_R16G16B16A16_FLOAT) {
+        // Said once for each: with this the overlay never draws, and nothing else says why.
+        static std::atomic<int> said{-1};
+        if (said.exchange(static_cast<int>(format)) != static_cast<int>(format))
+            dingosdk::logging::printf(dingosdk::logging::Level::warning, dingosdk::logging::Channel::graphics,
+                "Overlay: the game presents in a format the overlay does not draw to (DXGI format %d); its menus stay hidden.",
+                static_cast<int>(format));
         return false;
+    }
 
     D3D12_DESCRIPTOR_HEAP_DESC heap{};
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -334,6 +342,25 @@ bool setup_graphics() {
     info.LegacySingleSrvCpuDescriptor = s.srvs->GetCPUDescriptorHandleForHeapStart();
     info.LegacySingleSrvGpuDescriptor = s.srvs->GetGPUDescriptorHandleForHeapStart();
     if (s.win32_ready) s.dx12_ready = ImGui_ImplDX12_Init(&info);
+    // ImGui draws sRGB colours. A game in HDR presents another kind of buffer, where those same
+    // numbers are far too bright and washed out: scRGB (FP16, linear) or HDR10 (10 bits, BT.2020
+    // with the PQ curve, while the display is in HDR). The backend's shader converts for those.
+    {
+        bool hdr_display{};
+        ComPtr<IDXGIOutput> output;
+        ComPtr<IDXGIOutput6> output6;
+        DXGI_OUTPUT_DESC1 display{};
+        if (SUCCEEDED(s.swapchain->GetContainingOutput(&output)) && output && SUCCEEDED(output.As(&output6)) &&
+            SUCCEEDED(output6->GetDesc1(&display)))
+            hdr_display = display.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+        constexpr float hdr_white_nits = 200.0f; // how bright the overlay's white is on an HDR display
+        const int transfer = format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 1
+                           : format == DXGI_FORMAT_R10G10B10A2_UNORM && hdr_display ? 2 : 0;
+        ImGui_ImplDX12_SetOutputTransfer(transfer, hdr_display ? hdr_white_nits : 80.0f);
+        dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::graphics,
+            "Overlay output: %s (buffer format %d, display %s).",
+            transfer == 1 ? "scRGB" : transfer == 2 ? "HDR10" : "SDR", static_cast<int>(format), hdr_display ? "in HDR" : "in SDR");
+    }
     // Font upload uses the exact swapchain queue, and this pinned backend waits
     // for its own upload fence before returning from device-object creation.
     const bool objects = s.dx12_ready && ImGui_ImplDX12_CreateDeviceObjects();
