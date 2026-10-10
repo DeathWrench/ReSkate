@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-// ReSkate's two pages of the game's own pause menu, Multiplayer and Custom Stuff, drawn by
+// ReSkate's two pages of the game's own pause menu, Multiplayer and Mod Options, drawn by
 // ReSkate: the game's menu widgets are a button, a text box and a line of text, which cannot
 // make a list with columns, so the game keeps the frame around a page (its top bar, title and
 // Back prompt) and this draws everything in it: the page's tabs and whichever is open (the
@@ -101,7 +101,7 @@ struct Hub {
     MultiplayerModel model; // its multiplayer part
     CallbacksV3 callbacks;
     bool shown{}, dismissed{}, was_active{}, searched{};
-    // Custom Stuff: the same rows and actions the page has always had (native_tools_view.h).
+    // Mod Options: the same rows and actions the page has always had (native_tools_view.h).
     native_tools::State tools;
     int tools_tab{};
     // Recording a bind (the BINDS tab): which action (0: none), what has been pressed so far,
@@ -807,7 +807,7 @@ void voice_page(Ui &ui, ImVec2 a, ImVec2 z) {
           !h.notice.empty() ? h.notice : mp.voice.transmitting ? std::string("MICROPHONE TRANSMITTING") : mp.voice.status);
 }
 
-// ---------------------------------------------------------------- Custom Stuff
+// ---------------------------------------------------------------- Mod Options
 
 enum ToolsTab : int { official_tab, custom_tab, world_tab, parks_tab, player_tab, online_tab, visuals_tab, binds_tab };
 
