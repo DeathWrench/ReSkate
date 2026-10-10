@@ -180,7 +180,7 @@ namespace {
 // Which of ReSkate's pages is on screen, for the overlay (native_menu_page): when one was last
 // seen selected with the pause menu up (GetTickCount64; 0: not now), and which.
 std::atomic<std::uint64_t> page_seen{};
-std::atomic<int> page_shown{}; // 0: Multiplayer, 1: Custom Stuff
+std::atomic<int> page_shown{}; // 0: Multiplayer, 1: Mod Options
 std::atomic<bool> game_in_menu{};
 // Returns the key of the tab the pause menu has selected (0: none of ours can be told).
 std::uint32_t restore_last_tab(const Context& context, Value menu) {
@@ -284,7 +284,7 @@ void insert(const Context& context) {
         // from the player's last visit, before ours were back. Taking the Store out
         // changes the tab at that index if it is the Store's or later, and the stack
         // then shows the new tab's page only if its length changes too: online the
-        // Multiplayer tab makes it longer, but offline Custom Stuff just takes the
+        // Multiplayer tab makes it longer, but offline Mod Options just takes the
         // Store's place, and the old page stays up, blank, with Back dead. Then keep
         // a copy of the Store item last for now, so the length changes, and drop it
         // once the stack has seen that (trim_store).
@@ -433,8 +433,8 @@ void initialize(const Context& context, Root root, const MultiplayerModel& model
     context.set(context.field(backdrop_stack, 0x3b14d43c), false);
     context.set(context.field(backdrop_stack, 0x2a98baa3), false);
     build_back_action(context, s);
-    static constexpr std::array<const char*, page_count> titles{"MULTIPLAYER", "CUSTOM STUFF"},
-        tab_names{"Multiplayer", "Custom Stuff"};
+    static constexpr std::array<const char*, page_count> titles{"MULTIPLAYER", "MOD OPTIONS"},
+        tab_names{"Multiplayer", "Mod Options"};
     context.text(context.path(s.page, {0x3781b603, text_field}), titles[s.slot]);
     context.set(context.field(s.page, 0xe1d821a3), true);
     context.set(context.field(s.page, 0x616cb924), false);

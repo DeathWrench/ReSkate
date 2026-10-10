@@ -467,8 +467,15 @@ void browse_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, float
     if (!store.picked.empty()) {
         ImGui::Spacing();
         ImGui::AlignTextToFramePadding();
-        ImGui::TextUnformatted(store.picked.size() == 1
-            ? "1 mod selected" : std::format("{} mods selected", store.picked.size()).c_str());
+        // What installing them all downloads: each one's newest version.
+        std::uint64_t bytes{};
+        for (const auto& name : store.picked)
+            for (const auto& package : store.packages)
+                if (package.full_name == name) bytes += package.latest().file_size;
+        auto chosen_text = store.picked.size() == 1 ? std::string("1 mod selected")
+                                                    : std::format("{} mods selected", store.picked.size());
+        if (bytes) chosen_text += "  /  " + size_text(bytes) + " to download";
+        ImGui::TextUnformatted(chosen_text.c_str());
         ImGui::SameLine();
         const float action = S(190);
         ImGui::SetCursorPosX(ImGui::GetContentRegionMax().x - action - S(90) - S(8));
@@ -714,23 +721,13 @@ void overview_fact(const Fonts& fonts, const char* name, const std::string& valu
     ImGui::Dummy(ImVec2(0, S(6)));
 }
 
-bool readme_field(const Fonts& fonts, ModsPanel& panel, const thunderstore::Package* package, const mods::Mod* mod) {
-    const auto* entry = readme_for(panel, package, mod);
-    if (!entry || (!entry->loading && !entry->failed && entry->readme.lines.empty())) return false;
-    if (entry->loading) {
-        ImGui::TextDisabled("Loading the README...");
-        return true;
-    }
-    if (entry->failed) {
-        ImGui::TextDisabled("Could not load the README. It is on the mod's Thunderstore page.");
-        return true;
-    }
+void draw_readme(const Fonts& fonts, const thunderstore::Readme& readme) {
     using Kind = ts::ReadmeLine::Kind;
     ImGui::PushTextWrapPos(0);
-    for (const auto& line : entry->readme.lines) {
+    for (const auto& line : readme.lines) {
         switch (line.kind) {
         case Kind::heading:
-            if (&line != &entry->readme.lines.front()) ImGui::Dummy(ImVec2(0, S(8)));
+            if (&line != &readme.lines.front()) ImGui::Dummy(ImVec2(0, S(8)));
             ImGui::PushFont(fonts.bold);
             ImGui::TextUnformatted(line.text.c_str());
             ImGui::PopFont();
@@ -749,8 +746,22 @@ bool readme_field(const Fonts& fonts, ModsPanel& panel, const thunderstore::Pack
         case Kind::text: ImGui::TextUnformatted(line.text.c_str()); break;
         }
     }
-    if (entry->readme.cut) ImGui::TextDisabled("The rest is on the mod's Thunderstore page.");
     ImGui::PopTextWrapPos();
+}
+
+bool readme_field(const Fonts& fonts, ModsPanel& panel, const thunderstore::Package* package, const mods::Mod* mod) {
+    const auto* entry = readme_for(panel, package, mod);
+    if (!entry || (!entry->loading && !entry->failed && entry->readme.lines.empty())) return false;
+    if (entry->loading) {
+        ImGui::TextDisabled("Loading the README...");
+        return true;
+    }
+    if (entry->failed) {
+        ImGui::TextDisabled("Could not load the README. It is on the mod's Thunderstore page.");
+        return true;
+    }
+    draw_readme(fonts, entry->readme);
+    if (entry->readme.cut) ImGui::TextDisabled("The rest is on the mod's Thunderstore page.");
     return true;
 }
 

@@ -485,6 +485,9 @@ namespace dingosdk::launcher_gui {
 bool updates_enabled(const launcher_app::Session& session) {
     return detail::load_settings(detail::settings_path(session)).updates;
 }
+launcher::LaunchOptions saved_launch_options(const launcher_app::Session& session) {
+    return detail::launch_options(detail::load_settings(detail::settings_path(session)));
+}
 void apply_crash_report_setting() noexcept {
     try {
         std::wstring path(32768, L'\0');
