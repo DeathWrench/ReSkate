@@ -253,6 +253,9 @@ struct MultiplayerModel {
     bool party_leader{}, party_open{}, parties{};
     std::vector<MultiplayerPartyInvite> party_invites; // newest last
     bool active{}, hosting{}, connected{}, echo{}, remote_visible{}, local_ready{};
+    // The session is connected but waiting on its map, which this PC does not have and is
+    // being asked about or downloaded: not yet a session the player is in.
+    bool map_fetching{};
     std::uint64_t local_id{}, peer_id{}, sent{}, received{}, dropped{}, pose_updates{}, board_pose_updates{};
     std::size_t skater_bones{}, board_bones{};
     std::string invite, map;

@@ -134,7 +134,11 @@ using StoreItem = std::function<bool(const std::string&)>;
 // and holds them against the game's own. The game's are only read when a mod
 // has an item at all. Never throws: a bundle that cannot be read is left out
 // (the merge leaves its mod out of the game too) and noted in `notes`.
+// The game's own files are read on up to `threads` threads beside the caller's
+// (`background`: at a priority under the game's, for a merge while it runs); the verdicts do
+// not depend on the count.
 [[nodiscard]] StoreCopies check_store_copies(const Catalog& catalog, const StoreItem& sold,
-                                             std::vector<std::string>* notes = nullptr) noexcept;
+                                             std::vector<std::string>* notes = nullptr, std::size_t threads = 0,
+                                             bool background = false) noexcept;
 
 } // namespace dingosdk::mods

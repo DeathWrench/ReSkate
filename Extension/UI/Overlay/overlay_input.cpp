@@ -282,7 +282,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
             }
         }
         const bool capture = owns_pointer();
-        const bool freecam_capture = s.freecam_controller_active.load(std::memory_order_relaxed);
+        const bool freecam_capture = s.freecam_controller_active.load(std::memory_order_relaxed) ||
+                                     s.prompt_input_active.load(std::memory_order_relaxed);
         if (freecam_capture) release_game_buttons(window, previous);
         if ((capture || freecam_capture) && is_input(message)) {
             // Foreground raw-input packets still need DefWindowProc cleanup.
@@ -351,6 +352,7 @@ DWORD WINAPI probe_xinput_slots(void* parameter) noexcept {
     const auto get_state = xinput_get_state();
     for (;;) {
         WaitForSingleObject(slots.wake.load(), INFINITE);
+        keep_xinput_capture_first();
         OverlayInputAccess access;
         for (DWORD slot = 0; get_state && slot < XUSER_MAX_COUNT; ++slot) {
             const unsigned bit = 1u << slot;
@@ -452,6 +454,47 @@ extern "C" void DingoSDKOverlaySetFreecamInputCapture(bool active) {
     if (previous != active)
         dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::input,
             "Freecam controller input capture %s.", active ? "enabled" : "disabled");
+}
+
+extern "C" void DingoSDKOverlaySetPromptInputCapture(bool active) {
+    const bool before = state().prompt_input_active.exchange(active, std::memory_order_relaxed);
+    if (before == active) return;
+    // For the log: which of the ways input can be kept from the game the game actually read
+    // its controller by while it was held. All zero means it reads some other way, and the
+    // hold did not reach it.
+    if (active) {
+        keep_xinput_capture_first();
+        (void)take_prompt_reads();
+        dingosdk::logging::write(dingosdk::logging::Level::info, dingosdk::logging::Channel::input, "Card input hold on.");
+    } else {
+        const auto reads = take_prompt_reads();
+        // And which controller libraries the game has loaded at all.
+        std::string loaded;
+        for (const auto* name : {L"xinput1_4.dll", L"xinput1_3.dll", L"xinput9_1_0.dll", L"gameinput.dll", L"gameinputredist.dll",
+                                 L"windows.gaming.input.dll", L"steamclient64.dll", L"dinput8.dll"})
+            if (GetModuleHandleW(name)) {
+                if (!loaded.empty()) loaded += ", ";
+                for (const wchar_t* at = name; *at; ++at) loaded += static_cast<char>(*at);
+            }
+        dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::input,
+            "Card input hold off. While held the game read: XInput %u, DirectInput %u, raw input %u time(s). Controller libraries loaded: %s. XInput leads to: %s.",
+            reads.xinput, reads.direct_input, reads.raw, loaded.empty() ? "none" : loaded.c_str(), xinput_entry_owners().c_str());
+    }
+}
+
+extern "C" unsigned DingoSDKOverlayReadPromptKeys() {
+    struct PreserveError { DWORD value = GetLastError(); ~PreserveError() { SetLastError(value); } } preserve_error;
+    const auto& s = state();
+    const HWND window = s.window.load();
+    // (Not while a menu, the console or chat has the keyboard; the card itself having the pointer is no reason.)
+    const bool typing = s.visible.load() || s.console_visible.load() || s.editor_visible.load() || s.chat_visible.load() || s.hub_typing.load();
+    if (!window || s.stop.load() || s.failed.load() || typing || !game_window_foreground(window)) return 0;
+    OverlayInputAccess access;
+    unsigned keys{};
+    constexpr int wanted[]{VK_LEFT, VK_RIGHT, VK_RETURN, VK_ESCAPE};
+    for (unsigned bit = 0; bit < 4; ++bit)
+        if (GetAsyncKeyState(wanted[bit]) & 0x8000) keys |= 1u << bit;
+    return keys;
 }
 
 extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* output, bool allow_menu) {

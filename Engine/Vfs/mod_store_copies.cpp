@@ -6,8 +6,13 @@
 #include "Engine/Resource/ebx_document.h"
 #include "Engine/Resource/mesh_set.h"
 
+#include <Windows.h>
+
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <mutex>
+#include <thread>
 #include <stdexcept>
 
 namespace dingosdk::mods {
@@ -231,44 +236,6 @@ public:
         return meshes;
     }
 
-    // The meshes of the game's whole costumes (read_game found their items), and every other
-    // mesh its items have, which are nobody's: a costume is partly made of clothes anyone has.
-    // How many costumes were read.
-    [[nodiscard]] std::size_t read_costumes(StoreMeshes& meshes) {
-        const auto* toc = game_toc(items_toc);
-        if (!toc || costumes_.empty()) return 0;
-        const auto& document = tocs_.at(lower(items_toc)).document;
-        std::size_t read{};
-        for (const auto& [name, bundle] : *toc) {
-            const Costume* costume{};
-            if (name.ends_with(costume_bundle_suffix)) {
-                const auto stem = name.substr(0, name.size() - costume_bundle_suffix.size());
-                const auto slash = stem.rfind('/');
-                const auto found = costumes_.find(stem.substr(slash == std::string::npos ? 0 : slash + 1));
-                if (found != costumes_.end()) costume = &found->second;
-            }
-            try {
-                const auto listing = list_bundle(store_, baseRoot_, baseRoot_, *bundle, gameRoot_);
-                if (!listing) continue;
-                const auto& manifest = listing->manifest;
-                bool any{};
-                for (std::size_t index = 0; index < manifest.resources.size(); ++index) {
-                    if (manifest.resources[index].resourceType != mesh_set_type) continue;
-                    read_mesh(baseRoot_, *listing, manifest.ebx.size() + index, document, 16, [&](std::vector<std::uint64_t> points) {
-                        // (Each other mesh under its own name, so two of them sharing a point is also seen.)
-                        if (costume) meshes.add(costume->key, costume->sold, points);
-                        else meshes.add("mesh " + manifest.resources[index].name, false, points);
-                        any = true;
-                    });
-                }
-                read += any && costume;
-            } catch (const std::exception& failure) {
-                note("The game's " + bundle->name + " could not be read for " + std::string(store_copies_check) + " (" + failure.what() + ")");
-            }
-        }
-        return read;
-    }
-
     // The items a mod adds to the game's bundles, and the game's own it changes.
     // An item only loads from a bundle the game loads, and the lists the game
     // reads its items from are in one of those, so a mod's own bundles (a map's
@@ -320,43 +287,126 @@ public:
         return items;
     }
 
-    // Every item the game ships; how many were read.
-    [[nodiscard]] std::size_t read_game(StoreItems& items, const StoreItem& sold) {
+    // Every item the game ships, and with `meshes` the meshes its items have: the whole
+    // costumes' under their items, every other one as nobody's (a costume is partly made of
+    // clothes anyone has). How many items were read, and how many costumes' meshes.
+    //
+    // Each of the game's item bundles is read by itself, on up to `threads` threads beside
+    // this one; what was read is then filed in the bundles' own order, so a part two items
+    // share is the same item's whatever the count.
+    struct GameCounts {
+        std::size_t items{}, costumes{};
+    };
+    [[nodiscard]] GameCounts read_game(StoreItems& items, const StoreItem& sold, StoreMeshes* meshes, std::size_t threads,
+                                       bool background) {
         const auto* toc = game_toc(items_toc);
-        if (!toc) return 0;
-        std::size_t read{};
-        for (const auto& [name, bundle] : *toc) {
+        if (!toc) return {};
+        const auto& document = tocs_.at(lower(items_toc)).document;
+        struct Read {
+            struct Item {
+                ItemContent content;
+                bool costume{};   // one of the game's whole costumes, by where its asset is
+            };
+            std::vector<Item> items;
+            struct Mesh {
+                std::string resource;
+                std::vector<std::vector<std::uint64_t>> levels;
+            };
+            std::vector<Mesh> meshes;
+            std::string note;
+        };
+        std::vector<const fb::TocBundle*> bundles;
+        for (const auto& [name, bundle] : *toc) bundles.push_back(bundle);
+        std::vector<Read> reads(bundles.size());
+        const auto read_bundle = [&](std::size_t at) {
+            auto& read = reads[at];
             try {
-                const auto listing = list_bundle(store_, baseRoot_, baseRoot_, *bundle, gameRoot_);
-                if (!listing) continue;
-                for (std::size_t index = 0; index < listing->manifest.ebx.size(); ++index) {
-                    if (!item_name(lower(listing->manifest.ebx[index].name))) continue;
+                const auto listing = list_bundle(store_, baseRoot_, baseRoot_, *bundles[at], gameRoot_);
+                if (!listing) return;
+                const auto& manifest = listing->manifest;
+                for (std::size_t index = 0; index < manifest.ebx.size(); ++index) {
+                    const auto name = lower(manifest.ebx[index].name);
+                    if (!item_name(name)) continue;
                     try {
-                        const auto document = fb::ebx::read_document(
-                            read_asset(store_, baseRoot_, baseRoot_, *listing, index, gameRoot_));
-                        const auto item = item_content(document);
-                        if (!item) continue;
-                        const bool store = sold(lower(item->key));
-                        items.add(*item, store);
-                        ++read;
-                        if (lower(listing->manifest.ebx[index].name).starts_with(costume_items))
-                            for (const auto& shape : item->shapes)
-                                if (shape.starts_with(costume_shape))
-                                    costumes_.insert_or_assign(shape.substr(costume_shape.size()), Costume{item->key, store});
+                        const auto asset = fb::ebx::read_document(read_asset(store_, baseRoot_, baseRoot_, *listing, index, gameRoot_));
+                        if (auto item = item_content(asset)) read.items.push_back({std::move(*item), name.starts_with(costume_items)});
                     } catch (const std::exception&) {}
                 }
+                if (!meshes) return;
+                for (std::size_t index = 0; index < manifest.resources.size(); ++index) {
+                    if (manifest.resources[index].resourceType != mesh_set_type) continue;
+                    Read::Mesh mesh{manifest.resources[index].name, {}};
+                    read_mesh(baseRoot_, *listing, manifest.ebx.size() + index, document, 16,
+                              [&](std::vector<std::uint64_t> points) { mesh.levels.push_back(std::move(points)); });
+                    if (!mesh.levels.empty()) read.meshes.push_back(std::move(mesh));
+                }
             } catch (const std::exception& failure) {
-                note("The game's " + bundle->name + " could not be read for " + std::string(store_copies_check) + " (" + failure.what() + ")");
+                read.note = "The game's " + bundles[at]->name + " could not be read for " + std::string(store_copies_check) + " (" + failure.what() + ")";
+            }
+        };
+        {
+            std::atomic<std::size_t> next{0};
+            const auto work = [&] {
+                for (;;) {
+                    const auto mine = next.fetch_add(1);
+                    if (mine >= bundles.size()) return;
+                    read_bundle(mine);
+                }
+            };
+            std::vector<std::jthread> workers;
+            try {
+                // Threads of their own, not the system's pool (see the superbundles in mod_merge.cpp).
+                for (std::size_t index = 0; index < threads && bundles.size() > 1; ++index)
+                    workers.emplace_back([&] {
+                        if (background) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+                        work();
+                    });
+            } catch (const std::system_error&) {} // fewer threads, or none: this one does the rest
+            work();
+        }
+        GameCounts counts;
+        for (auto& read : reads) {
+            if (!read.note.empty()) note(std::move(read.note));
+            for (const auto& item : read.items) {
+                const bool store = sold(lower(item.content.key));
+                items.add(item.content, store);
+                ++counts.items;
+                if (!item.costume) continue;
+                for (const auto& shape : item.content.shapes)
+                    if (shape.starts_with(costume_shape))
+                        costumes_.insert_or_assign(shape.substr(costume_shape.size()), Costume{item.content.key, store});
             }
         }
-        return read;
+        if (!meshes || costumes_.empty()) return counts;
+        // A costume's own bundle is named after the preset its item is fitted on.
+        for (std::size_t at = 0; at < bundles.size(); ++at) {
+            const auto name = lower(bundles[at]->name);
+            const Costume* costume{};
+            if (name.ends_with(costume_bundle_suffix)) {
+                const auto stem = name.substr(0, name.size() - costume_bundle_suffix.size());
+                const auto slash = stem.rfind('/');
+                const auto found = costumes_.find(stem.substr(slash == std::string::npos ? 0 : slash + 1));
+                if (found != costumes_.end()) costume = &found->second;
+            }
+            for (const auto& mesh : reads[at].meshes)
+                for (const auto& level : mesh.levels) {
+                    // (Each other mesh under its own name, so two of them sharing a point is also seen.)
+                    if (costume) meshes->add(costume->key, costume->sold, level);
+                    else meshes->add("mesh " + mesh.resource, false, level);
+                }
+            counts.costumes += costume && !reads[at].meshes.empty();
+        }
+        return counts;
     }
 
 private:
     using Bundles = std::map<std::string, const fb::TocBundle*, std::less<>>;
     using Assets = std::map<std::string, fb::Sha1, std::less<>>;
 
+    // (Both of these are asked by several threads while the mods are read: one at a time,
+    // and what they hand out stays where it is.)
     const Bundles* game_toc(std::string_view relative) {
+        std::lock_guard lock(cache_mutex_);
         const auto key = lower(relative);
         if (const auto found = tocs_.find(key); found != tocs_.end())
             return found->second.index.empty() ? nullptr : &found->second.index;
@@ -377,6 +427,7 @@ private:
     // The game's copy of a bundle: each EBX it holds, to tell a mod's additions
     // and changes from what it carries untouched. Null when it cannot be read.
     const Assets* game_assets(std::string_view relative, const fb::TocBundle& bundle) {
+        std::lock_guard lock(cache_mutex_);
         const auto key = lower(relative) + '|' + lower(bundle.name);
         if (const auto found = assets_.find(key); found != assets_.end())
             return found->second ? &*found->second : nullptr;
@@ -421,8 +472,11 @@ private:
         }
     }
 
+    // What a mod's reading has to say is kept with that mod while the mods are read at once
+    // (notes_for), so the notes come out in the mods' order however the threads ran.
     void note(std::string text) {
-        if (notes_) notes_->push_back(std::move(text));
+        if (note_sink) note_sink->push_back(std::move(text));
+        else if (notes_) notes_->push_back(std::move(text));
     }
 
     struct GameToc {
@@ -435,6 +489,22 @@ private:
     std::vector<std::string>* notes_;
     std::map<std::string, GameToc, std::less<>> tocs_;
     std::map<std::string, std::optional<Assets>, std::less<>> assets_;
+    std::mutex cache_mutex_;
+    static inline thread_local std::vector<std::string>* note_sink = nullptr;
+
+public:
+    // While one lives, this thread's notes go into `kept`.
+    struct NotesFor {
+        explicit NotesFor(std::vector<std::string>& kept) { note_sink = &kept; }
+        ~NotesFor() { note_sink = nullptr; }
+        NotesFor(const NotesFor&) = delete;
+        NotesFor& operator=(const NotesFor&) = delete;
+    };
+    void say(std::vector<std::string>& kept) {
+        if (notes_) notes_->insert(notes_->end(), std::make_move_iterator(kept.begin()), std::make_move_iterator(kept.end()));
+    }
+
+private:
     // The game's whole costumes: the preset each is fitted on -> its item.
     struct Costume {
         std::string key;
@@ -545,7 +615,8 @@ std::string StoreMeshes::original(const std::vector<std::uint64_t>& points) cons
     return most ? *most : std::string();
 }
 
-StoreCopies check_store_copies(const Catalog& catalog, const StoreItem& sold, std::vector<std::string>* notes) noexcept {
+StoreCopies check_store_copies(const Catalog& catalog, const StoreItem& sold, std::vector<std::string>* notes,
+                               std::size_t threads, bool background) noexcept {
     StoreCopies result;
     try {
         if (!sold || std::none_of(catalog.mods.begin(), catalog.mods.end(), [](const Mod& mod) { return mod.provides_layout; }))
@@ -557,22 +628,55 @@ StoreCopies check_store_copies(const Catalog& catalog, const StoreItem& sold, st
             std::vector<Scan::Mesh> meshes;
         };
         std::vector<Added> added;
-        for (const auto& mod : catalog.mods) {
-            if (!mod.provides_layout) continue;
-            Added entry{&mod, scan.read_mod(mod), scan.read_mod_meshes(mod)};
-            result.mod_meshes += entry.meshes.size();
-            if (!entry.items.empty() || !entry.meshes.empty()) added.push_back(std::move(entry));
+        {
+            // Each mod is read by itself, several at a time; they are gone through in their own
+            // order afterwards.
+            std::vector<const Mod*> asked;
+            for (const auto& mod : catalog.mods)
+                if (mod.provides_layout) asked.push_back(&mod);
+            std::vector<Added> reads(asked.size());
+            std::vector<std::vector<std::string>> said(asked.size());
+            std::atomic<std::size_t> next{0};
+            const auto work = [&] {
+                for (;;) {
+                    const auto mine = next.fetch_add(1);
+                    if (mine >= asked.size()) return;
+                    const Scan::NotesFor kept(said[mine]);
+                    try {
+                        reads[mine] = {asked[mine], scan.read_mod(*asked[mine]), scan.read_mod_meshes(*asked[mine])};
+                    } catch (...) {
+                        reads[mine] = {asked[mine], {}, {}};   // (neither reader throws; a mod that cannot be read adds nothing)
+                    }
+                }
+            };
+            {
+                std::vector<std::jthread> workers;
+                try {
+                    for (std::size_t index = 0; index < threads && asked.size() > 1; ++index)
+                        workers.emplace_back([&] {
+                            if (background) SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+                            work();
+                        });
+                } catch (const std::system_error&) {} // fewer threads, or none: this one does the rest
+                work();
+            }
+            for (std::size_t index = 0; index < asked.size(); ++index) {
+                scan.say(said[index]);
+                result.mod_meshes += reads[index].meshes.size();
+                if (!reads[index].items.empty() || !reads[index].meshes.empty()) added.push_back(std::move(reads[index]));
+            }
         }
         if (added.empty()) return result;
+        // The costumes' meshes are only read when a mod ships a mesh at all.
         StoreItems game;
-        result.game_items = scan.read_game(game, sold);
+        StoreMeshes costumes;
+        const auto counts = scan.read_game(game, sold, result.mod_meshes ? &costumes : nullptr, threads, background);
+        result.game_items = counts.items;
+        result.game_costumes = counts.costumes;
         if (!result.game_items) {
             if (notes) notes->push_back(std::string(store_copies_check) + " could not read the game's own files and did not run");
             return result;
         }
-        // The costumes' meshes are only read when a mod ships a mesh at all.
-        StoreMeshes costumes;
-        if (result.mod_meshes) result.game_costumes = scan.read_costumes(costumes);
         for (const auto& [mod, items, meshes] : added) {
             StoreCopies::Source source{mod->name};
             for (const auto& mesh : meshes) {

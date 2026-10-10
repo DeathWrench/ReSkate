@@ -206,6 +206,9 @@ std::optional<std::uint64_t> parse_scoring(std::string_view text);
 // "San Vansterdam", "Isle of Grom", a custom map's "bbcity"...
 struct ServerLevel {
     std::string asset, name;
+    // The Thunderstore package a custom map's mod folder is (protocol.h: map_package_name), from
+    // the folder's name and its manifest.json, so players without the map can be offered it.
+    std::string package;
 };
 // The retail maps, and the custom maps in `mods`\<mod>\reskate-levels.json
 // (players' map mods, copied next to the server). Returns why a mod was skipped.
@@ -226,6 +229,8 @@ std::string map_destination(std::string_view map);
 std::string map_setting(std::string_view map);
 // A map's name for people: "San Vansterdam".
 std::string map_label(std::string_view map);
+// The Thunderstore package that map comes from; empty for the game's own and when unknown.
+std::string map_package(std::string_view map);
 std::vector<const ServerLevel *> pool_levels(const ServerConfig &config); // known pool maps once each; all when empty
 bool in_map_pool(const ServerConfig &config, std::string_view map);
 const ServerLevel *next_pool_map(const ServerConfig &config, std::string_view map); // after `map`; null if no other
