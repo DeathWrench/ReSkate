@@ -81,7 +81,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         for (const auto* mod : mods) modFiles[mod] = scan(mod->directory);
 
         // What the store sells comes from the content cache, which the launcher installs.
-        const bool storeKnown = content_cache::installed();
+        //const bool storeKnown = content_cache::installed();
         // Disabled mods count too: their archives and map registration are placed at launch.
         auto fingerprint = merge_fingerprint(catalog, mods, modFiles);
         for (const auto& mod : catalog.inactive)
