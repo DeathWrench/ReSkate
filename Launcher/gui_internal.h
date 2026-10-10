@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gamepad_input.h"
+#include "game_settings.h"
 #include "launch.h"
 #include "text_encoding.h"
 #include "thunderstore.h"
@@ -320,12 +321,23 @@ struct Changelog {
     }
 };
 
+// Settings > GRAPHICS, AUDIO, CAMERA, CONTROLS, REPLAY: skate.'s own settings, read from its
+// save each time Settings opens (game_settings.h).
+struct GamePages {
+    bool loaded{};
+    launcher_game_settings::Saved saved;
+    launcher_game_settings::Values values;          // as shown; stored once no control is held
+    std::vector<std::pair<int, int>> resolutions;   // this PC's, for the Resolution setting
+    std::string error;          // why they could not be read, or the last change not stored
+};
+
 // Panels the main screen can show; one at a time.
 struct Ui {
     bool settings{};
+    GamePages game;
     bool changelog{};
     Changelog notes;
-    int settings_tab{};         // GAME, DISPLAY, KEYS, ADVANCED
+    int settings_tab{};         // GAME, DISPLAY, KEYS, ADVANCED, then the game's own pages
     int binding{};              // 1 = menu key, 2 = console key, while waiting for a press
     std::string key_error;
     bool mods{};
