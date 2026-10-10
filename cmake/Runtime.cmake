@@ -125,6 +125,8 @@ add_library(dingosdk_runtime SHARED
     Extension/HallOfMeat/hall_of_meat_skater.cpp
     Extension/HallOfMeat/hall_of_meat_skeleton.cpp
     Extension/HallOfMeat/hall_of_meat_slow_motion.cpp
+    Extension/RoadRash/road_rash.cpp
+    Extension/RoadRash/road_rash_commands.cpp
     Extension/Trainer/trainer.cpp
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp

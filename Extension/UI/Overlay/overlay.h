@@ -209,6 +209,12 @@ struct HallOfMeatModel {
     bool available = false, enabled = false;
 };
 
+// Road Rash's switches (Extension/RoadRash/road_rash.h): started, switched on, and whether its
+// worst wounds bleed.
+struct RoadRashModel {
+    bool available = false, enabled = false, blood = false;
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -228,6 +234,7 @@ struct Model {
     ProgressionModel progression;
     PlayerCardModel player_card;
     HallOfMeatModel hall_of_meat;
+    RoadRashModel road_rash;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
