@@ -437,6 +437,10 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         throw std::invalid_argument("Invalid host map destination");
     if ((p.kind == PacketKind::map_offer || p.kind == PacketKind::world_state) && !valid_map_label(p.map_label))
         throw std::invalid_argument("Invalid map name");
+    if ((p.kind == PacketKind::map_offer || p.kind == PacketKind::world_state) && !valid_map_package(p.map_package))
+        throw std::invalid_argument("Invalid map package");
+    if (p.map_fetching && (p.world_ready || (p.kind != PacketKind::map_request && p.kind != PacketKind::world_ready)))
+        throw std::invalid_argument("Invalid map fetch notice");
     if (p.kind == PacketKind::world_state &&
         (p.destination.empty() ? (p.map != 0 || p.world_ready)
                                : (!valid_map_destination(p.destination) || p.map != map_hash(p.destination))))
@@ -482,7 +486,10 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
             w.bytes.insert(w.bytes.end(), p.destination.begin(), p.destination.end());
             w.integer(p.map_label.size(), 1);
             w.bytes.insert(w.bytes.end(), p.map_label.begin(), p.map_label.end());
+            w.integer(p.map_package.size(), 1);
+            w.bytes.insert(w.bytes.end(), p.map_package.begin(), p.map_package.end());
         }
+        if (p.kind == PacketKind::map_request) w.integer(p.map_fetching ? 1 : 0, 1);
         if (p.kind == PacketKind::hello) {
             w.integer(p.text.size(), 1);
             w.bytes.insert(w.bytes.end(), p.text.begin(), p.text.end());
@@ -494,8 +501,10 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         w.bytes.insert(w.bytes.end(), p.destination.begin(), p.destination.end());
         w.integer(p.map_label.size(), 1);
         w.bytes.insert(w.bytes.end(), p.map_label.begin(), p.map_label.end());
+        w.integer(p.map_package.size(), 1);
+        w.bytes.insert(w.bytes.end(), p.map_package.begin(), p.map_package.end());
     } else if (p.kind == PacketKind::world_ready) {
-        w.integer(p.world_ready ? 1 : 0, 1);
+        w.integer(p.world_ready ? 1 : p.map_fetching ? 2 : 0, 1);   // 2: not ready, and fetching the map
     } else if (p.kind == PacketKind::pose) {
         w.integer(p.pose.skater.size(), 2);
         w.integer(p.pose.board.size(), 2);
@@ -734,7 +743,13 @@ static bool read_map_label(Reader &r, std::span<const std::uint8_t> bytes, Packe
     if (length > max_member_name || length > bytes.size() - r.at) return false;
     p.map_label.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
     r.at += static_cast<std::size_t>(length);
-    return valid_map_label(p.map_label);
+    if (!valid_map_label(p.map_label)) return false;
+    // And the package it comes from, which follows the name wherever the name is carried.
+    const auto package = r.integer(1);
+    if (package > max_map_package || package > bytes.size() - r.at) return false;
+    p.map_package.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(package));
+    r.at += static_cast<std::size_t>(package);
+    return valid_map_package(p.map_package);
 }
 // Short text written by encode's `text`: nothing when it is longer than `limit` or the packet.
 static std::optional<std::string> read_text(Reader &r, std::span<const std::uint8_t> bytes, unsigned width, std::size_t limit) {
@@ -785,6 +800,11 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
                 if (!valid_map_destination(p.destination) || p.map != map_hash(p.destination) || !read_map_label(r, bytes, p))
                     return {};
             }
+            if (p.kind == PacketKind::map_request) {
+                const auto fetching = r.integer(1);
+                if (fetching > 1) return {};
+                p.map_fetching = fetching != 0;
+            }
             if (p.kind == PacketKind::hello) {
                 const auto length = r.integer(1);
                 if (length > max_member_name || length > bytes.size() - r.at) return {};
@@ -796,8 +816,9 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             if (p.kind == PacketKind::world_state)
                 for (auto &v : p.build) v = static_cast<std::uint8_t>(r.integer(1));
             const auto ready = r.integer(1);
-            if (ready > 1) return {};
-            p.world_ready = ready != 0;
+            if (ready > (p.kind == PacketKind::world_ready ? 2U : 1U)) return {};
+            p.world_ready = ready == 1;
+            p.map_fetching = ready == 2;
             if (p.kind == PacketKind::world_state) {
                 const auto length = r.integer(2);
                 if (length > 256 || length > bytes.size() - r.at) return {};
@@ -1216,6 +1237,55 @@ bool valid_map_asset(std::string_view asset) noexcept {
 }
 bool valid_map_label(std::string_view label) noexcept {
     return label.empty() || (label.size() <= max_member_name && valid_member_name(label));
+}
+namespace {
+// A Thunderstore team or package name: letters, digits and '_'.
+bool package_word(std::string_view text) noexcept {
+    return !text.empty() && std::all_of(text.begin(), text.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+    });
+}
+// Three numbers with dots between: 1.2.3.
+bool package_version(std::string_view text) noexcept {
+    unsigned numbers{};
+    for (std::size_t at = 0; at <= text.size();) {
+        const auto end = std::min(text.find('.', at), text.size());
+        const auto number = text.substr(at, end - at);
+        if (number.empty() || number.size() > 9 || !std::all_of(number.begin(), number.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            return false;
+        ++numbers;
+        at = end + 1;
+    }
+    return numbers == 3;
+}
+} // namespace
+bool valid_map_package(std::string_view package) noexcept {
+    if (package.empty()) return true;
+    if (package.size() > max_map_package) return false;
+    const auto first = package.find('-');
+    if (first == std::string_view::npos) return false;
+    const auto rest = package.substr(first + 1);
+    const auto second = rest.find('-');
+    if (!package_word(package.substr(0, first)) || !package_word(rest.substr(0, second))) return false;
+    return second == std::string_view::npos || package_version(rest.substr(second + 1));
+}
+std::string map_package_name(std::string_view folder, std::string_view version) {
+    const auto dash = folder.find('-');
+    if (dash == std::string_view::npos || !package_word(folder.substr(0, dash))) return {};
+    // "Owner-Name", or "Owner-Name-1.2.3": what a package's zip unpacks to when it is not
+    // installed by the launcher, as on a server. The manifest's version is the one believed.
+    auto rest = folder.substr(dash + 1);
+    std::string_view named;
+    if (const auto second = rest.find('-'); second != std::string_view::npos) {
+        named = rest.substr(second + 1);
+        rest = rest.substr(0, second);
+        if (!package_version(named)) return {};
+    }
+    if (!package_word(rest)) return {};
+    std::string name(folder.substr(0, dash + 1 + rest.size()));
+    if (package_version(version)) name += '-' + std::string(version);
+    else if (!named.empty()) name += '-' + std::string(named);
+    return name.size() <= max_map_package ? name : std::string();
 }
 bool valid_map_pool(std::span<const std::uint16_t> pool, std::size_t maps) noexcept {
     if (pool.size() > maps) return false;

@@ -26,7 +26,7 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 46;
+constexpr std::uint16_t protocol_version = 47;
 // A dedicated server's chat lines unless its owner says otherwise: violet (#8E5CFF) and lavender (#D9C8FF).
 inline constexpr std::uint32_t default_server_chat_badge = 0xffff5c8eU, default_server_chat_text = 0xffffc8d9U;
 constexpr std::size_t max_throwdown_message = 4096;
@@ -161,6 +161,20 @@ constexpr std::size_t max_server_maps = 128, max_map_asset = 128;
 bool valid_map_asset(std::string_view asset) noexcept;
 bool valid_map_pool(std::span<const std::uint16_t> pool, std::size_t maps) noexcept; // distinct indices below `maps`
 bool valid_map_label(std::string_view label) noexcept; // empty, or a name like a member's
+// How long a host goes on waiting for a player who says they are fetching the map
+// (Packet::map_fetching), from the first time they say so: a large map on a slow line. Past
+// it they are held to the time a load takes again.
+inline constexpr std::uint64_t map_fetch_limit_us = 45ull * 60 * 1000000;
+// The Thunderstore package a map comes from, so a player without it can be offered it:
+// "Owner-Name", or "Owner-Name-1.2.3" when the host knows its version. Empty for the game's own
+// maps and for a map mod that is not from Thunderstore.
+inline constexpr std::size_t max_map_package = 96;
+bool valid_map_package(std::string_view package) noexcept;
+// That name for a mod folder and the version its manifest gives; empty when the folder is not
+// named as a package: "Owner-Name", as the launcher installs one, or "Owner-Name-1.2.3", as its
+// zip unpacks by hand. The manifest's version comes before the folder's; one that is not three
+// numbers is left off.
+std::string map_package_name(std::string_view folder, std::string_view version);
 struct Transform {
     std::array<float, 3> position{};
     std::array<float, 4> rotation{0, 0, 0, 1};
@@ -201,6 +215,9 @@ struct Packet {
     std::string destination;
     bool map_authorized{};
     bool world_ready{};
+    // map_request, world_ready: the player does not have the map and is downloading it
+    // (never with world_ready). A host gives such a player longer than a load takes.
+    bool map_fetching{};
     Pose pose;
     std::uint32_t pose_interval_us = 50000;
     // pose: the sender has the game's party collision on (the top bit of the pose's rate field)
@@ -257,6 +274,7 @@ struct Packet {
     std::vector<std::uint16_t> map_pool;      // maps: the pool as indices into `maps`, rotation order (empty: every map)
     std::uint16_t map_rotation{};             // maps: minutes per map (0: off)
     std::string map_label;                    // map_offer, world_state: the map's name for people (may be empty)
+    std::string map_package;                  // map_offer, world_state: valid_map_package (may be empty)
     std::vector<std::uint8_t> throwdown;      // throwdown: one encoded message (1..max_throwdown_message bytes)
     std::array<float, 3> teleport{};          // teleport: where the receiver goes (world position)
     std::vector<std::uint8_t> tuning;         // physics_tuning: 0..max_physics_tuning bytes

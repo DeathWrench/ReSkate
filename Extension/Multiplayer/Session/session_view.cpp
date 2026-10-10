@@ -168,6 +168,7 @@ void publish(Session &s, const NativeFrame *local) {
     view.direct_upload_limit = s.direct_upload.limit;
     view.active = s.mode != Mode::off;
     view.hosting = s.mode == Mode::host;
+    view.map_fetching = s.fetching_since != 0;
     view.echo = s.mode == Mode::echo;
     view.local_id = t.local_id;
     view.local_name = s.mode != Mode::off ? s.transport.name(t.local_id) : steam_social_snapshot()->local.name;

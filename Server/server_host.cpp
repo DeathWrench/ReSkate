@@ -118,6 +118,21 @@ void Host::save() {
         log_(std::string("Could not save the config: ") + e.what());
     }
 }
+// A player without the map is downloading it: the clock they are loading against starts over
+// each time they say so, for as long as map_fetch_limit_us from the first time. A slot is still
+// never held for good, and a player who stops saying it has the usual time to load.
+void Host::fetching(Guest &guest) {
+    // Only for a player who is past the password: anyone else is held to the short time a
+    // connection gets to show it belongs here.
+    if (!guest.handshaken && !guest.map_authorized) return;
+    if (!guest.fetching_since) {
+        guest.fetching_since = now_;
+        log_("[map] " + guest_name(guest) + " is downloading the map");
+    }
+    if (now_ - guest.fetching_since > map_fetch_limit_us) return;
+    if (!guest.handshaken) guest.connected_at = now_;
+    else if (guest.travel_since) guest.travel_since = now_;
+}
 std::string Host::invite() const { return format_invite({id_, secret_}); }
 std::string Host::map_name() const { return map_label(config_.map); }
 std::string Host::wire_map_label() const { // players without the map's mod still see its name
@@ -698,6 +713,7 @@ void Host::send_world_state() {
     auto state = packet(PacketKind::world_state, now_);
     state.destination = map_destination(config_.map);
     state.map_label = wire_map_label();
+    state.map_package = map_package(config_.map);
     state.world_ready = true; // the server has nothing to load
     const auto bytes = encode_wire(state);
     for (auto &[id, guest] : guests_)
@@ -793,6 +809,7 @@ void Host::change_map(std::string_view map) {
         g.scoring_flagged = old.scoring_flagged;
         g.world_ready = false;
         g.travel_since = g.handshaken ? now_ : 0;
+        g.fetching_since = 0;
         g.last_packet = now_;
     }
     if (++world_ == 0) throw std::runtime_error("Map transition counter exhausted.");
@@ -818,10 +835,16 @@ void Host::drop(std::uint64_t id, const std::string &reason, const std::string &
     } else {
         // Never admitted: it held a player slot meanwhile, so it shows in the log, and an ID
         // that keeps failing waits longer each time before its connection is taken again.
-        const auto failures = join_backoff_.failed(id, now_);
-        log_("[join] " + std::to_string(id) + " did not finish joining (" + reason + ")" +
-             (failures > 1 ? ", attempt " + std::to_string(failures) : std::string{}) +
-             (detail.empty() ? std::string{} : " [" + detail + "]"));
+        // Not one that was let in (past the password) and left while fetching the map: turning
+        // a download down, or stopping one, is no failed attempt, and they may come straight back.
+        if (found->second->map_authorized && found->second->fetching_since) {
+            log_("[join] " + std::to_string(id) + " left without the map (" + reason + ")");
+        } else {
+            const auto failures = join_backoff_.failed(id, now_);
+            log_("[join] " + std::to_string(id) + " did not finish joining (" + reason + ")" +
+                 (failures > 1 ? ", attempt " + std::to_string(failures) : std::string{}) +
+                 (detail.empty() ? std::string{} : " [" + detail + "]"));
+        }
     }
     guests_.erase(found);
     for (auto &[other, guest] : guests_) {
@@ -987,6 +1010,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
             return;
         link->ready_sequence = p.sequence;
         link->last_packet = now_;
+        if (p.map_fetching) fetching(*link);
         const bool arrived = p.world_ready && !link->world_ready;
         if (!p.world_ready && link->world_ready) link->loading_since = now_;
         if (arrived && config_.activity_log)
@@ -1005,6 +1029,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
             return drop(peer, "Invalid map request. Update ReSkate to the server's version and join again.");
         if (link->handshaken) return;
         if (p.map && p.map != map_) return drop(peer, "The server changed maps while you were joining. Join again.");
+        if (p.map_fetching) fetching(*link);
         link->member.epoch = p.epoch;
         bool authorized = !password_;
         if (password_) {
@@ -1021,6 +1046,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
             auto offer = packet(PacketKind::map_offer, now_);
             offer.destination = map_destination(config_.map);
             offer.map_label = wire_map_label();
+            offer.map_package = map_package(config_.map);
             offer.challenge = link->password_challenge;
             offer.map_authorized = authorized;
             send_required(*link, encode_wire(offer));

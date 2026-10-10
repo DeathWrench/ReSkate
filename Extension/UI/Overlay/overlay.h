@@ -277,6 +277,23 @@ struct CallbacksV2 {
 using MultiplayerQueue = bool (*)(const char *action, const char *argument, const char *password,
                                  char *result, std::size_t size);
 void set_multiplayer_queue(MultiplayerQueue) noexcept;
+// A map the session needs being fetched (Extension/Assets/map_download.h), for its card.
+struct MapDownloadCard {
+    int stage{};                // 0 none, 1 asking, 2 downloading, 3 installing, 4 applying, 5 joining
+    std::string map, package, author, version, description;
+    std::size_t step{}, steps{}; // applying: the merge's steps done of all
+    std::string step_name;
+    bool server{}, installed{}, moved{}, choice{true};
+    std::uint64_t received{}, total{};
+    std::uint32_t yes_bind{}, no_bind{};
+};
+using MapDownloadFeed = MapDownloadCard (*)();
+void set_map_download_feed(MapDownloadFeed) noexcept;
+using MapDownloadAnswer = void (*)(bool download) noexcept;
+void set_map_download_answer(MapDownloadAnswer) noexcept;
+// The card's icon: the package's own picture as PNG bytes, or nothing to show a plain tile.
+// Any thread; decoded here and uploaded when the overlay next draws.
+void set_map_download_icon(const std::string& png) noexcept;
 // The session's text chat, read by the chat panel every frame (thread-safe, cheap).
 using ChatFeed = MultiplayerChat (*)();
 void set_chat_feed(ChatFeed) noexcept;
@@ -430,6 +447,12 @@ extern "C" __declspec(dllexport) void DingoSDKOverlayGetStatus(dingosdk::overlay
 // surface is open, the game is unfocused, or the overlay has stopped.
 extern "C" void DingoSDKOverlayReadFlightInput(dingosdk::overlay::FlightInput* input, bool flight_active, bool player_flight = false);
 extern "C" void DingoSDKOverlaySetFreecamInputCapture(bool active);
+// The same hold on the game's input while a card asks something of the player and a
+// controller answers it (the map download's): the buttons that answer must not also skate.
+extern "C" void DingoSDKOverlaySetPromptInputCapture(bool active);
+// The keyboard keys such a card answers to, read past that hold: bit 0 left, 1 right, 2 Enter,
+// 3 Esc. Nothing while the game is not in front or the menu, console or chat has the keys.
+extern "C" unsigned DingoSDKOverlayReadPromptKeys();
 // allow_menu is used only by the Binds page while recording. Focus and lifetime
 // gates still apply. Gameplay callers leave it false.
 extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* input, bool allow_menu = false);

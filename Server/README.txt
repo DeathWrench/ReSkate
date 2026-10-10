@@ -19,8 +19,17 @@ with the defaults, as on the first run.
 Custom maps
 -----------
 Copy a custom map's mod folder from the game's Mods folder into a Mods folder
-next to the server (only its reskate-levels.json is read). The map can then be
-chosen by name. Players need the same map mod installed to join.
+next to the server (its reskate-levels.json and manifest.json are read). The
+map can then be chosen by name. Players need the same map mod installed to
+join.
+
+A player without it is offered it when the map is from Thunderstore: the game
+downloads it, applies it and joins the server again. For that the folder has to
+keep the name Thunderstore gives it: Owner-Name as the launcher installs it
+(Sandos-Vancouver_Plaza), or Owner-Name-1.0.0 as its zip unpacks. The server
+tells players that name, and the version from manifest.json when the file is
+there. A map under any other folder name
+works as before: players install it themselves.
 
 Players connect through Steam's relay network, so no ports need opening. If you
 do forward UDP 27015-27016 (port, query_port), the browser also shows the

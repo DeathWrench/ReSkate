@@ -656,11 +656,20 @@ std::vector<std::string> load_levels(const std::filesystem::path &mods) {
             std::stringstream text;
             text << in.rdbuf();
             const auto root = Json::parse(text.str());
+            // The mod's version, when the whole folder was copied here and not only its level list.
+            std::string version;
+            try {
+                std::ifstream about(entry.path() / "manifest.json", std::ios::binary);
+                std::stringstream about_text;
+                about_text << about.rdbuf();
+                if (about) version = Json::parse(about_text.str()).value("version_number", "");
+            } catch (const std::exception &) {}
+            const auto package = multiplayer::map_package_name(entry.path().filename().string(), version);
             for (const auto &level : root.at("levels")) {
                 const auto asset = level.at("asset").string();
                 const auto name = level.value("displayName", world_level_name(asset));
                 if (std::none_of(list.begin(), list.end(), [&](const auto &l) { return same(l.asset, asset); }))
-                    list.push_back({asset, name.empty() ? world_level_name(asset) : name});
+                    list.push_back({asset, name.empty() ? world_level_name(asset) : name, package});
             }
         } catch (const std::exception &e) {
             problems.push_back(entry.path().filename().string() + ": " + e.what());
@@ -729,6 +738,10 @@ std::string map_setting(std::string_view map) {
 std::string map_label(std::string_view map) {
     if (const auto *level = find_level(map)) return level->name;
     return world_level_name(world_destination_asset(map_destination(map)));
+}
+std::string map_package(std::string_view map) {
+    const auto *level = find_level(map);
+    return level ? level->package : std::string();
 }
 std::vector<const ServerLevel *> pool_levels(const ServerConfig &config) {
     std::vector<const ServerLevel *> pool;

@@ -75,6 +75,10 @@ class Host {
         bool handshaken{}, map_authorized{}, world_ready = true;
         std::uint64_t last_map_offer{}, travel_since{}, connected_at{}, last_packet{};
         std::uint64_t loading_since{}; // not ready in this world since (reloading on their own)
+        // When they first said they are fetching the map (Packet::map_fetching), 0 for never
+        // in this world: while they go on saying so, within map_fetch_limit_us of then, the
+        // time they are given to load starts over.
+        std::uint64_t fetching_since{};
         std::uint32_t ready_sequence{};
         ReceiveBudget budget;
         DeltaSender sender;
@@ -328,6 +332,7 @@ class Host {
     void send_maps(Guest &admin);
     void change_map(std::string_view map); // a level name, level path or destination
     std::string wire_map_label() const;
+    void fetching(Guest &guest);
     bool same_map(std::string_view asset) const { return map_hash(map_destination(asset)) == map_; }
     bool accept_data(Guest &source, const Packet &);
     // `received_at`: the transport's arrival time for the message (TransportMessage::arrived).
