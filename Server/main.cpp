@@ -552,14 +552,19 @@ int run(int argc, char **argv, bool skip_update) {
             }
             update_now = false;
         }
-        if (config.global_bans && !ban_check.valid() && now_time >= next_ban_check)
+        // (The chat word lists come in the same answer, so it is read for them too.)
+        if ((config.global_bans || config.word_warnings) && !ban_check.valid() && now_time >= next_ban_check)
             ban_check = std::async(std::launch::async, read_global_bans);
         if (ban_check.valid() && ban_check.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
             const auto check = ban_check.get();
             next_ban_check = now_time + (check.ok ? std::chrono::minutes(10) : std::chrono::minutes(1));
             // Said when it changes, not every ten minutes.
-            if (check.ok && (check.changed || bans_unread))
+            if (config.global_bans && check.ok && (check.changed || bans_unread))
                 write_log("Global bans: " + std::to_string(check.banned) + " player(s) banned from ReSkate multiplayer cannot join.");
+            if (check.ok && check.words_changed)
+                write_log("Word lists: " + std::to_string(check.filtered_words) + " filtered and " + std::to_string(check.forbidden_words) +
+                          " not allowed at all, from the ReSkate team's lists." +
+                          (config.word_warnings ? "" : " (\"word_warnings\" is 0: nobody is warned or kicked for them here.)"));
             else if (!check.ok && !bans_unread)
                 write_log("The global ban list could not be read (" + check.problem + "). Trying again every minute; " +
                           "until then the bans already read hold.");

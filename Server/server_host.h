@@ -233,6 +233,11 @@ class Host {
     std::set<std::uint64_t> kicked_;
     // The name each player last joined under, for banning one who has left by their SteamID.
     std::map<std::uint64_t, std::string> seen_names_;
+    // Warnings each player has had for words that are not allowed at all ("word_warnings"),
+    // kept while the server runs so that leaving and joining again does not clear them.
+    std::map<std::uint64_t, unsigned> word_warnings_;
+    // Whether this chat line may go on; if not, its player has been warned or kicked.
+    bool allowed_words(Guest &guest, std::string_view text);
     JoinBackoff join_backoff_; // Steam IDs whose attempts to join keep failing
     std::optional<PasswordKey> password_;
     std::uint64_t id_{}, secret_{}, epoch_{}, map_{}, world_ = 1;

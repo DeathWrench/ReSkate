@@ -6,6 +6,7 @@
 #include "Extension/Multiplayer/developer_identity.h"
 #include "Extension/Multiplayer/Session/monotonic_clock.h"
 #include "Engine/Core/Text/word_filter.h"
+#include "Extension/Multiplayer/word_lists.h"
 #include "Engine/Game/Build/supported_build.h"
 #include "Engine/Game/World/world_names.h"
 #include "Engine/Game/World/park_randomization.h"
@@ -699,6 +700,21 @@ void Host::send_chat(std::string_view text, Guest *only) {
     if (only) send_packet(*only, message, true, false);
     else broadcast(message, true, false);
 }
+bool Host::allowed_words(Guest &guest, std::string_view text) {
+    if (!config_.word_warnings || !text::contains_forbidden_words(text)) return true;
+    const auto id = guest.member.id;
+    const auto count = ++word_warnings_[id];
+    if (count > config_.word_warnings) {
+        log_("[words] " + guest_name(guest) + " was kicked: a word that is not allowed, after " + std::to_string(config_.word_warnings) +
+             " warning(s).");
+        drop(id, std::string(multiplayer::word_kick_notice));
+        return false;
+    }
+    log_("[words] " + guest_name(guest) + " said a word that is not allowed (warning " + std::to_string(count) + " of " +
+         std::to_string(config_.word_warnings) + "); the message was not passed on.");
+    send_chat(multiplayer::word_warning(count, config_.word_warnings), &guest);
+    return false;
+}
 void Host::send_bans(Guest &admin) {
     auto list = packet(PacketKind::bans, now_);
     list.ban_total = static_cast<std::uint32_t>(config_.bans.size());
@@ -1088,6 +1104,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
             link->chat_rate.accept(now_, p.text, 1) != ChatRate::Verdict::accepted)
             return;
         link->last_packet = now_;
+        if (!allowed_words(*link, p.text)) return;
         // "/" starts a command (votes; any server command for admins), answered to the sender only.
         if (p.text.front() == '/') {
             log_("[command] " + guest_name(*link) + ": /" + loggable(std::string_view(p.text).substr(1)));

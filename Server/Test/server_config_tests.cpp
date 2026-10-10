@@ -211,6 +211,10 @@ int run() {
         check(load_config(away.file).afk_kick == 15, "The away timer was not kept");
         away.afk_kick = 1441;
         check(config_error(away).find("afk_kick_minutes") != std::string::npos, "An away timer over a day was accepted");
+        ServerConfig words;
+        check(words.word_warnings == 3 && config.word_warnings == 3, "word_warnings is not 3 unless set");
+        words.word_warnings = 11;
+        check(config_error(words).find("word_warnings") != std::string::npos, "More than ten word warnings were accepted");
         std::filesystem::remove_all(folder / "data");
     }
     // Skater effects: shared unless turned off, and kept in the file.

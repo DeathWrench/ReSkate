@@ -63,6 +63,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Session/password.cpp
     Extension/Multiplayer/developer_identity.cpp
     Extension/Multiplayer/developer_identity_fetch.cpp
+    Extension/Multiplayer/word_lists.cpp
     Extension/Settings/console_commands.cpp
     Extension/Settings/job_spin.cpp
     Extension/Settings/engine_tweaks.cpp

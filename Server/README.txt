@@ -120,6 +120,13 @@ afk_kick_minutes   Remove a player who has been away this many minutes, 1-1440
                    in chat or changing their objects. They are warned in chat
                    a minute before and can join again at once. Admins are
                    never removed for it. Console: afk-kick <minutes>|off.
+word_warnings      The ReSkate team keeps a list of words that are not allowed
+                   in chat at all (read from api.reskate.dev with the global
+                   bans). A message with one is not passed on, and its player
+                   is warned. After this many warnings, 1-10 (default 3), the
+                   next one gets them kicked; they can join again, and are
+                   kicked again at the next. Warnings last until the server
+                   restarts. 0: such messages are passed on like any other.
 allow_voice_chat   Allow voice chat.
 voice_range        How far proximity voice reaches, 50-1000 m.
 object_placement   everyone, admins (only admins can build), or nobody.
