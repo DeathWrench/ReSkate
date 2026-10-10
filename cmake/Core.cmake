@@ -75,7 +75,9 @@ add_library(dingosdk_frostbite STATIC
     Engine/Resource/bundle_ref_table.cpp
     Engine/Resource/ebx_writer.cpp
     Engine/Resource/toc.cpp
-    Engine/Resource/texture.cpp)
+    Engine/Resource/texture.cpp
+    Engine/Resource/mesh_set.cpp
+    Engine/Resource/skeleton_asset.cpp)
 target_include_directories(dingosdk_frostbite SYSTEM PRIVATE External/bcdec)
 target_link_libraries(dingosdk_frostbite PRIVATE dingosdk_lz4 dingosdk_zstd dingosdk_miniz)
 
@@ -93,7 +95,7 @@ endif()
 
 # Read access to the installed game's cas archives.
 add_library(dingosdk_game_archives STATIC Engine/Vfs/game_archives.cpp Engine/Vfs/game_bundles.cpp
-    Engine/Vfs/item_thumbnails.cpp)
+    Engine/Vfs/item_thumbnails.cpp Engine/Vfs/game_textures.cpp)
 target_link_libraries(dingosdk_game_archives PUBLIC dingosdk_native_db dingosdk_frostbite)
 
 if(WIN32)
@@ -108,8 +110,9 @@ if(WIN32)
         Engine/Vfs/mod_merge_grid.cpp
         Engine/Vfs/mod_merge_load_screens.cpp
         Engine/Vfs/mod_music.cpp
-        Engine/Vfs/mod_scoring.cpp)
-    target_link_libraries(dingosdk_mods PUBLIC dingosdk_json dingosdk_mod_list PRIVATE dingosdk_game_archives dingosdk_native_db dingosdk_frostbite shell32 bcrypt)
+        Engine/Vfs/mod_scoring.cpp
+        Engine/Vfs/mod_store_copies.cpp)
+    target_link_libraries(dingosdk_mods PUBLIC dingosdk_json dingosdk_mod_list PRIVATE dingosdk_game_archives dingosdk_native_db dingosdk_frostbite dingosdk_content_cache shell32 bcrypt)
 
     add_library(dingosdk_custom_scripts STATIC Engine/Scripting/custom_scripts.cpp)
     target_link_libraries(dingosdk_custom_scripts PUBLIC dingosdk_json PRIVATE dingosdk_initfs)
