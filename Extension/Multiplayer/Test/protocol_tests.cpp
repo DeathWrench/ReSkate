@@ -1014,6 +1014,16 @@ void dedicated_server_codec() {
         const auto given = decode(encode(rights));
         check(given && given->role == "moderator" && !given->role_all_commands && given->role_commands == rights.role_commands &&
                   given->role_permissions == rights.role_permissions, "A player's permissions failed to round-trip");
+        Packet filter;
+        filter.kind = PacketKind::words; filter.session = 9; filter.epoch = 10; filter.map = 11; filter.source = server;
+        filter.words = {"florp", "gl0rp", "two words"};
+        const auto sent = decode(encode(filter));
+        check(sent && sent->kind == PacketKind::words && sent->words == filter.words, "A server's filtered words failed to round-trip");
+        auto long_word = filter;
+        long_word.words = {std::string(max_server_word + 1, 'a')};
+        check(reject(long_word), "A filtered word past its length was accepted");
+        long_word.words.assign(max_server_words + 1, "a");
+        check(reject(long_word), "More filtered words than a server may send were accepted");
         auto none = rights;
         none.role.clear(); none.role_commands.clear(); none.role_permissions = 0; none.role_all_commands = true;
         const auto bare = decode(encode(none));

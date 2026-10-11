@@ -1913,8 +1913,9 @@ void world_layer_sync_checks() {
     check(decode(bytes) && decode(bytes)->force_world_layers &&
               unpack_world_layers(decode(bytes)->layers) == host.layers, "Roster lost world layer settings");
     // The voice policy (allowed byte, 4-byte revision), voice range (2 bytes) and the guest
-    // noclip / No Bail byte follow the layer modes.
-    const auto layers_end = bytes.size() - 5 - 2 - 1;
+    // noclip / No Bail byte follow the layer modes, then what a dedicated server adds, here
+    // none: polls (1 byte), custom votes (1) and an announcement (4).
+    const auto layers_end = bytes.size() - 5 - 2 - 1 - 6;
     for (std::size_t n = layers_end - world_layers().size() - 1; n < bytes.size(); ++n)
         check(!decode(std::span(bytes).first(n)), "Truncated world layer settings accepted");
     auto malformed = bytes; malformed[layers_end - 1] = 3;

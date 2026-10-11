@@ -931,6 +931,15 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             }
             continue;
         }
+        // The server's own filtered chat words: filtered here too while on it (reset_session clears them).
+        if (p.kind == PacketKind::words) {
+            if (dedicated_host(s) && message.peer == s.host_id && p.source == s.host_id) {
+                text::set_own_words(p.words, {});
+                s.chat_masked.clear();
+                publish_chat(s);
+            }
+            continue;
+        }
         if (p.kind == PacketKind::maps) {
             if (dedicated_host(s) && message.peer == s.host_id && p.source == s.host_id) {
                 s.server_maps = p.maps;

@@ -178,6 +178,12 @@ void movement_controls(SkateMenu& menu, const Model& model, const CallbacksV3& c
     if (toggle_row(menu, "Road Rash blood", "Fresh blood on the worst wounds. Off, they are dry and scabbed.", rash_blood,
             rash_console && model.road_rash.enabled))
         send_console(menu, callbacks, rash_blood ? "roadrashblood 1" : "roadrashblood 0");
+    bool board_break = model.board_break.enabled;
+    if (toggle_row(menu, "Board Break", model.board_break.has_deck
+                ? "A hard slam can snap your board: at the nose, in the middle or at the tail. Whole again once you pick it up."
+                : "A hard slam can snap your board. Needs one of the Board Break deck packs.",
+            board_break, model.board_break.available && callbacks.queue_console_command))
+        send_console(menu, callbacks, board_break ? "boardbreak 1" : "boardbreak 0");
     end_card();
 
     begin_card(menu, "boosts", "BOOSTS", "Buttons are set in Settings > Controls");

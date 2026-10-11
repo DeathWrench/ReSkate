@@ -12,6 +12,8 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -81,7 +83,145 @@ std::string sdk_identity() {
     return error ? std::string{} : std::to_string(size) + "-" + std::to_string(written);
 }
 
+// A mod brings a deck model of its own when its bundle lists name the deck's bundle. Deck graphics
+// and grip tapes are items of their own and do not touch it.
+bool changes_the_deck(const fs::path& mod) {
+    constexpr std::string_view deck_bundle = "deck_gen_popsicle_cas_main_bundlereftable";
+    std::error_code error;
+    std::vector<fs::path> lists{mod / L"layout.toc"};
+    for (fs::directory_iterator at(mod / L"Win32", error), end; !error && at != end; at.increment(error))
+        if (at->is_regular_file(error) && at->path().extension() == L".toc") lists.push_back(at->path());
+    for (const auto& list : lists) {
+        std::ifstream file(list, std::ios::binary);
+        if (!file) continue;
+        const std::string bytes{std::istreambuf_iterator<char>(file), {}};
+        if (bytes.find(deck_bundle) != std::string::npos) return true;
+    }
+    return false;
+}
+// The player's choice of deck is kept beside ReSkate's other files for the user, so that it is
+// there before the profile is: the mods are put together as the game starts.
+fs::path board_break_deck_file() {
+    std::array<wchar_t, 1024> text{};
+    const auto size = GetEnvironmentVariableW(L"LOCALAPPDATA", text.data(), static_cast<DWORD>(text.size()));
+    if (!size || size >= text.size()) return {};
+    return fs::path(std::wstring(text.data(), size)) / L"ReSkate" / L"BoardBreak.deck";
+}
+// A deck's name is a folder name's end: letters, digits and underscores.
+bool deck_name(std::string_view name) {
+    return !name.empty() && name.size() <= maximum_mod_name &&
+           std::all_of(name.begin(), name.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_'; });
+}
+// Where a deck comes in the menus: the decks the feature was made with in their own order, then
+// the others by name.
+bool deck_before(const std::string& a, const std::string& b) {
+    const auto place = [](const std::string& name) {
+        return static_cast<std::size_t>(std::find(board_break_decks.begin(), board_break_decks.end(), name) - board_break_decks.begin());
+    };
+    return place(a) != place(b) ? place(a) < place(b) : a < b;
+}
+// The choice made in this run, and what the last live apply gave the game (none since launch: the
+// launch's catalogue says).
+struct BoardBreakApplied {
+    std::string deck;
+    std::vector<std::string> set_aside;
+};
+std::mutex board_break_mutex;
+std::string chosen_deck;
+std::optional<BoardBreakApplied> applied_board_break;
+
 } // namespace
+
+std::string board_break_deck_of(std::string_view mod) {
+    // Team-Board_Break_Wide and Board_Break_Wide are both the deck "wide".
+    constexpr std::string_view prefix = "board_break_";
+    auto name = lower(mod);
+    if (const auto team = name.rfind('-'); team != std::string::npos) name.erase(0, team + 1);
+    if (!name.starts_with(prefix) || !deck_name(std::string_view(name).substr(prefix.size()))) return {};
+    return name.substr(prefix.size());
+}
+std::string wanted_board_break_deck() noexcept {
+    try {
+        {
+            std::lock_guard lock(board_break_mutex);
+            if (!chosen_deck.empty()) return chosen_deck;
+        }
+        std::string choice;
+        if (const auto path = board_break_deck_file(); !path.empty()) {
+            std::ifstream file(path);
+            std::getline(file, choice);
+        }
+        while (!choice.empty() && (choice.back() == '\r' || choice.back() == ' ')) choice.pop_back();
+        choice = lower(choice);
+        return deck_name(choice) ? choice : std::string(board_break_decks.front());
+    } catch (...) {
+        return {};
+    }
+}
+bool save_board_break_deck(std::string_view deck) noexcept {
+    try {
+        if (!deck_name(deck)) return false;
+        const auto path = board_break_deck_file();
+        if (path.empty()) return false;
+        std::error_code error;
+        fs::create_directories(path.parent_path(), error);
+        std::ofstream file(path, std::ios::trunc);
+        file << deck << '\n';
+        if (!file) return false;
+        std::lock_guard lock(board_break_mutex);
+        chosen_deck = deck;
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+std::vector<std::filesystem::path> board_break_folders() noexcept {
+    std::vector<fs::path> found;
+    try {
+        std::vector<std::pair<std::string, fs::path>> decks;
+        std::error_code error;
+        for (fs::directory_iterator at(engine_data_root() / L"Mods", error), end; !error && at != end; at.increment(error))
+            if (at->is_directory(error))
+                if (auto deck = board_break_deck_of(at->path().filename().string()); !deck.empty()) decks.emplace_back(std::move(deck), at->path());
+        std::sort(decks.begin(), decks.end(), [](const auto& a, const auto& b) { return deck_before(a.first, b.first); });
+        for (auto& deck : decks) found.push_back(std::move(deck.second));
+    } catch (...) {}
+    return found;
+}
+std::vector<std::string> installed_board_break_decks() noexcept {
+    std::vector<std::string> found;
+    try {
+        for (const auto& folder : board_break_folders()) {
+            auto deck = board_break_deck_of(folder.filename().string());
+            if (found.empty() || found.back() != deck) found.push_back(std::move(deck));
+        }
+    } catch (...) {}
+    return found;
+}
+std::string board_break_in_play() noexcept {
+    try {
+        {
+            std::lock_guard lock(board_break_mutex);
+            if (applied_board_break) return applied_board_break->deck;
+        }
+        return catalog().board_break_deck;
+    } catch (...) {
+        return {};
+    }
+}
+std::vector<std::string> set_aside_for_board_break() {
+    {
+        std::lock_guard lock(board_break_mutex);
+        if (applied_board_break) return applied_board_break->set_aside;
+    }
+    return catalog().set_aside;
+}
+void board_break_applied(const Catalog& catalog) noexcept {
+    try {
+        std::lock_guard lock(board_break_mutex);
+        applied_board_break = BoardBreakApplied{catalog.board_break_deck, catalog.set_aside};
+    } catch (...) {}
+}
 
 std::filesystem::path engine_data_root() noexcept {
     try {
@@ -135,10 +275,42 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     try {
         for (const auto& name : list.missing)
             result.notes.push_back("mods.json names a folder that is not present: " + name);
+        // Board Break (Extension/BoardBreak/board_break.h). The deck that can break is a mod's own
+        // copy of the game's one deck model, and any mod that reshapes the deck replaces that same
+        // model: the one higher in the load order has it. So the deck the player chose goes first
+        // for this run, whatever mods.json says of the order, and what would fight it is set aside:
+        // Board Break's other decks, and other mods that bring a deck model. Those are left out
+        // whole: with the breakable deck in place of its own, such a mod would have its trucks and
+        // wheels on a deck they were not made for. mods.json is not changed, and their archives are
+        // placed like a disabled mod's, so another deck can be chosen while the game runs. A choice
+        // that is not installed falls back to the first deck, then to any that is.
+        {
+            const auto enabled_deck = [&](const std::string& deck) {
+                return std::find_if(list.entries.begin(), list.entries.end(), [&](const auto& entry) {
+                    const auto found = board_break_deck_of(entry.mod.name);
+                    return entry.enabled && !found.empty() && (deck.empty() || found == deck);
+                });
+            };
+            auto first = list.entries.end();
+            for (const auto& deck : {wanted_board_break_deck(), std::string(board_break_decks.front()), std::string()})
+                if (first == list.entries.end()) first = enabled_deck(deck);
+            if (first != list.entries.end()) {
+                std::rotate(list.entries.begin(), first, first + 1);
+                result.notes.push_back("Board Break: " + list.entries.front().mod.name + " loads first, so its deck is the one in the game");
+                for (auto entry = list.entries.begin() + 1; entry != list.entries.end(); ++entry) {
+                    if (!entry->enabled || (board_break_deck_of(entry->mod.name).empty() && !changes_the_deck(entry->mod.directory))) continue;
+                    entry->enabled = false;
+                    result.set_aside.push_back(entry->mod.name);
+                    result.notes.push_back("Board Break: " + entry->mod.name + " brings a deck model too and is set aside for this run");
+                }
+            }
+        }
         for (auto& entry : list.entries) {
             if (!entry.enabled) {
-                result.notes.push_back("Mod disabled in mods.json: " + entry.mod.name);
-                result.disabled.push_back(entry.mod.name);
+                if (std::find(result.set_aside.begin(), result.set_aside.end(), entry.mod.name) == result.set_aside.end()) {
+                    result.notes.push_back("Mod disabled in mods.json: " + entry.mod.name);
+                    result.disabled.push_back(entry.mod.name);
+                }
                 if (entry.mod.provides_layout) result.inactive.push_back(std::move(entry.mod));
                 continue;
             }
@@ -216,6 +388,12 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             result.notes.push_back("Disabled mod " + result.inactive[i].name + " is left out of the patch too: it was made for game build " +
                                    build + ", the installed game is " + game_build);
             result.inactive.erase(result.inactive.begin() + static_cast<std::ptrdiff_t>(i));
+        }
+        // Board Break's deck is the one in the game when its mod is among those that load and no mod
+        // above it brings a deck model of its own.
+        for (const auto& mod : result.mods) {
+            if (!(result.board_break_deck = board_break_deck_of(mod.name)).empty()) break;
+            if (changes_the_deck(mod.directory)) break;
         }
         // Any Mods folder gets a patch, even an empty one or one of disabled
         // mods only: a mod enabled or dropped in while the game runs needs it

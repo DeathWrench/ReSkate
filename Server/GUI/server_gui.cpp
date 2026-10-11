@@ -10,6 +10,7 @@
 #include "server_gui.h"
 #include "server_gui_renderer.h"
 #include "../server_engine.h"
+#include "../server_words.h"
 #include "Extension/UI/skate_theme.h"
 #include "Extension/UI/Overlay/skate_style.h"
 #include "Extension/Multiplayer/Net/protocol.h"
@@ -1261,11 +1262,210 @@ void draw_world_tab(const ServerStatusSnapshot& stats) {
     }
 }
 
+// --- Roles editor (data/roles.json; Server/roles.h) ---
+// A copy of the roles is edited here and written back whole: the file is saved and, with the
+// server running, read again by it ("roles reload"). Who has which role is not edited here (the
+// PLAYER ROLES tab and the role command do that), so a save keeps the players the server has now.
+struct RolesEditor {
+    Roles roles;
+    bool loaded{};
+    int selected{};
+    char new_name[32]{};
+};
+static RolesEditor s_roles;
+
+static bool text_field(const char* label, std::string& value, std::size_t most, const char* hint = "") {
+    std::array<char, 512> buffer{};
+    strncpy_s(buffer.data(), buffer.size(), value.c_str(), _TRUNCATE);
+    const bool changed = ImGui::InputTextWithHint(label, hint, buffer.data(), std::min(buffer.size(), most + 1));
+    if (changed) value = buffer.data();
+    return changed;
+}
+
+static void save_roles() {
+    auto& engine = ServerEngine::instance();
+    auto& cfg = engine.config();
+    auto roles = s_roles.roles;
+    // Players keep the roles the server has given them, except a role that was deleted here.
+    roles.players = cfg.roles.players;
+    std::erase_if(roles.players, [&](const auto& entry) { return !roles.find(entry.second); });
+    if (!roles.default_role.empty() && !roles.find(roles.default_role)) roles.default_role.clear();
+    roles.settle();
+    if (const auto problem = roles_error(roles); !problem.empty()) {
+        show_notification("Roles not saved: " + problem, 6.0, danger);
+        return;
+    }
+    try {
+        const auto file = roles_file(cfg);
+        std::filesystem::create_directories(file.parent_path());
+        {
+            std::ofstream out(file, std::ios::binary | std::ios::trunc);
+            if (!(out << roles_text(roles))) throw std::runtime_error("could not write data/roles.json");
+        }
+        if (engine.state() == ServerState::Running) engine.queue_command("roles reload");
+        else cfg.roles = roles;
+        s_roles.roles = roles;
+        show_notification("Roles saved to data/roles.json.", 3.5, good);
+    } catch (const std::exception& e) {
+        show_notification(std::string("Roles not saved: ") + e.what(), 5.0, danger);
+    }
+}
+
+static void draw_roles_editor() {
+    auto& cfg = ServerEngine::instance().config();
+    if (!s_roles.loaded) {
+        s_roles.roles = cfg.roles;
+        s_roles.loaded = true;
+    }
+    auto& roles = s_roles.roles;
+
+    if (rough_button("SAVE ROLES", ImVec2(S(150), S(32)))) save_roles();
+    ImGui::SameLine(0, S(10));
+    if (rough_button("DISCARD CHANGES", ImVec2(S(170), S(32)))) {
+        roles = cfg.roles;
+        s_roles.selected = 0;
+        show_notification("Roles put back as the server has them.", 3.0, blue);
+    }
+    ImGui::SameLine(0, S(10));
+    if (rough_button("OPEN ROLES FILE", ImVec2(S(170), S(32)))) {
+        const auto path = roles_file(cfg).string();
+        ShellExecuteA(nullptr, "open", path.c_str(), nullptr, nullptr, SW_SHOW);
+    }
+    ImGui::Dummy(ImVec2(0, S(6)));
+
+    ImGui::Columns(2, "roles_cols", false);
+    ImGui::SetColumnWidth(0, ImGui::GetWindowWidth() * 0.34f);
+
+    // The list of roles, highest rank first, and making a new one.
+    const std::string count = std::to_string(roles.list.size()) + " of " + std::to_string(max_roles) + " roles";
+    begin_card("card_roles_list", "ROLES", count.c_str());
+    std::vector<int> order(roles.list.size());
+    for (int i = 0; i < static_cast<int>(order.size()); ++i) order[i] = i;
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return roles.list[a].rank > roles.list[b].rank; });
+    s_roles.selected = std::clamp(s_roles.selected, 0, std::max(0, static_cast<int>(roles.list.size()) - 1));
+    for (const int i : order) {
+        const auto& role = roles.list[i];
+        std::string label = role.name + "  (rank " + std::to_string(role.rank) + ")";
+        if (role.name == roles.default_role) label += "  - default";
+        ImGui::PushID(i);
+        if (rough_button(label.c_str(), ImVec2(ImGui::GetContentRegionAvail().x, S(28)), s_roles.selected == i)) s_roles.selected = i;
+        ImGui::PopID();
+    }
+    ImGui::Spacing();
+    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::InputTextWithHint("##new_role", "new role name (a-z, 0-9, - and _)", s_roles.new_name, 25);
+    ImGui::PopItemWidth();
+    if (rough_button("ADD ROLE", ImVec2(S(130), S(28)))) {
+        Role role;
+        role.name = s_roles.new_name;
+        Roles tried = roles;
+        tried.list.push_back(role);
+        tried.players.clear();
+        if (const auto problem = roles_error(tried); !problem.empty()) {
+            show_notification("Role not added: " + problem, 5.0, danger);
+        } else {
+            roles.list.push_back(std::move(role));
+            s_roles.selected = static_cast<int>(roles.list.size()) - 1;
+            s_roles.new_name[0] = '\0';
+        }
+    }
+    end_card();
+
+    ImGui::NextColumn();
+
+    if (roles.list.empty()) {
+        begin_card("card_role_none", "NO ROLES", "Add a role on the left");
+        ImGui::PushStyleColor(ImGuiCol_Text, muted);
+        ImGui::TextWrapped("Without roles every player chats, votes and joins parties as usual, and nobody but the console runs commands.");
+        ImGui::PopStyleColor();
+        end_card();
+        ImGui::Columns(1);
+        return;
+    }
+
+    auto& role = roles.list[s_roles.selected];
+    const std::string title = "ROLE: " + role.name;
+    begin_card("card_role_edit", title.c_str(), "Changes apply when you press SAVE ROLES");
+    ImGui::PushID(s_roles.selected);
+    ImGui::PushItemWidth(S(300));
+    text_field("Tag", role.tag, multiplayer::max_role_tag, "shown before the player's name; empty for none");
+    {
+        // The tag's colour, kept as the #RRGGBB the file holds.
+        const auto rgb = role.color.size() == 7 && role.color[0] == '#' ? std::strtoul(role.color.c_str() + 1, nullptr, 16) : 0xFFFFFFUL;
+        float colour[3]{((rgb >> 16) & 255) / 255.f, ((rgb >> 8) & 255) / 255.f, (rgb & 255) / 255.f};
+        if (ImGui::ColorEdit3("Tag Colour", colour, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoAlpha)) {
+            const auto part = [](float v) { return static_cast<unsigned>(std::lround(std::clamp(v, 0.f, 1.f) * 255.f)); };
+            role.color = std::format("#{:02X}{:02X}{:02X}", part(colour[0]), part(colour[1]), part(colour[2]));
+        }
+        ImGui::SameLine(0, S(10));
+        ImGui::PushStyleColor(ImGuiCol_Text, muted);
+        ImGui::TextUnformatted(role.color.c_str());
+        ImGui::PopStyleColor();
+    }
+    ImGui::SliderInt("Rank", &role.rank, 0, 1000);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Nobody uses a command on a player whose rank is theirs or higher, or gives out such a role.");
+    ImGui::PopItemWidth();
+
+    bool is_default = role.name == roles.default_role;
+    if (ImGui::Checkbox("Default role (everyone who was given none)", &is_default)) roles.default_role = is_default ? role.name : std::string{};
+    ImGui::Checkbox("Also has what the default role has", &role.inherit);
+
+    ImGui::Dummy(ImVec2(0, S(4)));
+    ImGui::PushFont(g_fonts.bold);
+    ImGui::TextUnformatted("PERMISSIONS");
+    ImGui::PopFont();
+    static constexpr std::array<const char*, 11> permission_labels{
+        "Chat", "Start votes and vote", "Parties", "Private messages", "Reserved slot (joins a full server)",
+        "No object limit, builds when players may not", "Noclip, No Bail and boosts when players may not",
+        "Never removed for being away", "Cannot be vote-kicked", "Sees anti-cheat alerts", "Starts and ends polls"};
+    for (std::size_t i = 0; i < role_permissions.size(); ++i) {
+        bool on = (role.permissions & role_permissions[i].second) != 0;
+        if (ImGui::Checkbox(permission_labels[i], &on)) role.permissions = on ? role.permissions | role_permissions[i].second : role.permissions & ~role_permissions[i].second;
+        if (i % 2 == 0 && i + 1 < role_permissions.size()) ImGui::SameLine(S(330));
+    }
+
+    ImGui::Dummy(ImVec2(0, S(4)));
+    ImGui::PushFont(g_fonts.bold);
+    ImGui::TextUnformatted("SERVER COMMANDS");
+    ImGui::PopFont();
+    ImGui::Checkbox("Every command (except role and reserved, unless listed below)", &role.all_commands);
+    {
+        // The commands it lists, as words with blanks between.
+        std::string listed;
+        for (const auto& command : role.commands) listed += (listed.empty() ? "" : " ") + command;
+        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+        if (text_field("##role_commands", listed, 500, "commands, e.g. kick ban unban bans players msg tphere role")) {
+            role.commands.clear();
+            std::string word;
+            for (const char c : listed + " ") {
+                if (c != ' ' && c != ',') { word += static_cast<char>(std::tolower(static_cast<unsigned char>(c))); continue; }
+                if (!word.empty() && std::find(role.commands.begin(), role.commands.end(), word) == role.commands.end()) role.commands.push_back(word);
+                word.clear();
+            }
+        }
+        ImGui::PopItemWidth();
+    }
+
+    ImGui::Dummy(ImVec2(0, S(6)));
+    std::size_t holders = 0;
+    for (const auto& [id, name] : cfg.roles.players) holders += name == role.name;
+    const std::string remove = "DELETE ROLE" + (holders ? " (" + std::to_string(holders) + " player" + (holders == 1 ? "" : "s") + " lose it)" : std::string{});
+    if (colored_action_button(remove.c_str(), ImVec2(S(300), S(28)), danger, white, "Removed when you press SAVE ROLES")) {
+        if (roles.default_role == role.name) roles.default_role.clear();
+        roles.list.erase(roles.list.begin() + s_roles.selected);
+        s_roles.selected = 0;
+    }
+    ImGui::PopID();
+    end_card();
+
+    ImGui::Columns(1);
+}
+
 void draw_moderation_tab() {
     section("MODERATION & ACCESS CONTROLS");
 
     category_tabs(g_state.moderation_subtab,
-                  {"SERVER BANS", "SERVER ADMINISTRATORS"},
+                  {"SERVER BANS", "PLAYER ROLES", "ROLES"},
                   "mod_tabs");
 
     if (g_state.moderation_subtab == 0) {
@@ -1346,14 +1546,14 @@ void draw_moderation_tab() {
         end_card();
 
     } else if (g_state.moderation_subtab == 1) {
-        // SERVER ADMINISTRATORS
-        // Admins are a role now (roles.h): everyone who was given a role is listed with it, and
-        // taking it away leaves them the default role. (A copy: the commands below change the list.)
+        // PLAYER ROLES
+        // Everyone who was given a role is listed with it, and taking it away leaves them the
+        // default role. (A copy: the commands below change the list.)
         const auto admins = ServerEngine::instance().config().roles.players;
-        begin_card("card_admins", "SERVER ADMINISTRATORS", "Players who were given a role (data/roles.json)");
+        begin_card("card_admins", "PLAYER ROLES", "Players who were given a role (data/roles.json)");
         if (admins.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, muted);
-            ImGui::TextUnformatted("No administrators currently configured.");
+            ImGui::TextUnformatted("Nobody was given a role yet.");
             ImGui::PopStyleColor();
         } else {
             for (const auto& [admin_id, role_name] : admins) {
@@ -1378,15 +1578,32 @@ void draw_moderation_tab() {
         ImGui::PushItemWidth(S(260));
         ImGui::InputTextWithHint("##new_admin_id", "SteamID64 (e.g. 7656119...)", s_new_admin, sizeof(s_new_admin));
         ImGui::PopItemWidth();
+        // Which role to give: any of the server's, highest rank first.
+        static std::string s_grant_role = "admin";
+        const auto& known = ServerEngine::instance().config().roles;
+        if (!known.find(s_grant_role) && !known.list.empty()) s_grant_role = known.list.front().name;
         ImGui::SameLine(0, S(10));
-        if (rough_button("GRANT ADMIN", ImVec2(S(140), S(30)))) {
-            if (s_new_admin[0]) {
-                ServerEngine::instance().queue_command(std::string("role ") + s_new_admin + " admin");
-                show_notification("Added administrator: " + std::string(s_new_admin), 3.5, good);
+        ImGui::PushItemWidth(S(170));
+        if (ImGui::BeginCombo("##grant_role", s_grant_role.c_str())) {
+            for (const auto& role : known.list)
+                if (ImGui::Selectable(role.name.c_str(), role.name == s_grant_role)) s_grant_role = role.name;
+            ImGui::EndCombo();
+        }
+        ImGui::PopItemWidth();
+        ImGui::SameLine(0, S(10));
+        if (rough_button("GIVE ROLE", ImVec2(S(140), S(30)))) {
+            if (s_new_admin[0] && known.find(s_grant_role)) {
+                ServerEngine::instance().queue_command(std::string("role ") + s_new_admin + " " + s_grant_role);
+                show_notification("Gave " + std::string(s_new_admin) + " the role " + s_grant_role, 3.5, good);
                 s_new_admin[0] = '\0';
             }
         }
+        ImGui::PushStyleColor(ImGuiCol_Text, muted);
+        ImGui::TextWrapped("Roles are given while the server is running. Create and edit the roles themselves on the ROLES tab.");
+        ImGui::PopStyleColor();
         end_card();
+    } else {
+        draw_roles_editor();
     }
 }
 
@@ -2362,6 +2579,7 @@ struct SettingsForm {
     bool enforce_tuning{true};
     float bone_scale_limit{2.0f};
     bool global_bans{true};
+    bool global_words{true};
 
     bool initialized{false};
 };
@@ -2400,6 +2618,7 @@ static void sync_form_from_config(SettingsForm& form, const ServerConfig& cfg) {
     form.enforce_tuning = cfg.enforce_tuning;
     form.bone_scale_limit = cfg.bone_scale_limit;
     form.global_bans = cfg.global_bans;
+    form.global_words = cfg.global_words;
 
     form.initialized = true;
 }
@@ -2447,6 +2666,7 @@ void draw_settings_tab(ServerStatusSnapshot& stats) {
         cfg.enforce_tuning = s_form.enforce_tuning;
         cfg.bone_scale_limit = std::clamp(s_form.bone_scale_limit, 1.0f, 8.0f);
         cfg.global_bans = s_form.global_bans;
+        cfg.global_words = s_form.global_words;
 
         try {
             save_config(cfg);
@@ -2465,6 +2685,7 @@ void draw_settings_tab(ServerStatusSnapshot& stats) {
                 ServerEngine::instance().queue_command("speed-check " + cfg.speed_check);
                 ServerEngine::instance().queue_command("score-check " + cfg.score_check);
                 ServerEngine::instance().queue_command("bone-scale " + std::to_string(static_cast<int>(cfg.bone_scale_limit)));
+                ServerEngine::instance().queue_command(std::string("words global ") + (cfg.global_words ? "on" : "off"));
             }
             show_notification("Configuration saved to ReSkateServer.json & synchronized.", 4.0, good);
         } catch (const std::exception& e) {
@@ -2518,6 +2739,34 @@ void draw_settings_tab(ServerStatusSnapshot& stats) {
     ImGui::SliderFloat("Bone Scale Limit", &s_form.bone_scale_limit, 1.0f, 8.0f, "%.1fx");
     ImGui::Checkbox("Enforce Global Ban List", &s_form.global_bans);
     ImGui::PopItemWidth();
+    end_card();
+
+    // Column 1: Chat words
+    begin_card("card_cfg_words", "CHAT WORD FILTER", "The ReSkate team's lists and this server's own");
+    ImGui::Checkbox("Use Global Word Filter", &s_form.global_words);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Off: only this server's own words are filtered and blocked.\nPlayers' games still star the team's filtered words for players with their chat filter on.");
+    ImGui::PushStyleColor(ImGuiCol_Text, muted);
+    ImGui::TextWrapped("This server's own words are in data/words_filtered.txt (starred for players with the chat filter on) and data/words_blocked.txt (never passed on). One word to a line.");
+    ImGui::PopStyleColor();
+    if (rough_button("FILTERED WORDS", ImVec2(S(160), S(28)))) {
+        const auto path = filtered_words_file(ServerEngine::instance().config()).string();
+        ShellExecuteA(nullptr, "open", path.c_str(), nullptr, nullptr, SW_SHOW);
+    }
+    ImGui::SameLine(0, S(8));
+    if (rough_button("BLOCKED WORDS", ImVec2(S(160), S(28)))) {
+        const auto path = blocked_words_file(ServerEngine::instance().config()).string();
+        ShellExecuteA(nullptr, "open", path.c_str(), nullptr, nullptr, SW_SHOW);
+    }
+    ImGui::SameLine(0, S(8));
+    if (rough_button("RELOAD WORDS", ImVec2(S(150), S(28)))) {
+        if (ServerEngine::instance().state() == ServerState::Running) {
+            ServerEngine::instance().queue_command("words reload");
+            show_notification("Reading this server's word files again; see the console.", 3.5, blue);
+        } else {
+            show_notification("The word files are read when the server starts.", 3.5, blue);
+        }
+    }
     end_card();
 
     ImGui::NextColumn();

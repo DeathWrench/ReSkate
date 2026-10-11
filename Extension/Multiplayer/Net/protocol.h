@@ -26,7 +26,7 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 48;
+constexpr std::uint16_t protocol_version = 49;
 // A dedicated server's chat lines unless its owner says otherwise: violet (#8E5CFF) and lavender (#D9C8FF).
 inline constexpr std::uint32_t default_server_chat_badge = 0xffff5c8eU, default_server_chat_text = 0xffffc8d9U;
 constexpr std::size_t max_throwdown_message = 4096;
@@ -122,7 +122,10 @@ enum class PacketKind : std::uint16_t {
     effects = 31,
     // A dedicated server telling one player what their role lets them do (Server/roles.h):
     // its name, the server commands they may use and their permissions beyond commands.
-    permissions = 32
+    permissions = 32,
+    // A dedicated server's own filtered chat words (Server/server_words.h), for the chat filter
+    // of each player on it: sent on joining and whenever its owner changes them.
+    words = 33
 };
 // Packet::party_action. Requests go from a player to whoever hosts, a dedicated server or a
 // lobby's host (party_player = the other player involved, 0 for leave/open/close); invited
@@ -167,6 +170,14 @@ inline constexpr std::uint32_t role_reserved_slot = 1, role_objects = 2, role_mo
 constexpr std::size_t max_admin_text = 320;
 constexpr std::size_t max_ban_rows = 256;
 constexpr std::size_t max_server_maps = 128, max_map_asset = 128;
+// Packet::words: as many of a server's own filtered words as it sends, and how long one may be.
+constexpr std::size_t max_server_words = 256, max_server_word = 32;
+inline bool valid_server_word(std::string_view word) noexcept {
+    if (word.empty() || word.size() > max_server_word) return false;
+    for (const unsigned char c : word)
+        if (c < 32 || c == 127) return false;
+    return true;
+}
 // A level asset as a server's map list carries it: printable ASCII, no '|'.
 bool valid_map_asset(std::string_view asset) noexcept;
 bool valid_map_pool(std::span<const std::uint16_t> pool, std::size_t maps) noexcept; // distinct indices below `maps`
@@ -299,6 +310,7 @@ struct Packet {
     std::string role;
     bool role_all_commands{};
     std::vector<std::string> role_commands;
+    std::vector<std::string> words;           // words: a dedicated server's own filtered chat words
     std::uint32_t role_permissions{};
     PartyAction party_action = PartyAction::leave; // party: what is asked or told
     std::uint64_t party_player{};                   // party: the other player (see PartyAction)

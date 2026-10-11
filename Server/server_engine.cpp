@@ -176,6 +176,13 @@ bool ServerEngine::load_environment(const std::filesystem::path& folder, const s
             renamed = true;
         }
     }
+    for (auto &park : config_.park_mods) { // and so are the maps the park mods belong to
+        if (const auto *level = find_level(park.map); level && level->name != park.map) {
+            park.map = level->name;
+            renamed = true;
+        }
+    }
+    config_.mods = folder_ / "Mods";
     if (renamed) try { save_config(config_); } catch (...) {}
     if (const auto error = config_error(config_); !error.empty()) {
         std::string err = "Config problem: " + error;
@@ -320,6 +327,7 @@ void ServerEngine::run_startup() {
             cleanup_server_instances();
             return;
         }
+        log(host_->command("words")); // reads this server's own chat words (server_words.h)
 
         log(config_.name + " is up on " + host_->map_name() + " for " + std::to_string(config_.max_players) + " players.", LogLevel::success);
         log("Steam ID " + std::to_string(steam_->steam_id()) +

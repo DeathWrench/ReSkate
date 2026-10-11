@@ -347,6 +347,12 @@ int run(int argc, char **argv, bool skip_update) {
             map = level->name;
             renamed = true;
         }
+    for (auto &park : config.park_mods) // and so are the maps the park mods belong to
+        if (const auto *level = find_level(park.map); level && level->name != park.map) {
+            park.map = level->name;
+            renamed = true;
+        }
+    config.mods = here / "Mods";
     if (renamed) try { save_config(config); } catch (...) {}
     if (const auto error = config_error(config); !error.empty()) {
         write_log("Config problem: " + error);
@@ -507,6 +513,7 @@ int run(int argc, char **argv, bool skip_update) {
     auto next_ban_check = next_advertise;
     bool bans_unread{};
     if (!config.global_bans) write_log("Global bans are off (\"use_global_bans\": false): only this server's own bans apply.");
+    write_log(host.command("words")); // reads this server's own chat words
     // Signed in to Steam, as last logged, and when it is looked at again. Players already on stay
     // connected through a lost sign-in, but nobody new can join: Steam carries the first messages
     // of a connection, and theirs time out ("negotiate rendezvous").
@@ -681,7 +688,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmd_show) {
     for (int i = 1; i < argc; ++i) {
         if (!argvW[i]) continue;
         std::wstring arg = argvW[i];
-        if (arg == L"--headless" || arg == L"--cli" || arg == L"--no-gui" || arg == L"-nogui" || arg == L"-headless" || arg == L"-cli") {
+        // The release build's world layer export (serve) is a console job too: the window would
+        // open instead and nothing would be written.
+        if (arg == L"--headless" || arg == L"--cli" || arg == L"--no-gui" || arg == L"-nogui" || arg == L"-headless" || arg == L"-cli" ||
+            arg == L"--export-world-layers") {
             headless = true;
             break;
         }

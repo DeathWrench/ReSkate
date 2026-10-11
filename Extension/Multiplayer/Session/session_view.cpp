@@ -527,11 +527,23 @@ std::vector<MultiplayerChatCommand> chat_commands(const Session &s) {
             list.push_back({"/rotation", "/rotation [<minutes>|off]", "Admin: change the map on a timer, through the map pool"});
             list.push_back({"/role", "/role <player> <role>|none", "Admin: give a player a role, or take theirs away", "player"});
             list.push_back({"/roles", "/roles", "Admin: the server's roles and who has them"});
+            // Park mods (Server/server_parks.cpp): their names are the server's own, not in the roster.
+            list.push_back({"/park-mod list", "/park-mod list", "Admin: the server's park mods, and which are spawned"});
+            list.push_back({"/park-mod add", "/park-mod add <name> [<name>...] [minutes]",
+                            "Admin: spawn park mods on this map, for 1-1440 minutes or until removed"});
+            list.push_back({"/park-mod remove", "/park-mod remove <name> [<name>...]", "Admin: remove spawned park mods"});
+            list.push_back({"/park-mod clear", "/park-mod clear", "Admin: remove every spawned park mod"});
+            list.push_back({"/park-mod reload", "/park-mod reload <name> [<name>...]",
+                            "Admin: read a spawned park mod's file again and update it in place"});
+            list.push_back({"/park-mod config add", "/park-mod config add <name> | <mod folder> | <map> [| <key>]",
+                            "Admin: set up a park mod from the server's Mods folder, without a restart"});
+            list.push_back({"/park-mod config remove", "/park-mod config remove <name>", "Admin: remove a park mod from the server's setup"});
             list.erase(std::remove_if(list.begin() + static_cast<std::ptrdiff_t>(before_commands), list.end(), [&](const auto &entry) {
-                // "/poll end" is the polls permission's; the others are named for their command.
+                // "/poll end" is the polls permission's; the others are named for their command, the
+                // first word ("/park-mod add" is park-mod's).
                 const std::string_view shown = entry.name;
                 if (shown == "/poll end") return !(s.role_permissions & role_polls);
-                return !role_allows(s.role_all_commands, s.role_commands, shown.substr(1));
+                return !role_allows(s.role_all_commands, s.role_commands, shown.substr(1, shown.find(' ') - 1));
             }), list.end());
         }
     }

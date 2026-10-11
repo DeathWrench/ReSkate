@@ -3,9 +3,11 @@
 #include "mod_list.h"
 #include "mod_merge.h"
 
+#include <array>
 #include <cstddef>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace dingosdk::mods {
@@ -38,7 +40,38 @@ struct Catalog {
     // Mods left out because they were built for another game version (Mod::outdated), enabled or
     // not: they need updating. Also in `excluded` when they were enabled.
     std::vector<Mod> outdated;
+    // Board Break: the name of its deck that is the one in the game ("standard", "wide" and so on),
+    // empty when none is and a board cannot break; and the enabled mods set aside for it, its
+    // other decks and other mods that bring a deck model. Those are not loaded and nothing about
+    // them waits to be applied.
+    std::string board_break_deck;
+    std::vector<std::string> set_aside;
 };
+
+// Board Break's decks (Extension/BoardBreak/board_break.h). The game has one deck model for every
+// board, so each deck that can break is a content mod of its own that replaces it: any mod whose
+// folder is named Board_Break_<Name> (also behind a team name, as a mod manager installs it:
+// Team-Board_Break_<Name>). The name, in small letters, is what the deck goes by; the deck the
+// player chose is the one that loads. These are the decks the feature was made with, in the order
+// the menus list them, and the console also knows them by their place here (deck 1 is the first).
+// Any other deck comes after them, by its name: a new shape needs no change to ReSkate.
+inline constexpr std::array<std::string_view, 8> board_break_decks{"standard", "wide", "concave", "powell",
+                                                                   "slim", "egg", "square", "shaped"};
+// The name of the deck a mod folder holds, or nothing for any other mod.
+std::string board_break_deck_of(std::string_view mod_folder);
+// The deck the player chose ("standard" when nothing was chosen): read whenever the mods are put
+// together, at launch and at every live apply. Saving a choice makes it this run's at once.
+std::string wanted_board_break_deck() noexcept;
+bool save_board_break_deck(std::string_view deck) noexcept;
+// The decks whose mod's folder is in Mods/, whatever mods.json says of them, in the menus' order,
+// and those folders in the same order.
+std::vector<std::string> installed_board_break_decks() noexcept;
+std::vector<std::filesystem::path> board_break_folders() noexcept;
+// What the mods in effect give the game: the launch's catalogue, or the one the last live apply
+// read (live_mods tells with board_break_applied).
+std::string board_break_in_play() noexcept;
+std::vector<std::string> set_aside_for_board_break();
+void board_break_applied(const Catalog& catalog) noexcept;
 
 // The engine's own data root: the -dataPath argument when present, otherwise
 // the executable's directory. Mirrors the game so mod paths resolve the same.

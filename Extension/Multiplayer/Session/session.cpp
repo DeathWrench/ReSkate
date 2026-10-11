@@ -88,6 +88,8 @@ void stop(Session &s, std::string reason) {
     s.server_bans.clear();
     s.server_ban_total = 0;
     s.server_maps.clear();
+    text::set_own_words({}, {}); // the server's own filtered words go with it
+    s.chat_masked.clear();
     s.server_map_pool.clear();
     s.server_map_rotation = 0;
     set_lobby_object_placement_allowed(true);

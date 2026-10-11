@@ -1,4 +1,5 @@
 #include "server_host.h"
+#include "server_words.h"
 #include "server_text.h"
 #include "Engine/Core/Text/word_filter.h"
 #include "Engine/Game/World/park_randomization.h"
@@ -27,8 +28,10 @@ constexpr std::string_view help_text =
     "announce <text> | announce-to <player> <text> | announcements [list|add <text>|remove <n>|clear|interval <minutes>|off]\n"
     "map-pool [add|remove <map>|clear] | rotation [<minutes>|off]\n"
     "park <lot> <layout> | park random | layer-sync on|off | layer <key> default|on|off | tod <time|default>\n"
+    "park-mod list | park-mod add <name> [<name>...] [minutes] | park-mod remove <name> [<name>...] | park-mod clear | park-mod reload <name> [<name>...]\n"
+    "park-mod config add <name> | <mod folder> | <map> [| <key>] | park-mod config remove <name>\n"
     "activity-log on|off | announce-throwdowns on|off | parties [on|off] | party-size <2-8> | afk-kick <minutes>|off | speed-check off|warn|kick | board-check off|warn|kick\n"
-    "score-check [off|warn|kick] | score-allow [<fingerprint>|remove <fingerprint>]\n"
+    "score-check [off|warn|kick] | score-allow [<fingerprint>|remove <fingerprint>] | words [reload | global on|off]\n"
     "reserved [slots <n> | add|remove <SteamID64>] | roles [reload] | role <player or SteamID64> <role>|none | update | quit";
 } // namespace
 
@@ -421,6 +424,21 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         parties_.set_limit(config_.party_size);
         return changed("Parties hold up to " + std::to_string(config_.party_size) + " players. Larger ones stay until members leave.");
     }
+    if (name == "words") {
+        // This server's own chat words (server_words.h): the files are read again each time.
+        const auto [what, setting] = split(argument);
+        const auto global = what == "global" ? on_off(setting) : std::nullopt;
+        if (!what.empty() && what != "reload" && !global) return std::string("words | words reload | words global on|off");
+        if (global) config_.global_words = *global;
+        auto read = use_own_words(config_);
+        if (read.sent != filtered_words_) {
+            filtered_words_ = std::move(read.sent);
+            ++words_revision_; // every player is sent them again (tick)
+        }
+        read.sent = filtered_words_;
+        const auto now = own_words_text(config_, read);
+        return global ? changed(now) : now;
+    }
     if (name == "activity-log") {
         const auto value = on_off(argument);
         if (!value) return std::string("activity-log on|off (now ") + (config_.activity_log ? "on" : "off") + ")";
@@ -669,6 +687,7 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         ++object_clears_;
         return changed("Deleted " + std::to_string(removed) + " placed object" + (removed == 1 ? "." : "s."));
     }
+    if (name == "park-mod") return park_mod_command(argument, admin);
     if (name == "park") {
         if (lower(argument) == "random") {
             config_.parks = random_park_choices();

@@ -436,6 +436,7 @@ void apply_now() {
         std::lock_guard lock(state_mutex);
         // Set with the manifests, so the client tick sees both in one update.
         if (needed) reload_ready = true;
+        mods::board_break_applied(catalog);
         pending_levels = mods::level_manifest_paths(catalog);
         applied.emplace();
         for (const auto &mod : catalog.mods) applied->push_back(mod.name);

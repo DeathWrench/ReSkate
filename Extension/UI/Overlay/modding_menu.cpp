@@ -50,11 +50,18 @@ void draw_installed_mods(SkateMenu& menu) {
     const auto excluded = [&](const std::string& name) {
         return std::ranges::any_of(launch.excluded, [&](const mods::Mod& mod) { return _stricmp(mod.name.c_str(), name.c_str()) == 0; });
     };
+    // Board Break's other decks and other mods that bring a deck model: enabled, not loaded, and
+    // nothing about them waits to be applied.
+    const auto aside = mods::set_aside_for_board_break();
+    const auto set_aside = [&](const mods::ModEntry& entry) {
+        return entry.enabled && !in_effect(entry.mod.name) &&
+               std::ranges::any_of(aside, [&](const std::string& other) { return _stricmp(other.c_str(), entry.mod.name.c_str()) == 0; });
+    };
     std::size_t loaded{}, pending{};
     for (const auto& entry : list.entries) {
         const bool effect = in_effect(entry.mod.name);
         if (effect) ++loaded;
-        if (entry.enabled != effect && !excluded(entry.mod.name)) ++pending;
+        if (entry.enabled != effect && !excluded(entry.mod.name) && !set_aside(entry)) ++pending;
     }
     // Mods still in effect whose folder has been deleted: applying unloads them.
     std::vector<std::string> removed;
@@ -155,6 +162,10 @@ void draw_installed_mods(SkateMenu& menu) {
             colour = skate_theme::danger;
             hover = "Not loaded: it could not be merged cleanly, so none of it is used.\n\n"
                     "Reinstall the whole mod folder, or rebuild it with a current ReSkate Studio.";
+        } else if (set_aside(entry)) {
+            status = "SET ASIDE";
+            hover = "Set aside while a Board Break deck is the one in the game: the game has one deck model, so one "
+                    "mod's deck loads at a time. Pick another deck with Board Break deck, or disable Board Break's decks.";
         } else if (entry.enabled && effect) {
             status = "LOADED";
             colour = skate_theme::good;

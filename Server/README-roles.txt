@@ -148,6 +148,9 @@ Map and world
                        between and the rotation uses.
   rotation             rotation [<minutes>|off]: change the map on a timer.
   park                 park <lot> <layout>, park random: the park layouts.
+  park-mod             The park mods (see Park mods in README.txt): list, add,
+                       remove, clear and reload spawned parks, and "park-mod
+                       config add|remove" to set one up (saved to the config).
   layer-sync           layer-sync on|off: force the server's world layers on
                        everyone.
   layer                layer <key> default|on|off: one world layer.

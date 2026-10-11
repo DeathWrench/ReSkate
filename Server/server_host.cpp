@@ -115,6 +115,11 @@ void Host::send_permissions(Guest &guest) {
     }
     if (send_packet(guest, p, true, false)) guest.permissions_sent = roles_revision_;
 }
+void Host::send_words(Guest &guest) {
+    auto p = packet(PacketKind::words, now_);
+    p.words = filtered_words_;
+    if (send_packet(guest, p, true, false)) guest.words_sent = words_revision_;
+}
 void Host::roles_changed() {
     ++roles_revision_;
     ++bans_revision_;
@@ -871,7 +876,9 @@ void Host::change_map(std::string_view map) {
     if (!valid_map_destination(map_destination(map_setting(map))))
         throw std::invalid_argument("That map does not name a destination.");
     if (!installed_map(map)) throw std::invalid_argument("This server does not have that map.");
-    // Everything tied to the old world goes; admission and player slots stay.
+    // Everything tied to the old world goes; admission and player slots stay. Park mods only fit
+    // the map they were built on.
+    remove_parks("map change");
     for (auto &[id, guest] : guests_) {
         auto &g = *guest;
         auto old = std::exchange(g, Guest{});
@@ -1453,6 +1460,8 @@ void Host::sync_objects() {
     std::vector<Source> sources;
     for (const auto &[id, guest] : guests_)
         if (guest->handshaken && guest->world_ready) sources.push_back({id, guest->member.epoch, &guest->shared});
+    // The spawned park mods: the server's own layout, sent like a player's.
+    if (park_objects_.revision()) sources.push_back({id_, epoch_, &park_objects_});
     for (auto &[id, guest] : guests_) {
         auto &peer = *guest;
         if (!peer.handshaken || !peer.world_ready || sources.empty()) continue;
@@ -1830,6 +1839,7 @@ void Host::tick(std::uint64_t now) {
             // Whoever may change the map picks from it; with map votes on, everyone completes /vote map from it.
             if (!guest->maps_sent && (can(id, "map") || config_.votes.map.enabled)) send_maps(*guest);
             if (guest->permissions_sent != roles_revision_) send_permissions(*guest);
+            if (guest->words_sent != words_revision_) send_words(*guest);
         }
     const bool loading = std::any_of(guests_.begin(), guests_.end(),
                                      [](const auto &g) { return g.second->handshaken && !g.second->world_ready; });
@@ -1839,6 +1849,7 @@ void Host::tick(std::uint64_t now) {
         travel_started_ = 0;
         log_("Everyone has loaded " + map_name() + ".");
     }
+    tick_parks();
     sync_objects();
     activity_.tick(now_);
     if (std::exchange(vote_recount_, false)) check_vote(false);

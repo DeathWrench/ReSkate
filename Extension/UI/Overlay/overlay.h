@@ -216,6 +216,13 @@ struct RoadRashModel {
     bool available = false, enabled = false, blood = false;
 };
 
+// Board Break's switch (Extension/BoardBreak/board_break.h): started, switched on, and which of
+// its decks is the one in the game (none: no deck pack loads, and no board can break).
+struct BoardBreakModel {
+    bool available = false, enabled = false, has_deck = false;
+    std::string deck = "None";
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -236,6 +243,7 @@ struct Model {
     PlayerCardModel player_card;
     HallOfMeatModel hall_of_meat;
     RoadRashModel road_rash;
+    BoardBreakModel board_break;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
