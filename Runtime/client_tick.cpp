@@ -106,6 +106,9 @@ void refresh_interactive_model(std::uintptr_t client, DWORD state, DWORD game_ty
 // - EA's error reporting (EadpErrorsData) only builds reports for EA's servers, which
 //   ea_service_block keeps unreachable. Set here because the same values given on the game's
 //   command line do not take;
+// - the in-game advertising (billboards served by EA's ad service, with a render pass that
+//   measures how long each was on screen) has nothing to show offline and still costs frame
+//   time: its three switches, the renderer's, the service's and the game's own;
 // - the world-transform update, which grows with every remote player's entities, is split
 //   over more jobs than Game.cfg's 2.
 void apply_performance_settings() {
@@ -117,7 +120,7 @@ void apply_performance_settings() {
     next_attempt = now + 500;
     try {
         const auto jobs = std::to_string(std::clamp(std::thread::hardware_concurrency() / 2, 2u, 8u));
-        const std::array<std::pair<const char*, std::string>, 10> settings{{
+        const std::array<std::pair<const char*, std::string>, 13> settings{{
             {"DingoTelemetry.Enable", "0"},
             {"DingoTelemetry.EnablePlayerTickEvents", "0"},
             {"DingoTelemetry.EnablePerformanceEvents", "0"},
@@ -127,6 +130,9 @@ void apply_performance_settings() {
             {"EadpErrorsData.AutoSendEventFromPersistence", "0"},
             {"PerformanceTracker.Enabled", "0"},
             {"PerformanceTracker.JuiceLogPerformance", "0"},
+            {"AdTech.AdTechEnable", "0"},
+            {"AdTechService.AdTechEnable", "0"},
+            {"DingoAdTech.EnableAdTech", "0"},
             {"EcsWorldTransform.ParallelWorldTransformUpdateJobCount", jobs},
         }};
         bool pending = false;
