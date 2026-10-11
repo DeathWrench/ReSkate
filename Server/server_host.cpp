@@ -299,9 +299,11 @@ Host::Guest::KeptPose *Host::keep_pose(Guest &from, const Packet &packet) {
     std::erase_if(kept, [&](const Guest::KeptPose &pose) { return now_ - pose.kept_at > pose_kept_for[std::min<std::size_t>(pose.keep, 3)]; });
     while (kept.size() >= 96) kept.pop_front();
     if (!kept.empty() && kept.back().sequence == packet.sequence) return &kept.back();
-    // What a mod resized on its player's skater reaches the others only as far as the server allows.
-    if (config_.bone_scale_limit >= 1.f || config_.bone_reach_limit > 0.f) {
+    // What a mod resized on its player's skater reaches the others only as far as the server allows,
+    // and a board kept on another player (check_board) not at all.
+    if (config_.bone_scale_limit >= 1.f || config_.bone_reach_limit > 0.f || from.board_hidden) {
         auto pose = packet.pose;
+        if (from.board_hidden) pose.board.clear();
         limit_bone_scale(pose, config_.bone_scale_limit);
         limit_bone_reach(pose, config_.bone_reach_limit);
         kept.push_back({packet.sequence, packet.time_us, now_, 0, pose_codec::quantize(pose)});
@@ -552,6 +554,7 @@ void Host::broadcast(const Packet &packet, bool reliable, bool fresh, std::uint6
             data.packet.pose_interval_us = interval;
             if (packet.kind == PacketKind::pose) {
                 // What a mod resized on its player's skater reaches the others only as far as the server allows.
+                if (source && source->board_hidden) data.packet.pose.board.clear();
                 if (config_.bone_scale_limit >= 1.f) limit_bone_scale(data.packet.pose, config_.bone_scale_limit);
                 limit_bone_reach(data.packet.pose, config_.bone_reach_limit);
             }
@@ -804,6 +807,7 @@ void Host::change_map(std::string_view map) {
         g.party_budget = old.party_budget;
         g.scoring_budget = old.scoring_budget;
         g.speeding = old.speeding;
+        g.board_hidden = old.board_hidden;
         g.scoring = old.scoring;
         g.scoring_mods = std::move(old.scoring_mods);
         g.scoring_flagged = old.scoring_flagged;
@@ -892,7 +896,8 @@ bool Host::accept_data(Guest &source, const Packet &p) {
                 active(source);
             }
         }
-        return check_speed(source, p.time_us); // last: a speed-check kick frees `source`
+        // Last: a kick by either check frees `source`.
+        return check_board(source, p.pose) && check_speed(source, p.time_us);
     }
     return true;
 }

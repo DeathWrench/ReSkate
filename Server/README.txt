@@ -169,6 +169,12 @@ speed_hack         Catch players whose game runs faster than normal (Cheat
                    throwdowns and coop challenges until their speed is normal
                    again and tells them so (the log has it for the admins), "kick" removes them from the
                    server, "off" does not check.
+pinned_board       Catch players whose skateboard stays on another player as
+                   that player moves (a hacked game placing its board there):
+                   "warn" (default) stops showing their board to everyone else
+                   until it has behaved for half a minute and tells the admins
+                   in the game and the log who it is, "kick" removes them from
+                   the server, "off" does not check.
 modified_scoring   Catch players whose mods change how many points tricks
                    score (per-trick points, the scoring multipliers, the
                    throwdown scoring logic) or how the skater handles (core
@@ -412,6 +418,8 @@ and change voice, distances, placement and kicks from the Multiplayer menu.
   party-size <2-8>              Most players in one party.
   afk-kick <minutes>|off        Remove players who have been away that long.
   speed-check off|warn|kick     What happens to players whose game runs fast.
+  board-check off|warn|kick     What happens to players who keep their skateboard
+                                on another player.
   score-check [off|warn|kick]   What happens to players whose mods change scoring
                                 or physics; with no argument, every player's result.
   score-allow [<fingerprint>|remove <fingerprint>]   Accept a scoring mod's

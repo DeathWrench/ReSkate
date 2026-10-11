@@ -130,6 +130,10 @@ struct ServerConfig {
     // Players whose game runs fast (a speedhack; Server/speed_check.h): "warn" takes them out of
     // throwdowns and coop challenges and tells the admins, "kick" also removes them, "off" does not check.
     std::string speed_check = "warn";
+    // Players whose skateboard stays on another player as they move (a hacked game; Server/
+    // board_check.h): "warn" stops showing their board to the others and tells the admins,
+    // "kick" removes them, "off" does not check.
+    std::string board_check = "warn";
     // Players whose mods change how tricks score (Engine/Vfs/mod_scoring.h): "warn" takes them out
     // of throwdowns and coop challenges (the server stops relaying theirs) and tells everyone,
     // "kick" removes them, "off" does not check.

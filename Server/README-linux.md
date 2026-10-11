@@ -69,8 +69,8 @@ cmake --build --preset linux-release -j$(nproc)
 ctest --test-dir build/linux --output-on-failure
 ```
 
-Expected: 9 passed (`multiplayer_parties`, `server_activity`, `server_speed_check`,
-`server_config`, `server_global_bans`, `word_filter`, `multiplayer_bandwidth`, `multiplayer_lanes`,
+Expected: 10 passed (`multiplayer_parties`, `server_activity`, `server_speed_check`,
+`server_board_check`, `server_config`, `server_global_bans`, `word_filter`, `multiplayer_bandwidth`, `multiplayer_lanes`,
 `multiplayer_prediction`). Windows-only tests (voice, lobbies, UI) stay `WIN32`-gated.
 
 ## Run

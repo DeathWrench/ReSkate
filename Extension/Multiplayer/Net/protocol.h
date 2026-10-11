@@ -318,6 +318,13 @@ void coarsen_rotations(Pose &pose, unsigned bits) noexcept;
 // Keeps every bone's scale within 1/limit to limit on each axis (1: no scaling at all). A mod
 // that resizes part of a skater (a head four times the size) does it with a bone's scale,
 // which travels in the pose and so shows to everyone, mod or not.
+// The skateboard is held closer, to board_scale_limit: nothing in the game resizes one, and a
+// hacked client that does shows everyone a board the size of a car.
+inline constexpr float board_scale_limit = 1.1f;
+// How far from its skater a skateboard still stops other players (remote_collision.cpp). One
+// left lying further off is seen and not felt, so a hacked client that keeps its board on
+// another player cannot knock them about with it.
+inline constexpr float board_solid_reach = 3.f;
 void limit_bone_scale(Pose &pose, float limit) noexcept;
 // Keeps every bone of the body and the board within `limit` metres of the bone it hangs from
 // (0: no limit). A bone's place is relative to its parent and, on the game's rigs, never

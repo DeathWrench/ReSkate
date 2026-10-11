@@ -2,6 +2,7 @@
 #include "server_activity.h"
 #include "worker_pool.h"
 #include "server_config.h"
+#include "board_check.h"
 #include "speed_check.h"
 #include "Engine/Game/Multiplayer/chat_rate.h"
 #include "Extension/Multiplayer/Net/delta_codec.h"
@@ -160,6 +161,8 @@ class Host {
         SpeedCheck speed;           // how fast their game runs, from their pose timestamps
         bool speeding{};            // flagged: out of linked activities (config speed_check)
         std::uint64_t speed_normal_since{}; // flagged, but measuring normal again since then
+        BoardCheck board;           // whether their skateboard is being kept on another player
+        bool board_hidden{};        // flagged: their board is not shown to the others (config board_check)
         // How their mods change trick scoring, as they reported it (Engine/Vfs/mod_scoring.h):
         // nothing until the report arrives, 0 for the game's own.
         std::optional<std::uint64_t> scoring;
@@ -379,6 +382,8 @@ class Host {
     void party_chat(Guest &, std::string_view text);    // "/p <text>": to the sender's party only
     void party_left(std::uint64_t id, const std::string &name); // a player left the server
     bool check_speed(Guest &, std::uint64_t sent); // a pose they sent at `sent` (their clock); false: kicked
+    bool check_board(Guest &, const Pose &);       // a pose of theirs; false: kicked
+    void tell_admins(const std::string &text);     // a chat line to every admin in the game
     void check_scoring(Guest &);                   // after their report, or a score_check change
     void tick_parties();
     void send_party(Guest &to, PartyAction, std::uint64_t player);

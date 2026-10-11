@@ -345,12 +345,12 @@ void coarsen(Transform &t, unsigned bits) noexcept {
 } // namespace
 void limit_bone_scale(Pose &pose, float limit) noexcept {
     if (!(limit >= 1.f)) return;
-    const auto hold = [&](Transform &t) {
-        for (float &axis : t.scale) axis = std::isfinite(axis) ? std::clamp(axis, 1.f / limit, limit) : 1.f;
+    const auto hold = [](Transform &t, float most) {
+        for (float &axis : t.scale) axis = std::isfinite(axis) ? std::clamp(axis, 1.f / most, most) : 1.f;
     };
-    hold(pose.root);
-    for (auto &t : pose.skater) hold(t);
-    for (auto &t : pose.board) hold(t);
+    hold(pose.root, limit);
+    for (auto &t : pose.skater) hold(t, limit);
+    for (auto &t : pose.board) hold(t, std::min(limit, board_scale_limit));
 }
 void limit_bone_reach(Pose &pose, float limit) noexcept {
     if (!(limit > 0.f)) return;

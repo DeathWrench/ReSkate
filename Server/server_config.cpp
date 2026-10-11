@@ -111,6 +111,7 @@ Layout layout(const ServerConfig &c) {
 
     auto &anti_cheat = root.section("anti_cheat");
     anti_cheat.set("speed_hack", c.speed_check);
+    anti_cheat.set("pinned_board", c.board_check);
     anti_cheat.set("modified_scoring", c.score_check);
     auto allowed = Json::array();
     for (const auto fingerprint : c.score_allow) allowed.push_back(scoring_text(fingerprint));
@@ -312,6 +313,8 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
 
     c.speed_check = get("anti_cheat", "speed_hack", c.speed_check, {"speed_check"});
     if (c.speed_check != "off" && c.speed_check != "warn" && c.speed_check != "kick") c.speed_check = "warn";
+    c.board_check = get("anti_cheat", "pinned_board", c.board_check);
+    if (c.board_check != "off" && c.board_check != "warn" && c.board_check != "kick") c.board_check = "warn";
     c.score_check = get("anti_cheat", "modified_scoring", c.score_check, {"score_check"});
     if (c.score_check != "off" && c.score_check != "warn" && c.score_check != "kick") c.score_check = "warn";
     if (const auto *allowed = find("anti_cheat", "allowed_scoring_mods", {"score_allow"}); allowed && allowed->is_array())
@@ -534,7 +537,7 @@ bool custom_command_name_free(std::string_view name) noexcept {
     for (const std::string_view taken :
          {"help", "party", "p", "w", "whisper", "tell", "poll", "vote", "yes", "y", "no", "n", "tp",
           "activity-log", "admin", "admins", "afk-kick", "announce", "announce-throwdowns", "announce-to", "announcements",
-          "ban", "bans", "bone-scale", "boosts", "boosts-allow", "chat-color", "chat-colour", "clear-objects", "crowd",
+          "ban", "bans", "board-check", "bone-scale", "boosts", "boosts-allow", "chat-color", "chat-colour", "clear-objects", "crowd",
           "distances", "effects", "kick", "layer", "layer-sync", "layers", "listed", "map", "map-pool", "maps", "msg",
           "msg-admins", "msg-party", "name", "net", "nobail", "nobail-allow", "noclip", "noclip-allow", "object-limit",
           "object-placement", "object-scaling", "objects", "park", "parties", "party-size", "password", "placement",

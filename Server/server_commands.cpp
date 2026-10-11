@@ -24,7 +24,7 @@ constexpr std::string_view help_text =
     "announce <text> | announce-to <player> <text> | announcements [list|add <text>|remove <n>|clear|interval <minutes>|off]\n"
     "map-pool [add|remove <map>|clear] | rotation [<minutes>|off]\n"
     "park <lot> <layout> | park random | layer-sync on|off | layer <key> default|on|off | tod <time|default>\n"
-    "activity-log on|off | announce-throwdowns on|off | parties [on|off] | party-size <2-8> | afk-kick <minutes>|off | speed-check off|warn|kick\n"
+    "activity-log on|off | announce-throwdowns on|off | parties [on|off] | party-size <2-8> | afk-kick <minutes>|off | speed-check off|warn|kick | board-check off|warn|kick\n"
     "score-check [off|warn|kick] | score-allow [<fingerprint>|remove <fingerprint>]\n"
     "reserved [slots <n> | add|remove <SteamID64>] | admin add|remove <SteamID64> | admins | update | quit";
 } // namespace
@@ -278,6 +278,20 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         return changed(value == "off" ? "Game speed is no longer checked."
                        : value == "kick" ? "Players whose game runs fast are kicked."
                                          : "Players whose game runs fast are taken out of throwdowns and challenges.");
+    }
+    if (name == "board-check") {
+        const auto value = lower(argument);
+        if (value != "off" && value != "warn" && value != "kick")
+            return "board-check off|warn|kick (now " + config_.board_check + ")";
+        config_.board_check = value;
+        if (value == "off")
+            for (auto &[id, guest] : guests_) {
+                guest->board.restart();
+                guest->board_hidden = false;
+            }
+        return changed(value == "off" ? "Skateboards kept on other players are no longer checked for."
+                       : value == "kick" ? "Players who keep their skateboard on another player are kicked."
+                                         : "A skateboard kept on another player is hidden from the others, and the admins are told.");
     }
     if (name == "score-check") {
         const auto value = lower(argument);
@@ -802,6 +816,45 @@ bool Host::check_speed(Guest &guest, std::uint64_t sent) {
             send_chat("Your game speed is back to normal: throwdowns and challenges are on again.", &guest);
         }
     } else guest.speed_normal_since = 0;
+    return true;
+}
+void Host::tell_admins(const std::string &text) {
+    for (auto &[id, guest] : guests_)
+        if (guest->handshaken && is_admin(id)) send_chat(text, guest.get());
+}
+// A hacked game can say its skateboard is wherever another player is, and keep it on them
+// (board_check.h). The board of a player doing that is no longer passed on to the others, the
+// log and the admins in the game are told who, and with "kick" the player is removed. It is
+// shown again once it has behaved for half a minute.
+bool Host::check_board(Guest &guest, const Pose &pose) {
+    if (config_.board_check == "off" || !guest.handshaken || !guest.world_ready) return true;
+    // The other players whose place is known now (a pose within the last second).
+    std::array<BoardCheck::Other, max_players> others;
+    std::size_t count{};
+    for (const auto &[id, other] : guests_)
+        if (other.get() != &guest && other->handshaken && other->world_ready && other->latest_root && other->pose_arrival &&
+            now_ >= other->pose_arrival && now_ - other->pose_arrival <= 1000000 && count < others.size())
+            others[count++] = {id, other->latest_root->position};
+    if (!guest.board.sample(now_, pose.root.position, pose.board.empty() ? nullptr : &pose.board.front().position,
+                            std::span<const BoardCheck::Other>(others.data(), count)))
+        return true;
+    const auto name = guest_name(guest);
+    if (!guest.board.flagged()) {
+        guest.board_hidden = false;
+        log_("[anticheat] " + name + "'s skateboard is shown to the others again.");
+        return true;
+    }
+    const auto *victim = find(guest.board.victim());
+    const auto text = name + " (" + std::to_string(guest.member.id) + ") is keeping their skateboard on " +
+                      (victim ? guest_name(*victim) : std::string("another player")) + " (a hacked game?).";
+    log_("[anticheat] " + text);
+    if (config_.board_check == "kick") {
+        tell_admins("[anticheat] " + text + " Kicked.");
+        drop(guest.member.id, "Your skateboard was being kept on another player. Turn off cheats to play here.");
+        return false;
+    }
+    guest.board_hidden = true;
+    tell_admins("[anticheat] " + text + " Their board is hidden from everyone else.");
     return true;
 }
 } // namespace dingosdk::server
