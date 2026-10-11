@@ -20,6 +20,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <random>
 #include <set>
 #include <string>
 #include <vector>
@@ -72,7 +73,7 @@ class Host {
     void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
     void change_map(std::string_view map); // a level name, level path or destination
 
-    enum class VoteKind { map, kick, time, custom, poll };
+    enum class VoteKind { map, kick, time, custom, poll, extend };
 
   private:
     struct ChatBudget {
@@ -203,6 +204,7 @@ class Host {
         bool maps_sent{};          // this player has the server's map list (send_maps)
         std::uint64_t permissions_sent{}; // the roles revision their permissions were sent at
         std::uint64_t words_sent{};       // the words revision the server's filtered words were sent at
+        std::uint64_t next_maps_sent{};   // the revision the next vote's maps were sent at
         // The owner's own upload, and what the server shares of it.
         ObjectState objects, shared;
         std::uint64_t shared_from{};
@@ -235,6 +237,7 @@ class Host {
         std::vector<std::string> answers;            // poll
         std::map<std::uint64_t, std::size_t> chosen; // poll: each voter's answer
         std::string run;                             // poll-run: the console command for the winner ("{answer}")
+        bool next_map{};                             // poll: the rotation's vote for the next map (start_next_map_vote)
         std::uint64_t ends{};
     };
     std::optional<Vote> vote_;
@@ -260,6 +263,17 @@ class Host {
     std::map<std::uint64_t, std::uint64_t> vote_cooldowns_;
     std::uint64_t map_since_{}; // rotation clock start: the last map change, or while nobody is on
     bool rotation_warned_{};    // players were told the next map is a minute away
+    unsigned rotation_told_{};  // the minutes-left marks already announced: bit 0 ten, 1 five, 2 one
+    bool rotation_voted_{};     // this map's vote for the next one was held
+    // The maps that vote offers, drawn a minute before it so games can have their pictures
+    // ready, and their revision (0: never drawn, nothing to send).
+    std::vector<multiplayer::NextMap> next_maps_;
+    std::uint64_t next_maps_revision_{};
+    void draw_next_maps();
+    std::mt19937 random_{std::random_device{}()};
+    bool start_next_map_vote();                 // false when the pool has nothing to choose between
+    void finish_next_map_vote(const Vote &done, const std::vector<unsigned> &count);
+    void extend_map(unsigned minutes);          // the rotation's clock, that much longer from now
     // Parties (server_party.cpp): the server owns them; each roster carries them to everyone.
     PartyBook parties_;
     std::uint64_t party_revision_{};
@@ -371,6 +385,7 @@ class Host {
     }
     void send_permissions(Guest &);    // what their role lets them do
     void send_words(Guest &);          // the server's own filtered chat words (server_words.h)
+    void send_next_maps(Guest &);      // the maps the vote for the next one will offer
     void roles_changed();              // after any change to the roles or who has them
     bool is_banned(std::uint64_t id) const;
     void save();
@@ -410,9 +425,11 @@ class Host {
     const VoteSetting &vote_setting(VoteKind, std::size_t custom = 0) const;
     std::uint8_t enabled_votes() const;
     multiplayer::ServerPolls enabled_polls() const;
-    std::vector<multiplayer::ServerCustomVote> custom_votes() const; // the owner's votes that are on, for the roster
+    // The owner's votes that are on, for the roster; and "extend" with them while it can run.
+    std::vector<multiplayer::ServerCustomVote> custom_votes() const;
+    bool extend_vote_on() const; // "/vote extend": on, and the map is on a timer that staying adds to
     std::set<std::uint64_t> vote_voters(const Vote &) const;         // who may vote in it
-    unsigned votes_needed(const Vote &, unsigned voters) const;
+    unsigned votes_needed(const Vote &, unsigned cast) const;
     std::vector<unsigned> poll_count(const Vote &) const;
     std::string running_vote_text() const; // what is running, and how to answer it
     // The "votes" and "announcements" commands (server_votes.cpp); the bool: a setting changed.

@@ -635,6 +635,7 @@ void publish_chat(Session &s) {
         vote.mine = s.vote_mine;
         vote.may_vote = s.vote.target != s.transport.status().local_id;
         vote.poll = s.vote.kind == server_vote_poll;
+        vote.next_map = vote.poll && s.vote.target == next_map_vote;
         for (const auto &answer : s.vote.answers) vote.answers.push_back(clean_chat_text(answer));
         vote.counts.assign(s.vote.counts.begin(), s.vote.counts.end());
         const auto binds = local_profile_controller_bindings();

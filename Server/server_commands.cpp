@@ -17,16 +17,16 @@ namespace dingosdk::server {
 namespace {
 constexpr std::string_view help_text =
     "status | net [player] | players | say <text> | msg <player> <text> | msg-party <player> <text> | msg-admins <text> | kick <player> | ban <player or SteamID64> [name] | unban <SteamID64> | bans\n"
-    "map <name, e.g. San Vansterdam> | maps | name <text> | password <text|off> | welcome <text|off> | listed on|off\n"
+    "map <name, e.g. San Vansterdam> | maps [reload] | name <text> | password <text|off> | welcome <text|off> | listed on|off\n"
     "voice on|off | voice-range <50-1000> | distances <full> <half> <half-return> <low> | crowd <n>|off | rate <KB/s> | bone-scale <1-8>|off | bone-reach <0.5-20>|off\n"
     "placement everyone|admins|nobody | objects <number>|off | object-scaling on|off | effects on|off | clear-objects | noclip on|off | nobail on|off | boosts on|off | tuning on|off\n"
     "tpall [player] | tphere <player> | teleport <player|SteamID64,SteamID64,...> <player|x y z (y is up)>\n"
     "votes [<vote> on|off|<percent>|seconds|cooldown|min-players <n>] | vote-cancel\n"
     "votes polls off|admins|everyone | votes poll-seconds <n> | votes starter-yes on|off\n"
-    "vote <map|kick|tod|<custom vote>> [argument] | poll <question> | <answer> | <answer>... | poll end\n"
+    "vote <map|kick|tod|extend|<custom vote>> [argument] | poll <question> | <answer> | <answer>... | poll end\n"
     "poll-run <command with {answer}> | <question> | <answer> | <answer>...\n"
     "announce <text> | announce-to <player> <text> | announcements [list|add <text>|remove <n>|clear|interval <minutes>|off]\n"
-    "map-pool [add|remove <map>|clear] | rotation [<minutes>|off]\n"
+    "map-pool [add|remove <map>|clear] | rotation [<minutes>|off | vote on|off | stay <minutes>|off | announce on|off | extend [minutes]]\n"
     "park <lot> <layout> | park random | layer-sync on|off | layer <key> default|on|off | tod <time|default>\n"
     "park-mod list | park-mod add <name> [<name>...] [minutes] | park-mod remove <name> [<name>...] | park-mod clear | park-mod reload <name> [<name>...]\n"
     "park-mod config add <name> | <mod folder> | <map> [| <key>] | park-mod config remove <name>\n"
@@ -180,6 +180,25 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         save();
         return changed("Changing map to " + map_name());
     }
+    if (name == "maps" && lower(argument) == "reload") {
+        // A map mod copied into Mods while the server runs: its maps can be switched to at once.
+        if (!console && !can(admin, "map")) return "Your role cannot reload the maps.";
+        std::vector<std::string> before;
+        for (const auto &level : levels()) before.push_back(level.asset);
+        const auto problems = load_levels(config_.mods);
+        resend_maps(); // whoever picks maps is sent the list again
+        std::string added;
+        std::size_t gone{};
+        for (const auto &level : levels())
+            if (std::find(before.begin(), before.end(), level.asset) == before.end()) added += (added.empty() ? "" : ", ") + level.name;
+        for (const auto &asset : before)
+            if (!find_level(asset)) ++gone;
+        std::string text = "Maps read again from Mods: " + std::to_string(levels().size()) + " maps" +
+                           (added.empty() ? ", none new" : ", new: " + added) + (gone ? ", " + std::to_string(gone) + " no longer there" : "") + ".";
+        for (const auto &problem : problems) text += "\nMods: skipped " + problem;
+        if (!console) log_(text);
+        return text;
+    }
     if (name == "maps") {
         std::string text = std::to_string(levels().size()) + " maps (custom maps come from Mods next to the server)";
         for (const auto &level : levels())
@@ -216,8 +235,35 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         resend_maps();
         return changed(level->name + (what == "add" ? " added to" : " removed from") + " the map pool.");
     }
-    if (name == "rotation") { // rotation [<minutes>|off]
+    if (name == "rotation") { // rotation [<minutes>|off | vote on|off | stay <minutes>|off | announce on|off | extend [minutes]]
         if (argument.empty()) return rotation_text();
+        const auto [setting, wanted] = split(argument);
+        const auto which = lower(setting);
+        if (which == "vote" || which == "announce") {
+            const auto on = on_off(wanted);
+            if (!on) return "rotation " + which + " on|off (now " + ((which == "vote" ? config_.rotation_vote : config_.rotation_announce) ? "on" : "off") + ")";
+            (which == "vote" ? config_.rotation_vote : config_.rotation_announce) = *on;
+            return changed(which == "vote" ? (*on ? "When a map's time is up, players vote for the next one." : "The rotation goes to the pool's next map without a vote.")
+                                           : (*on ? "Players are told when the map has 10, 5 and 1 minutes left." : "The minutes a map has left are no longer announced."));
+        }
+        if (which == "stay") { // what the vote's "Stay here" adds
+            const auto length = lower(wanted) == "off" ? std::optional<std::uint64_t>(0) : number(wanted);
+            if (!length || *length > 240) return "rotation stay <1-240 minutes>|off (now " + std::to_string(config_.rotation_extend) + ")";
+            config_.rotation_extend = static_cast<unsigned>(*length);
+            return changed(*length ? "The vote for the next map offers staying " + std::to_string(*length) + " more minutes." : "The vote for the next map no longer offers staying.");
+        }
+        if (which == "extend") { // now: the map in play gets that much longer ("/vote extend" runs it)
+            if (!config_.map_rotation) return std::string("Map rotation is off: there is no time to add to.");
+            const auto length = wanted.empty() ? std::optional<std::uint64_t>(config_.rotation_extend ? config_.rotation_extend : 15) : number(wanted);
+            if (!length || !*length || *length > 240) return std::string("rotation extend [1-240 minutes]");
+            const auto due = map_since_ + std::uint64_t{config_.map_rotation} * 60000000;
+            const auto left = due > now_ ? (due - now_) / 60000000 : 0;
+            extend_map(static_cast<unsigned>(std::min<std::uint64_t>(left + *length, 1440)));
+            if (vote_ && vote_->next_map) cancel_vote("the map was given more time");
+            if (!next_maps_.empty()) next_maps_.clear(), ++next_maps_revision_;
+            send_chat(map_name() + " stays " + std::to_string(*length) + " more minutes.");
+            return rotation_text();
+        }
         const auto value = lower(argument);
         const auto minutes = value == "off" ? std::optional<std::uint64_t>(0) : number(value);
         if (!minutes || *minutes > max_map_rotation) return "rotation <1-1440 minutes>|off";
@@ -554,13 +600,14 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         const auto [what_text, rest] = split(argument);
         const auto what = lower(what_text);
         const auto started = [](std::string why) { return why.empty() ? std::string("Vote started.") : why; };
-        if (what.empty()) return vote_ ? running_vote_text() : std::string("vote <map|kick|tod|<custom vote>> [argument]");
+        if (what.empty()) return vote_ ? running_vote_text() : std::string("vote <map|kick|tod|extend|<custom vote>> [argument]");
         if (what == "map") return started(start_vote(by, VoteKind::map, rest));
         if (what == "kick") return started(start_vote(by, VoteKind::kick, rest));
         if (what == "tod" || what == "time") return started(start_vote(by, VoteKind::time, rest));
+        if (what == "extend") return started(start_vote(by, VoteKind::extend, rest));
         for (std::size_t i = 0; i < config_.votes.custom.size(); ++i)
             if (config_.votes.custom[i].name == what) return started(start_vote(by, VoteKind::custom, rest, i));
-        return "No vote is called \"" + what + "\": vote map, kick, tod or a custom vote's name (votes lists them).";
+        return "No vote is called \"" + what + "\": vote map, kick, tod, extend or a custom vote's name (votes lists them).";
     }
     if (name == "poll") {
         Guest *by = console ? nullptr : find(admin);

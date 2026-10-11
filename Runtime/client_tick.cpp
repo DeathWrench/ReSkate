@@ -3,6 +3,7 @@
 #include "Extension/Customization/developer_board.h"
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Assets/map_download.h"
+#include "Extension/Assets/map_icons.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Profiling/profiler.h"
 #include "Extension/Settings/job_spin.h"
@@ -400,12 +401,14 @@ void update_model(std::uintptr_t client, TickState& frame) {
     // The map download's card (map_download.h) is answered with the same two binds, and by a
     // controller, whose buttons are kept from the game while it asks.
     const bool map_prompt = dingosdk::map_download::asking();
+    // The vote for the next map comes up the same way (overlay.h: map_vote_asking), when no map is being asked about.
+    const bool map_vote = !map_prompt && dingosdk::overlay::map_vote_asking();
     // The hold on the game's input outlasts the card's question until everything pressed is let
     // go (or a moment has passed): the button that answered must not also be a press in the
     // game, or in the pause menu behind the card.
     static bool prompt_held{};
     static ULONGLONG prompt_release_by{};
-    if (map_prompt) {
+    if (map_prompt || map_vote) {
         prompt_held = true;
         prompt_release_by = 0;
     } else if (prompt_held) {
@@ -416,7 +419,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
                              std::ranges::any_of(held.keys, [](std::uint64_t word) { return word != 0; });
         if (!pressed || GetTickCount64() >= prompt_release_by) prompt_held = false;
     }
-    DingoSDKOverlaySetPromptInputCapture(map_prompt || prompt_held);
+    DingoSDKOverlaySetPromptInputCapture(map_prompt || map_vote || prompt_held);
     const unsigned poll_answers = dingosdk::multiplayer::server_poll_answers();
     bool freecam_controller = dingosdk::local_freecam_controller();
     {
@@ -444,10 +447,10 @@ void update_model(std::uintptr_t client, TickState& frame) {
     DingoSDKOverlaySetFreecamInputCapture(dingosdk::client_free_camera_active() && freecam_controller);
     dingosdk::ControllerInput controller;
     if (freecam_controller_combo || freecam_combo || tp_to_freecam_combo || noclip_combo || forward_velocity_combo || up_velocity_combo || offboard_up_velocity_combo ||
-        vote_yes_combo || vote_no_combo || poll_answers || map_prompt ||
+        vote_yes_combo || vote_no_combo || poll_answers || map_prompt || map_vote ||
         std::ranges::any_of(action_combos, [](auto combo) { return combo != 0; }))
         // (The card that asks has the pointer, as a menu does: it is still read for.)
-        DingoSDKOverlayReadControllerInput(&controller, map_prompt);
+        DingoSDKOverlayReadControllerInput(&controller, map_prompt || map_vote);
     for (std::size_t i = 0; i < action_combos.size(); ++i)
         if (r.action_bind_latches[i].update(action_combos[i], controller, r.observer_failed)) {
             std::array<char, 256> result{};
@@ -473,7 +476,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
         static bool prompt_before{};
         static std::uint32_t buttons_before{};
         // The keyboard's arrows, Enter and Esc do the same, above the pad's bits.
-        const std::uint32_t buttons = !map_prompt ? 0
+        const bool prompt = map_prompt || map_vote;
+        const std::uint32_t buttons = !prompt ? 0
             : (controller.available ? controller.buttons : 0) | (DingoSDKOverlayReadPromptKeys() << 20);
         if (map_prompt && prompt_before) {
             const auto pressed = buttons & ~buttons_before;
@@ -482,6 +486,16 @@ void update_model(std::uintptr_t client, TickState& frame) {
             if (pressed & (0x1000 | 1u << 22)) dingosdk::map_download::answer(dingosdk::map_download::picked());
             else if (pressed & (0x2000 | 1u << 23)) dingosdk::map_download::answer(false);
         }
+        // The vote's popup: left and right move the pick, A votes for it, B closes it.
+        static bool vote_before{};
+        if (map_vote && vote_before) {
+            const auto pressed = buttons & ~buttons_before;
+            if (pressed & (0x0004 | 1u << 20)) dingosdk::overlay::map_vote_move(-1);
+            if (pressed & (0x0008 | 1u << 21)) dingosdk::overlay::map_vote_move(1);
+            if (pressed & (0x1000 | 1u << 22)) dingosdk::overlay::map_vote_take();
+            else if (pressed & (0x2000 | 1u << 23)) dingosdk::overlay::map_vote_dismiss();
+        }
+        vote_before = map_vote;
         prompt_before = map_prompt;
         buttons_before = buttons;
     }
@@ -1193,6 +1207,7 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             // fetch it (map_download.h), which then applies it and joins the session again.
             if (const auto need = dingosdk::multiplayer::take_map_need()) dingosdk::map_download::offer(*need);
             dingosdk::map_download::tick();
+            dingosdk::map_icons::tick();
         }
         dingosdk::multiplayer::refresh_identity_lists();
         // How much memory the game holds, beside what a session adds to it: said when it has

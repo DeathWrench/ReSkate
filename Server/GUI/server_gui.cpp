@@ -1159,7 +1159,7 @@ void draw_world_tab(const ServerStatusSnapshot& stats) {
     ImGui::PopStyleColor();
     ImGui::Spacing();
 
-    const auto& map_list = levels();
+    const auto map_list = level_snapshot(); // a copy: "maps reload" changes the list on the server's thread
     if (!map_list.empty()) {
         for (const auto& level : map_list) {
             const bool active = (stats.map_name == level.name || map_setting(stats.map_name) == map_setting(level.name));

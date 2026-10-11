@@ -142,6 +142,22 @@ rotation_minutes   Minutes on each map before the server moves to the next
                    one in pool (default 0: off). Players get a minute's
                    warning; the clock waits while nobody is on, and starts
                    over whenever the map changes (by a vote or an admin too).
+rotation_vote      When a map's time is up, players vote for the next one
+                   (default false): three maps of the pool picked at random,
+                   "Random map", and "Stay here". The most votes wins, a tie
+                   is drawn, and with no vote at all it is the pool's next
+                   map. The maps are chosen a minute before, so players'
+                   games have their pictures ready.
+rotation_vote_seconds
+                   How long that vote runs, 10-120 (default 30). It ends
+                   sooner once everyone has voted.
+rotation_extend_minutes
+                   What "Stay here" adds to the map's time, 1-240 (default
+                   15), or 0 to leave that answer out. Players can ask for
+                   the same at any time with "/vote extend" (votes.extend_map),
+                   and "rotation extend [minutes]" adds time at once.
+rotation_announce  Tell players on a card when the map has 10, 5 and 1
+                   minutes left (default true).
 parks              Layout for each park lot, e.g. "skatepark_01", or "empty".
 world_layer_sync   Force the "layers" below on every player.
 layers             World layer key -> "on" / "off".
@@ -326,8 +342,16 @@ votes              Player votes, each off until turned on:
                      "kick": {"enabled": true, "percent": 60}  /vote kick <player>
                      "time_of_day": {"enabled": true, "percent": 50}  /vote tod <time>
                                                    (needs world_layer_sync)
-                   "percent" is the share of connected players whose yes passes
-                   it. "seconds" (default 30) is how long a vote runs and
+                     "extend_map": {"enabled": true, "percent": 50}  /vote extend
+                                                   (on by default; needs
+                                                   maps.rotation_minutes: the
+                                                   map in play gets
+                                                   rotation_extend_minutes more)
+                   "percent" is the share of the votes cast that yes needs to
+                   pass it: players who do not vote count for neither side. A
+                   vote runs its time and is decided then, or sooner once the
+                   players still to vote could not change it. A kick always
+                   needs two yes votes. "seconds" (default 30) is how long a vote runs and
                    "cooldown_seconds" (default 60) how long a player waits before
                    starting another. Players vote with /yes and /no in chat;
                    admins cannot be vote-kicked.
@@ -514,9 +538,15 @@ or Travel, and voice, distances, placement and kicks from the Multiplayer menu.
   ban <player or id> [name]     For good.   unban <id>   bans
   map <name>                    e.g. map San Vansterdam, map grom, map bbcity
   maps                          The maps this server knows.
+  maps reload                   Read the Mods folder again: a map mod copied in
+                                while the server runs can be switched to at once.
   map-pool [add|remove <map>|clear]   The maps players vote between and the
                                 rotation uses (see maps.pool).
   rotation [<minutes>|off]      Change the map on a timer (see maps.rotation_minutes).
+  rotation vote on|off          Players vote for the next map when the time is up.
+  rotation stay <minutes>|off   What "Stay here" in that vote adds (off: not offered).
+  rotation announce on|off      Tell players at 10, 5 and 1 minutes left.
+  rotation extend [minutes]     Give the map in play more time now.
   name <text>   password <text|off>   welcome <text|off>   listed on|off
   voice on|off   voice-range <m>
   distances <full> <half> <half-return> <low>

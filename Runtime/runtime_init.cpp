@@ -6,6 +6,7 @@
 #include "Engine/Core/Profiling/profiler.h"
 #include "Extension/Settings/engine_tweaks.h"
 #include "Extension/Settings/replay_guard.h"
+#include "Extension/World/mesh_unload_guard.h"
 #include "Extension/Console/commands.h"
 #include "Extension/UI/ui_pointer_skip.h"
 #include "Engine/Game/Build/addresses.h"
@@ -215,6 +216,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
             card.server = view.server;
             card.moved = view.moved;
             card.installed = view.installed;
+            card.have = view.have;
             card.choice = view.choice;
             card.received = view.received;
             card.total = view.total;
@@ -314,6 +316,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::ui_pointer::install(r.base);
         (void)dingosdk::engine_tweaks::install(r.base);
         (void)dingosdk::replay_guard::install(r.base);
+        (void)dingosdk::mesh_unload_guard::install(r.base);
         dingosdk::console::start_memory_trace_from_environment();
         const bool fixed_stop_provider = (global_offline_hook && progression_guard_armed) &&
             dingosdk::prepare_fixed_stop_entitlement_provider(r.base);

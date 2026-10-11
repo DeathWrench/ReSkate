@@ -120,6 +120,11 @@ void Host::send_words(Guest &guest) {
     p.words = filtered_words_;
     if (send_packet(guest, p, true, false)) guest.words_sent = words_revision_;
 }
+void Host::send_next_maps(Guest &guest) {
+    auto p = packet(PacketKind::next_maps, now_);
+    p.next_maps = next_maps_;
+    if (send_packet(guest, p, true, false)) guest.next_maps_sent = next_maps_revision_;
+}
 void Host::roles_changed() {
     ++roles_revision_;
     ++bans_revision_;
@@ -913,6 +918,9 @@ void Host::change_map(std::string_view map) {
     map_ = map_hash(map_destination(config_.map));
     map_since_ = now_;
     rotation_warned_ = false;
+    rotation_told_ = 0;
+    rotation_voted_ = false;
+    if (!next_maps_.empty()) next_maps_.clear(), ++next_maps_revision_;
     travel_started_ = now_;
     last_world_state_ = 0;
     send_world_state();
@@ -1840,6 +1848,7 @@ void Host::tick(std::uint64_t now) {
             if (!guest->maps_sent && (can(id, "map") || config_.votes.map.enabled)) send_maps(*guest);
             if (guest->permissions_sent != roles_revision_) send_permissions(*guest);
             if (guest->words_sent != words_revision_) send_words(*guest);
+            if (guest->next_maps_sent != next_maps_revision_) send_next_maps(*guest);
         }
     const bool loading = std::any_of(guests_.begin(), guests_.end(),
                                      [](const auto &g) { return g.second->handshaken && !g.second->world_ready; });

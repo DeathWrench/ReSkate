@@ -647,6 +647,11 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
 }
 bool server_vote_open() noexcept { return session_detail::server_vote_open_flag.load(std::memory_order_relaxed); }
 unsigned server_poll_answers() noexcept { return session_detail::server_poll_answers_flag.load(std::memory_order_relaxed); }
+std::vector<NextMapWanted> next_maps() {
+    std::lock_guard lock(session_detail::next_maps_mutex);
+    return session_detail::next_maps_shared;
+}
+unsigned next_maps_serial() noexcept { return session_detail::next_maps_serial_value.load(std::memory_order_relaxed); }
 std::string command(std::string_view action, std::string_view argument, std::string_view password) {
     if (launcher::offline_mode() && !own_mark_command(action))
         return "Multiplayer is unavailable in offline mode. Start Steam and relaunch ReSkate.";

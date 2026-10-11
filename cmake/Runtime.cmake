@@ -70,6 +70,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Settings/job_spin.cpp
     Extension/Settings/engine_tweaks.cpp
     Extension/Settings/replay_guard.cpp
+    Extension/World/mesh_unload_guard.cpp
     Extension/Settings/replay_drafts.cpp
     Extension/UI/ui_pointer_skip.cpp
     Extension/Settings/named_settings.cpp
@@ -90,6 +91,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Assets/mod_layers.cpp
     Extension/Assets/live_mods.cpp
     Extension/Assets/map_download.cpp
+    Extension/Assets/map_icons.cpp
     Engine/Vfs/thunderstore_package.cpp
     Launcher/mod_manager.cpp
     Extension/Assets/loose_files.cpp

@@ -1024,6 +1024,19 @@ void dedicated_server_codec() {
         check(reject(long_word), "A filtered word past its length was accepted");
         long_word.words.assign(max_server_words + 1, "a");
         check(reject(long_word), "More filtered words than a server may send were accepted");
+        Packet coming;
+        coming.kind = PacketKind::next_maps; coming.session = 9; coming.epoch = 10; coming.map = 11; coming.source = server;
+        coming.next_maps = {{"Vancouver Plaza", "Sandos-Vancouver_Plaza-2.0.0"}, {"Isle of Grom", ""}};
+        const auto told = decode(encode(coming));
+        check(told && told->kind == PacketKind::next_maps && told->next_maps == coming.next_maps, "The next maps failed to round-trip");
+        auto wrong_maps = coming;
+        wrong_maps.next_maps[0].package = "not a package";
+        check(reject(wrong_maps), "A next map with a bad package was accepted");
+        wrong_maps = coming;
+        wrong_maps.next_maps.assign(max_next_maps + 1, {"A map", ""});
+        check(reject(wrong_maps), "More next maps than a vote has answers were accepted");
+        coming.next_maps.clear();
+        check(decode(encode(coming)) && decode(encode(coming))->next_maps.empty(), "No next maps failed to round-trip");
         auto none = rights;
         none.role.clear(); none.role_commands.clear(); none.role_permissions = 0; none.role_all_commands = true;
         const auto bare = decode(encode(none));
@@ -1150,6 +1163,17 @@ void dedicated_server_codec() {
         elsewhere.map_fetching = true;
         check(reject(elsewhere), "A map fetch notice on a map change encoded");
     }
+    // A map installed at another version than the host's is fetched at the host's: only when
+    // both name a version of the same package.
+    check(other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Sandos-Vancouver_Plaza-1.9.0") == "1.9.0" &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "sandos-vancouver_plaza-1.9.0") == "1.9.0" &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Sandos-Vancouver_Plaza-2.0.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza", "Sandos-Vancouver_Plaza-1.9.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Sandos-Vancouver_Plaza").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Other-Vancouver_Plaza-1.9.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-2.0.0", "").empty() && other_map_version("", "").empty() &&
+              map_package_version("Sandos-Vancouver_Plaza-2.0.0") == "2.0.0" && map_package_version("Sandos-Vancouver_Plaza").empty(),
+          "A map's version is not compared with the host's as it should be");
     check(map_package_name("Sandos-Vancouver_Plaza", "2.0.0") == "Sandos-Vancouver_Plaza-2.0.0" &&
           map_package_name("Sandos-Vancouver_Plaza", "") == "Sandos-Vancouver_Plaza" &&
           map_package_name("Sandos-Vancouver_Plaza", "two") == "Sandos-Vancouver_Plaza" &&

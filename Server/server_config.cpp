@@ -1,4 +1,5 @@
 #include "server_config.h"
+#include <mutex>
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Platform/path_text.h"
 #include "Extension/Multiplayer/Net/protocol.h"
@@ -85,6 +86,10 @@ Layout layout(const ServerConfig &c) {
     for (const auto &map : c.map_pool) pool.push_back(map);
     maps.set("pool", std::move(pool));
     maps.set("rotation_minutes", c.map_rotation);
+    maps.set("rotation_vote", c.rotation_vote);
+    maps.set("rotation_vote_seconds", c.rotation_vote_seconds);
+    maps.set("rotation_extend_minutes", c.rotation_extend);
+    maps.set("rotation_announce", c.rotation_announce);
     auto parks = Json::object();
     for (unsigned lot = 0; lot < park_lots.size(); ++lot) parks[park_lots[lot].key] = c.parks[lot];
     maps.set("parks", std::move(parks));
@@ -161,6 +166,7 @@ Layout layout(const ServerConfig &c) {
     vote("map", c.votes.map);
     vote("kick", c.votes.kick);
     vote("time_of_day", c.votes.time);
+    vote("extend_map", c.votes.extend);
     votes.set("seconds", c.votes.seconds);
     votes.set("cooldown_seconds", c.votes.cooldown);
     votes.set("starter_votes_yes", c.votes.starter_votes_yes);
@@ -326,6 +332,10 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
         for (const auto &map : *pool)
             if (map.is_string() && !map.string().empty()) c.map_pool.push_back(map.string());
     c.map_rotation = std::min(get("maps", "rotation_minutes", c.map_rotation, {"map_rotation_minutes"}), max_map_rotation);
+    c.rotation_vote = get("maps", "rotation_vote", c.rotation_vote);
+    c.rotation_vote_seconds = std::clamp(get("maps", "rotation_vote_seconds", c.rotation_vote_seconds), 10U, 120U);
+    c.rotation_extend = std::min(get("maps", "rotation_extend_minutes", c.rotation_extend), 240U);
+    c.rotation_announce = get("maps", "rotation_announce", c.rotation_announce);
     if (const auto *parks = find("maps", "parks"); parks && parks->is_object())
         for (unsigned lot = 0; lot < park_lots.size(); ++lot) c.parks[lot] = parks->value(park_lots[lot].key, c.parks[lot]);
     c.world_layer_sync = get("maps", "world_layer_sync", c.world_layer_sync);
@@ -414,6 +424,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     read_vote("map", c.votes.map);
     read_vote("kick", c.votes.kick);
     read_vote("time_of_day", c.votes.time);
+    read_vote("extend_map", c.votes.extend);
     for (const char *key : {"seconds", "cooldown_seconds", "starter_votes_yes", "polls", "poll_seconds", "custom"})
         if (!votes.contains(key)) missing.push_back(std::string("votes.") + key);
     c.votes.seconds = std::clamp(votes.value("seconds", c.votes.seconds), 10U, 300U);
@@ -706,7 +717,7 @@ std::optional<std::uint32_t> parse_colour(std::string_view text) noexcept {
 }
 bool custom_vote_name_free(std::string_view name) noexcept {
     // What "/vote <word>" already means.
-    for (const std::string_view taken : {"map", "kick", "tod", "time", "yes", "y", "no", "n", "poll", "list"})
+    for (const std::string_view taken : {"map", "kick", "tod", "time", "extend", "yes", "y", "no", "n", "poll", "list"})
         if (name == taken) return false;
     // A number is an answer to a poll ("/vote 2").
     return !std::all_of(name.begin(), name.end(), [](char c) { return c >= '0' && c <= '9'; });
@@ -875,10 +886,20 @@ std::vector<ServerLevel> &level_list() {
     static std::vector<ServerLevel> value;
     return value;
 }
+// The list is the server thread's; the server window reads a copy of it (level_snapshot), and
+// this is held while one is taken or the list is put in place.
+std::mutex level_mutex;
 } // namespace
 std::vector<std::string> load_levels(const std::filesystem::path &mods) {
-    auto &list = level_list();
-    list.clear();
+    // Built aside and put in place at the end: "maps reload" reads the folder while the server runs.
+    std::vector<ServerLevel> list;
+    struct Publish {
+        std::vector<ServerLevel> &fresh;
+        ~Publish() {
+            std::lock_guard lock(level_mutex);
+            level_list() = std::move(fresh);
+        }
+    } publish{list};
     // The retail maps players can skate together; the game names them the same way.
     for (const char *asset : {"Levels/Game/BAM_LevelRoot/BAM_LevelRoot",
                               "Levels/Game/DingoLevel_Isle_of_Grom/DingoLevel_Isle_of_Grom",
@@ -920,10 +941,15 @@ std::vector<std::string> load_levels(const std::filesystem::path &mods) {
     return problems;
 }
 const std::vector<ServerLevel> &levels() { return level_list(); }
+std::vector<ServerLevel> level_snapshot() {
+    std::lock_guard lock(level_mutex);
+    return level_list();
+}
 const ServerLevel *find_level(std::string_view map) {
     if (map.empty()) return nullptr;
     for (const auto &level : level_list())
         if (same(level.asset, map)) return &level;
+    map = world_level_typed_name(map);
     for (const bool exact : {true, false}) {
         const ServerLevel *result{};
         for (const auto &level : level_list()) {

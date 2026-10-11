@@ -143,7 +143,8 @@ Messages
 Map and world
   map                  map <name>: change the map. Also lets the player pick
                        the server's level from Levels or Travel in the game.
-  maps                 The maps this server knows.
+  maps                 The maps this server knows. (maps reload, which reads the
+                       Mods folder again, takes the map command.)
   map-pool             map-pool [add|remove <map>|clear]: the maps players vote
                        between and the rotation uses.
   rotation             rotation [<minutes>|off]: change the map on a timer.

@@ -15,7 +15,7 @@
 #include <vector>
 
 namespace dingosdk::server {
-// One kind of player vote: whether players may start it, and the share of connected players
+// One kind of player vote: whether players may start it, and the share of the votes cast
 // (percent, 1-100) whose yes passes it.
 struct VoteSetting {
     bool enabled{};
@@ -36,6 +36,9 @@ struct CustomVote {
 };
 struct VoteSettings {
     VoteSetting map, kick, time{false, 50};
+    // "/vote extend": the map in play gets maps.rotation_extend_minutes longer. It only runs
+    // while the maps rotate on a timer.
+    VoteSetting extend{true, 50};
     std::vector<CustomVote> custom;
     unsigned seconds = 30;  // how long a vote runs
     unsigned cooldown = 60; // seconds before the same player may start another
@@ -89,6 +92,14 @@ struct ServerConfig {
     std::string map = "San Vansterdam";
     std::vector<std::string> map_pool; // maps for votes and the rotation, in order; empty: every map
     unsigned map_rotation = 0;         // minutes per map before the next pool map (0: off)
+    // When the rotation's time is up, players vote for the next map: three of the pool's, any
+    // map of it, or (rotation_extend minutes, 0: not offered) staying on this one for longer.
+    // Off: the next map of the pool, in order.
+    bool rotation_vote = false;
+    unsigned rotation_vote_seconds = 30; // how long that vote runs, 10 to 120
+    unsigned rotation_extend = 15;       // minutes, 0 to 240
+    // Players are told on a card when the map has 10, 5 and 1 minutes left.
+    bool rotation_announce = true;
     unsigned max_players = 16; // players; the server itself is not one
     // The most poses a second one player is sent (crowd_limits); 0: no limit.
     unsigned crowd_budget = crowd_pose_budget;
@@ -259,6 +270,8 @@ struct ServerLevel {
 // (players' map mods, copied next to the server). Returns why a mod was skipped.
 std::vector<std::string> load_levels(const std::filesystem::path &mods);
 const std::vector<ServerLevel> &levels();
+// A copy of them, for a thread that is not the server's (the server window).
+std::vector<ServerLevel> level_snapshot();
 // Like the game's `load`: a level path, a name or short name, or the unique start of one.
 const ServerLevel *find_level(std::string_view map);
 // Whether the server has this map (a name, level path or destination): one of the game's own,
