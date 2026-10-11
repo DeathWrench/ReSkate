@@ -185,6 +185,7 @@ void movement_controls(SkateMenu& menu, const Model& model, const CallbacksV3& c
             board_break, model.board_break.available && callbacks.queue_console_command))
         send_console(menu, callbacks, board_break ? "boardbreak 1" : "boardbreak 0");
     end_card();
+    board_break_deck_card(menu, model, callbacks);
 
     begin_card(menu, "boosts", "BOOSTS", "Buttons are set in Settings > Controls");
     ImGui::BeginDisabled(!callbacks.queue_debug);

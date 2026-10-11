@@ -133,6 +133,21 @@ void a_truck_goes_with_its_piece() {
     const auto up = truck_bone(lifted, mount, mount_at, level, front_truck_place);
     check(near(up.at + away, front_truck_place + Vec{0, 0.25f, 0}), "A piece that is lifted takes its truck up with it");
 }
+void a_baseplate_stays_on_the_deck_while_its_truck_steers() {
+    // A baseplate sits on the truck's effector, a child of the truck's bone. Whatever the truck's
+    // bone does, the truck's bone followed by the effector's is what it is at rest.
+    for (const auto& rest : {back_truck_rest, front_truck_rest}) {
+        const auto still = baseplate_bone({rest.facing, rest.at}, rest);
+        check(near(still.at, rest.effector) && near(std::abs(still.facing.w), 1.0f), "At rest the effector is where the rig has it");
+        const Vec bolt{0.03f, 0.08f, rest.at.z + 0.02f};
+        const auto on_deck = moved({rest.facing, rest.at}, moved({{}, rest.effector}, bolt));
+        for (const float lean : {-0.4f, 0.15f, 0.6f}) {
+            const Rigid steered{unit(rest.facing * about({0, 0, 1}, lean)), rest.at};
+            const auto effector = baseplate_bone(steered, rest);
+            check(near(moved(steered, moved(effector, bolt)), on_deck, 1e-4f), "Steered, the baseplate has not moved on the deck");
+        }
+    }
+}
 } // namespace
 
 int main() {
@@ -146,6 +161,7 @@ int main() {
         a_folded_board_meets_at_the_break();
         a_hanging_end_turns_about_the_break();
         a_truck_goes_with_its_piece();
+        a_baseplate_stays_on_the_deck_while_its_truck_steers();
         std::cout << "board break tests passed\n";
         return 0;
     } catch (const std::exception& error) {

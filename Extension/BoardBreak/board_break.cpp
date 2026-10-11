@@ -45,6 +45,9 @@ constexpr float hand_reach = 1.3f, hand_upright = 0.8f;
 // deck's mount, 3 the deck, 4 and 8 the trucks, and the spare bones that carry the four stretches
 // (nose, front, back, tail; the tail's hangs on the front's).
 constexpr int root_bone = 1, mount_bone = 2, deck_bone = 3, back_truck_bone = 4, front_truck_bone = 8;
+// The trucks' effectors, each right after its truck's bone: a deck pack's truck model has the
+// baseplates on them (board_break_model.h, baseplate_bone).
+constexpr int back_plate_bone = 5, front_plate_bone = 9;
 constexpr std::array<int, 4> carrier{12, 13, 15, 14};
 constexpr std::uint32_t rig_bones = 16;
 
@@ -150,6 +153,21 @@ void carry_truck(std::uintptr_t buffer, const Rigid& motion, int index, Vec plac
     if (!load_bone(bone_at(buffer, mount_bone), mount) || !load_bone(bone_at(buffer, index), truck)) return;
     const auto bone = truck_bone(motion, facing_of(mount), place_of(mount), facing_of(truck), place);
     (void)store_bone(bone_at(buffer, index), bone.facing, bone.at);
+}
+
+// Keeps the baseplates on the deck (baseplate_bone), from each truck's bone as the animation left
+// it: a truck that a piece has carried off already, in a pose nobody has written since, is left.
+void hold_baseplates(std::uintptr_t buffer) noexcept {
+    const auto hold = [&](int truck_index, int plate_index, const TruckRest& rest) {
+        PoseBone truck{};
+        if (!load_bone(bone_at(buffer, truck_index), truck)) return;
+        const Rigid now{facing_of(truck), place_of(truck)};
+        if (!(length(now.at - rest.at) < 0.05f)) return;
+        const auto bone = baseplate_bone(now, rest);
+        (void)store_bone(bone_at(buffer, plate_index), bone.facing, bone.at);
+    };
+    hold(back_truck_bone, back_plate_bone, back_truck_rest);
+    hold(front_truck_bone, front_plate_bone, front_truck_rest);
 }
 
 // ---- the piece that comes off --------------------------------------------------------------------
@@ -276,14 +294,15 @@ std::uint32_t fly_piece(std::uintptr_t buffer, Rigid& piece) {
 }
 
 // ---- what the hook writes ------------------------------------------------------------------------
-// The local board, broken: the real deck goes away, the trucks come back, each stretch goes to
-// where its piece lies and one that belongs to no piece goes away too.
+// The local board, broken: the real deck goes away, the trucks come back (their baseplates with
+// them), each stretch goes to where its piece lies and one that belongs to no piece goes away too.
 void draw_broken(std::uintptr_t base, std::uintptr_t holder, std::uint32_t kept, Hinge hinge, float angle) {
     const auto buffer = board_pose(base, holder);
     PoseBone root{}, mount{}, deck{};
     if (!buffer || !load_bone(bone_at(buffer, root_bone), root) || !load_bone(bone_at(buffer, mount_bone), mount) ||
         !load_bone(bone_at(buffer, deck_bone), deck))
         return;
+    hold_baseplates(buffer);
     // From where its animation put it this frame; a pose nobody has written since the last move stays as it is.
     if (const Vec at = place_of(deck); length(at) < 100.0f) (void)store_bone(bone_at(buffer, deck_bone), facing_of(deck), at + away);
     auto layout = lay_out(kept, hinge, angle, turn(facing_of(root), {0, 1, 0}).y, facing_of(mount));
@@ -298,10 +317,12 @@ void draw_broken(std::uintptr_t base, std::uintptr_t holder, std::uint32_t kept,
     const auto bones = bones_of(layout.stretch);
     for (std::size_t i = 0; i < bones.size(); ++i) (void)store_bone(bone_at(buffer, carrier[i]), bones[i].facing, bones[i].at);
 }
-// A whole board, any player's: its four stretches go far away from it.
+// A whole board, any player's: its four stretches go far away from it, and its baseplates sit on
+// the deck.
 void park_pieces(std::uintptr_t base, std::uintptr_t holder) {
     const auto buffer = board_pose(base, holder);
     if (!buffer) return;
+    hold_baseplates(buffer);
     const auto bones = bones_of({});
     for (std::size_t i = 0; i < bones.size(); ++i) (void)store_bone(bone_at(buffer, carrier[i]), bones[i].facing, bones[i].at);
 }

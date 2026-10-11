@@ -49,22 +49,33 @@ struct Catalog {
 };
 
 // Board Break's decks (Extension/BoardBreak/board_break.h). The game has one deck model for every
-// board, so each deck that can break is a content mod of its own that replaces it: any mod whose
-// folder is named Board_Break_<Name> (also behind a team name, as a mod manager installs it:
-// Team-Board_Break_<Name>). The name, in small letters, is what the deck goes by; the deck the
-// player chose is the one that loads. These are the decks the feature was made with, in the order
-// the menus list them, and the console also knows them by their place here (deck 1 is the first).
-// Any other deck comes after them, by its name: a new shape needs no change to ReSkate.
+// board, so each deck that can break is a copy of it in a content mod, and the deck the player
+// chose is the one that loads. A deck comes in one of two ways:
+//   - a mod whose folder is named Board_Break_<Name> (also behind a team name, as a mod manager
+//     installs it: Team-Board_Break_<Name>) holds the deck <name>;
+//   - a deck pack, a mod of any name with a folder decks/<name>/ for each deck it brings, laid out
+//     like a mod folder (layout.toc, Win32/...). One package can bring every deck that way, where
+//     the launcher installs one mod folder per package. For the run each deck inside is a mod of
+//     its own, listed as <pack's folder>#<name>. The pack's own layout is not one of its decks,
+//     whatever the folder is named, and is set aside like any other deck model. It is what an
+//     older ReSkate loads from the pack: in a folder named Board_Break_<Name> the deck 2.0.6
+//     breaks, which knows a deck by its folder's name only; under another name the game's own.
+// A deck goes by its name in small letters. These are the decks the feature was made with, in the
+// order the menus list them, and the console also knows them by their place here (deck 1 is the
+// first). Any other deck comes after them, by its name: a new shape needs no change to ReSkate.
 inline constexpr std::array<std::string_view, 8> board_break_decks{"standard", "wide", "concave", "powell",
                                                                    "slim", "egg", "square", "shaped"};
-// The name of the deck a mod folder holds, or nothing for any other mod.
-std::string board_break_deck_of(std::string_view mod_folder);
+// The name of the deck a mod holds going by the mod's name (a folder's, or a pack's deck's), or
+// nothing; and the folder name of the pack that one of a pack's decks is listed under, or nothing.
+std::string board_break_deck_of(std::string_view mod);
+std::string board_break_pack_of(std::string_view mod);
 // The deck the player chose ("standard" when nothing was chosen): read whenever the mods are put
 // together, at launch and at every live apply. Saving a choice makes it this run's at once.
 std::string wanted_board_break_deck() noexcept;
 bool save_board_break_deck(std::string_view deck) noexcept;
-// The decks whose mod's folder is in Mods/, whatever mods.json says of them, in the menus' order,
-// and those folders in the same order.
+// The decks that are in the Mods folder, whatever mods.json says of their mods, in the menus'
+// order; and the folders of the mods that bring them (a pack's once), for what a pack carries
+// beside its decks.
 std::vector<std::string> installed_board_break_decks() noexcept;
 std::vector<std::filesystem::path> board_break_folders() noexcept;
 // What the mods in effect give the game: the launch's catalogue, or the one the last live apply
