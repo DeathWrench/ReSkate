@@ -22,6 +22,8 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
+#include <array>
 
 namespace dingosdk::server {
 using namespace multiplayer;
@@ -47,6 +49,28 @@ class Host {
     std::uint64_t secret() const { return secret_; }
     // The UDP port players may connect straight to, or 0 (config connection).
     std::uint16_t direct_port() const { return direct_port_; }
+
+    const ServerConfig &config() const { return config_; }
+    bool voice_allowed() const { return voice_policy_.allowed; }
+    bool has_password() const { return password_.has_value(); }
+
+    struct PlayerInfo {
+        std::uint64_t id{};
+        std::string name;
+        unsigned ping{};
+        bool admin{};
+        bool voice_muted{};
+        bool text_muted{};
+        float x{}, y{}, z{};
+    };
+
+    std::vector<PlayerInfo> player_list() const;
+    void send_player_chat(std::uint64_t steam_id, std::string_view text);
+    void broadcast_player_chat(std::string_view text);
+    bool teleport_player(std::uint64_t steam_id, float x, float y, float z);
+    std::optional<std::array<float, 3>> player_position(std::uint64_t steam_id) const;
+    void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
+    void change_map(std::string_view map); // a level name, level path or destination
 
     enum class VoteKind { map, kick, time, custom, poll };
 
@@ -346,7 +370,6 @@ class Host {
     void save();
 
     // `detail` is for the log alone: the player is told `reason`.
-    void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
     bool send_packet(Guest &, const Packet &, bool reliable, bool fresh, std::span<const std::uint8_t> raw = {},
                      std::span<const std::uint8_t> wire = {});
     void send_required(Guest &, const std::vector<std::uint8_t> &bytes);
@@ -356,7 +379,6 @@ class Host {
     void send_chat(std::string_view text, Guest *only = nullptr);
     void send_bans(Guest &admin);
     void send_maps(Guest &admin);
-    void change_map(std::string_view map); // a level name, level path or destination
     std::string wire_map_label() const;
     void fetching(Guest &guest);
     bool same_map(std::string_view asset) const { return map_hash(map_destination(asset)) == map_; }
@@ -395,6 +417,8 @@ class Host {
     void tick_announcements(); // the owner's messages in turn, on their timer
     void reply(Guest &, std::string_view text, unsigned max_lines = 12);
     Guest *match_player(std::string_view text);
+    // Sends each mover to a ring of `radius` around `at`, 1 m up, so nobody lands inside anyone; how many were sent.
+    unsigned teleport_ring(const std::vector<Guest *> &movers, const std::array<float, 3> &at, float radius = 2.5f);
     void tick_rotation();
     std::string pool_text() const;     // the map pool, one map a line
     std::string rotation_text() const; // the rotation's interval and next map

@@ -72,6 +72,7 @@ Layout layout(const ServerConfig &c) {
     server.set("query_port", static_cast<unsigned>(c.query_port));
     server.set("steam_token", c.steam_token);
     server.set("auto_update", c.auto_update);
+    server.set("autostart", c.autostart);
     server.set("activity_log", c.activity_log);
 
     auto &access = root.section("access");
@@ -291,6 +292,7 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.query_port = read_port("query_port", c.query_port);
     c.steam_token = get("server", "steam_token", c.steam_token);
     c.auto_update = get("server", "auto_update", c.auto_update);
+    c.autostart = get("server", "autostart", c.autostart);
     c.activity_log = get("server", "activity_log", c.activity_log);
 
     // (Admins were listed here before there were roles: they are moved into the admin role below.)
@@ -716,8 +718,8 @@ bool custom_command_name_free(std::string_view name) noexcept {
           "distances", "effects", "kick", "layer", "layer-sync", "layers", "listed", "map", "map-pool", "maps", "msg",
           "msg-admins", "msg-party", "name", "net", "nobail", "nobail-allow", "noclip", "noclip-allow", "object-limit",
           "object-placement", "object-scaling", "objects", "park", "parties", "party-size", "password", "placement",
-          "players", "rate", "reserved", "rotation", "say", "score-allow", "score-check", "speed-check", "status", "tod",
-          "tpall", "tphere", "tps", "tuning", "tuning-enforce", "unban", "voice", "voice-allow", "voice-range",
+          "players", "rate", "reserved", "rotation", "say", "score-allow", "score-check", "speed-check", "status", "teleport",
+          "tod", "tpall", "tphere", "tps", "tuning", "tuning-enforce", "unban", "voice", "voice-allow", "voice-range",
           "vote-cancel", "votes", "welcome", "world-layer-sync", "quit", "exit", "stop", "update"})
         if (name == taken) return false;
     // A number is an answer to a poll ("/2").

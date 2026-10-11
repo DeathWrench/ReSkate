@@ -114,6 +114,9 @@ struct ServerConfig {
     // which is how the ReSkate team's list of official servers knows it. Empty: anonymous.
     std::string steam_token;
     bool auto_update = true;   // install new releases when nobody is on
+    // The server window (Server/GUI) starts the server as soon as it opens, without waiting
+    // for Start to be pressed. The console server always starts at once and does not read it.
+    bool autostart{};
     bool global_bans = true;   // turn away players the ReSkate team has banned (global_bans.h)
     bool activity_log = true;  // console lines for throwdowns, objects and loading
     bool announce_throwdowns = true; // tell everyone in chat when a throwdown drop is placed

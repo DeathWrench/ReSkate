@@ -121,6 +121,9 @@ Players
                        the list in the game's menu.)
   tpall                tpall [player]: everyone to you, or to a player.
   tphere               tphere <player>: one player to you (in the game only).
+  teleport             teleport <players> <player|x y z>: players to a player or
+                       a place. <players> is one player, or SteamID64s joined
+                       by commas.
   role                 role <player or SteamID64> <role>|none: give a player a
                        role or take theirs away, and "roles reload". Only by
                        name: "*" does not include it.

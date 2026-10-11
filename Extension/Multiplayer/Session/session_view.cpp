@@ -20,6 +20,7 @@ namespace dingosdk::multiplayer::session_detail {
 void load_host_preferences(Session &s) {
     auto &p = s.host_preferences;
     if (p.loaded) return;
+    if (!profile_runtime::local_profile_store_ready()) return;
     p.loaded = true;
     const auto number = [](const char *key) -> std::optional<std::int64_t> {
         const auto value = profile_runtime::local_value(key);
@@ -176,7 +177,7 @@ void publish(Session &s, const NativeFrame *local) {
     // A dedicated server's roster capacity counts the server itself.
     view.capacity = static_cast<int>(dedicated_host(s) ? s.capacity - 1 : s.capacity);
     load_host_preferences(s);
-    view.saved_host = {true, s.host_preferences.public_lobby, s.host_preferences.password_required,
+    view.saved_host = {s.host_preferences.loaded, s.host_preferences.public_lobby, s.host_preferences.password_required,
                        static_cast<int>(s.host_preferences.capacity), s.host_preferences.tps, s.host_preferences.lobby_name};
     view.nametags = s.nametags;
     if (const auto social = steam_social_snapshot())
@@ -511,6 +512,8 @@ std::vector<MultiplayerChatCommand> chat_commands(const Session &s) {
             list.push_back({"/map", "/map <map>", "Admin: change the server's map", "map"});
             list.push_back({"/tpall", "/tpall [player]", "Admin: teleport everyone to you (or to a player)", "player"});
             list.push_back({"/tphere", "/tphere <player>", "Admin: teleport a player to you", "player"});
+            list.push_back({"/teleport", "/teleport <player|SteamID64,SteamID64,...> <player|x y z>",
+                            "Admin: teleport players to a player or a place (y is up)", "player"});
             list.push_back({"/tod", "/tod <time>", "Admin: set the time of day", "time"});
             list.push_back({"/votes", "/votes [<vote> on|off|<percent>|seconds|cooldown|min-players <n>]", "Admin: the server's vote settings"});
             list.push_back({"/announce", "/announce <text>", "Admin: announce something to everyone, on a card on their screen"});
