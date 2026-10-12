@@ -48,12 +48,13 @@ constexpr std::array<std::string_view, 2> launch_superbundles{"Win32/globals.toc
 // mod's author to read. The catalogue is only read once a mod turns out to add
 // an item at all.
 bool store_copy_problems(
-    const Catalog& all,
-    MergeReport& report,
-    const std::vector<std::string>& checked,
-    std::size_t threads,
-    bool background)
+    const Catalog&,
+    MergeReport&,
+    const std::vector<std::string>&,
+    std::size_t,
+    bool)
 {
+    // Store-copy checking disabled.
     return false;
 }
 } // namespace
