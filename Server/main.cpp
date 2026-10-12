@@ -706,7 +706,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int cmd_show) {
     }
 
     if (headless) {
-        if (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole()) {
+        // A server started with its output piped or in a file (by a manager or a service) keeps
+        // what it was given: reopening CONOUT$ closes it, and then nothing the server writes, or
+        // is sent, gets through. Started by hand, it takes its parent's console or one of its own.
+        const HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        const DWORD out_type = out && out != INVALID_HANDLE_VALUE ? GetFileType(out) : FILE_TYPE_UNKNOWN;
+        const bool redirected = out_type == FILE_TYPE_PIPE || out_type == FILE_TYPE_DISK;
+        if (!redirected && (AttachConsole(ATTACH_PARENT_PROCESS) || AllocConsole())) {
             FILE *fp = nullptr;
             freopen_s(&fp, "CONOUT$", "w", stdout);
             freopen_s(&fp, "CONOUT$", "w", stderr);
