@@ -485,7 +485,7 @@ A role is:
   name         1 to 24 of a-z, 0-9, - and _.
   tag          The word shown before the player's name in the game, up to 16
                characters ("" for none). Not one the game uses itself (Server,
-               Host, Friend, Dev, Staff...).
+               Host, Friend, Dev, ReSkate Admin...).
   color        The tag's colour, like "#FF74C6".
   rank         0 to 1000. Nobody kicks, bans or changes the role of a player
                whose rank is theirs or higher, or gives out a role whose rank

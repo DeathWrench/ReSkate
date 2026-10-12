@@ -44,8 +44,9 @@ A role
 name          1 to 24 characters: a-z, 0-9, - and _. Lower case. Not "none".
 tag           The word shown before the player's name in chat and on their
               nametag. Up to 16 characters, "" for no tag. It cannot be a tag
-              the game uses itself: Server, ReSkate, Host, Friend, Dev,
-              Developer, Staff, Homie, Centrix, Content Creator. A word the
+              the game uses itself: Server, ReSkate, ReSkate Admin, Host,
+              Friend, Dev, Developer, Staff, Homie, Centrix, Content Creator.
+              A word the
               ReSkate team does not allow in chat is not shown as a tag either.
 color         The tag's colour, "#RRGGBB".
 rank          0 to 1000. See Rank below.

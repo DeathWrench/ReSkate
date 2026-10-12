@@ -570,7 +570,7 @@ std::string roles_error(const Roles &roles) {
             if (roles.list[j].name == role.name) return where + "listed twice.";
         if (!role.tag.empty() && !valid_role_tag(role.tag)) return where + "its tag is at most 16 bytes of plain text.";
         // What the game itself calls the server, a lobby's host, friends and the ReSkate team.
-        for (const std::string_view taken : {"server", "reskate", "dev", "developer", "contentcreator", "centrix", "staff", "homie", "host", "friend"})
+        for (const std::string_view taken : {"server", "reskate", "reskateadmin", "dev", "developer", "contentcreator", "centrix", "staff", "homie", "host", "friend"})
             if (plain(role.tag) == taken) return where + "the tag \"" + role.tag + "\" is one the game uses itself.";
         if (!parse_colour(role.color)) return where + "color must be a colour like #FF74C6.";
         if (role.rank < 0 || role.rank > 1000) return where + "rank is 0 to 1000.";
