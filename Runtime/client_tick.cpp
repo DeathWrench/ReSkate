@@ -4,6 +4,9 @@
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Assets/map_download.h"
 #include "Extension/Assets/map_icons.h"
+#include "Extension/Music/spotify_station.h"
+#include "Extension/Multiplayer/Hud/game_ui_state.h"
+#include "Extension/Music/music_inject.h"
 #include "Extension/World/texture_handle_limit.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Profiling/profiler.h"
@@ -1216,6 +1219,21 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             dingosdk::map_download::tick();
             dingosdk::map_icons::tick();
     dingosdk::texture_handle_limit::tick();
+    // (Whether a menu of the game's is up, the music screen among them: a playlist changed then
+    // is the player's own choice, and one changed in play is a speaker's music being grabbed.)
+    {
+        const bool menu = dingosdk::multiplayer::sample_game_ui_state(r.base).in_menu;
+        static bool was{};
+        if (menu != was) {
+            was = menu;
+            try {
+                dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Trace: a menu of the game's is {}.", menu ? "up" : "no longer up");
+            } catch (...) {}
+        }
+        dingosdk::spotify_station::set_music_screen(menu);
+    }
+    dingosdk::spotify_station::tick();
+    dingosdk::music_inject::tick();
         }
         dingosdk::multiplayer::refresh_identity_lists();
         // How much memory the game holds, beside what a session adds to it: said when it has

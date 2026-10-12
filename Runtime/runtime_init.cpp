@@ -9,6 +9,12 @@
 #include "Extension/World/load_error_guard.h"
 #include "Extension/World/mesh_unload_guard.h"
 #include "Extension/World/stack_check_report.h"
+#include "Extension/Music/music_inject.h"
+#include "Extension/Music/spotify_web.h"
+#include "Extension/Music/spotify_device.h"
+#include "Extension/Music/spotify_dashboard.h"
+#include "Extension/Music/youtube_music.h"
+#include "Extension/Music/spotify_rows.h"
 #include "Extension/World/texture_handle_limit.h"
 #include "Extension/Console/commands.h"
 #include "Extension/UI/ui_pointer_skip.h"
@@ -323,6 +329,12 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::load_error_guard::install(r.base);
         (void)dingosdk::texture_handle_limit::install(r.base);
         (void)dingosdk::stack_check_report::install(r.base);
+        (void)dingosdk::music_inject::install(r.base);
+        (void)dingosdk::spotify_rows::install(r.base);
+        dingosdk::spotify_device::start(); // (the game as a device in the player's Spotify app)
+        dingosdk::spotify_web::start();
+        dingosdk::youtube_music::start(); // (the player's YouTube playlists, read before the music screen is built)
+        dingosdk::spotify_dashboard::start(); // (the page in the browser that sets Spotify up) // (the player's playlists, fetched before the music screen is built)
         dingosdk::console::start_memory_trace_from_environment();
         const bool fixed_stop_provider = (global_offline_hook && progression_guard_armed) &&
             dingosdk::prepare_fixed_stop_entitlement_provider(r.base);

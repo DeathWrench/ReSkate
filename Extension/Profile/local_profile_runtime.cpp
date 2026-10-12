@@ -328,6 +328,8 @@ void update_local_customization() noexcept {
     try { update_object_categories(); }
     catch (...) { dingosdk::logging::event(dingosdk::logging::Channel::profile, "{\"event\":\"local_object_categories_failed\",\"operation\":\"update\"}"); }
     update_music_catalog();
+    try { update_music_catalog_refresh(); } catch (...) {}
+    try { update_spotify_cover(); } catch (...) {}
     update_music_shelf();
     item_browser::update(s.base);
     try {
