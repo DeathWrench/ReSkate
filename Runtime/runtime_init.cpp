@@ -8,6 +8,8 @@
 #include "Extension/Settings/replay_guard.h"
 #include "Extension/World/load_error_guard.h"
 #include "Extension/World/mesh_unload_guard.h"
+#include "Extension/World/stack_check_report.h"
+#include "Extension/World/texture_handle_limit.h"
 #include "Extension/Console/commands.h"
 #include "Extension/UI/ui_pointer_skip.h"
 #include "Engine/Game/Build/addresses.h"
@@ -319,6 +321,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::replay_guard::install(r.base);
         (void)dingosdk::mesh_unload_guard::install(r.base);
         (void)dingosdk::load_error_guard::install(r.base);
+        (void)dingosdk::texture_handle_limit::install(r.base);
+        (void)dingosdk::stack_check_report::install(r.base);
         dingosdk::console::start_memory_trace_from_environment();
         const bool fixed_stop_provider = (global_offline_hook && progression_guard_armed) &&
             dingosdk::prepare_fixed_stop_entitlement_provider(r.base);

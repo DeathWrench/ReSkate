@@ -4,6 +4,7 @@
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Assets/map_download.h"
 #include "Extension/Assets/map_icons.h"
+#include "Extension/World/texture_handle_limit.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Profiling/profiler.h"
 #include "Extension/Settings/job_spin.h"
@@ -1214,6 +1215,7 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             if (const auto need = dingosdk::multiplayer::take_map_need()) dingosdk::map_download::offer(*need);
             dingosdk::map_download::tick();
             dingosdk::map_icons::tick();
+    dingosdk::texture_handle_limit::tick();
         }
         dingosdk::multiplayer::refresh_identity_lists();
         // How much memory the game holds, beside what a session adds to it: said when it has
