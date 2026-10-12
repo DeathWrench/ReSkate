@@ -93,6 +93,16 @@ struct FlightInput {
     float look_x = 0, look_y = 0;
 };
 
+// May change what the GAME reads from an XInput pad (never what ReSkate itself reads). `user` is
+// the XInput slot. Called on whatever thread the game polls from, once per poll that returns a
+// pad. The grind exit control's grab and lean guards (grind_exit_control.h).
+struct GamepadValues {
+    std::uint16_t buttons = 0;
+    std::uint8_t left_trigger = 0, right_trigger = 0;
+    std::int16_t left_x = 0, left_y = 0, right_x = 0, right_y = 0;
+};
+using GamepadFilter = void (*)(unsigned user, GamepadValues& pad) noexcept;
+
 struct DebugModel {
     bool available = false;
     bool camera_available = false;
@@ -223,6 +233,14 @@ struct BoardBreakModel {
     std::string deck = "None";
 };
 
+// Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,
+// LT/RT toe/heel (else left/right of travel), and the player's stance (0 not set, 1 regular,
+// 2 goofy).
+struct GrindExitModel {
+    bool available = false, enabled = false, toe_heel = true;
+    int stance = 0;
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -244,6 +262,7 @@ struct Model {
     HallOfMeatModel hall_of_meat;
     RoadRashModel road_rash;
     BoardBreakModel board_break;
+    GrindExitModel grind_exit;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
@@ -506,6 +525,8 @@ extern "C" unsigned DingoSDKOverlayReadPromptKeys();
 // allow_menu is used only by the Binds page while recording. Focus and lifetime
 // gates still apply. Gameplay callers leave it false.
 extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* input, bool allow_menu = false);
+// Installs (or, with nullptr, removes) the one gamepad filter. Any thread.
+extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter);
 
 // Optional direct integration for a host that already knows its exact pair.
 struct IDXGISwapChain;

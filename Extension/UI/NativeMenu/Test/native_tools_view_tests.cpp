@@ -152,6 +152,31 @@ int main() {
               "The deck in the game shows");
         activate(state, model, cb, "board-break-deck", "");
         check(capture.command == "boardbreak deck next", "and steps to the next one");
+        // Grind exit triggers: the switch, what LT / RT mean, and the stance toe/heel needs.
+        const auto grind_row = [&](std::string_view id) {
+            const auto page = render(state, model, cb, player_section);
+            const auto row = find(page.main, id);
+            return row == page.main.end() ? Row{} : *row;
+        };
+        check(grind_row("grind-exits").title == "Grind exit triggers: Off" && grind_row("grind-exits").command.empty(),
+              "Grind exit triggers wait until they started");
+        model.grind_exit = {true, false, true, 0};
+        activate(state, model, cb, "grind-exits", "");
+        check(grind_row("grind-exits").command == "grind-exits" && capture.command == "grindexit exits on", "Grind exit triggers turn on");
+        check(grind_row("grind-exit-sides").title == "Input Mode: Toe / Heel" && grind_row("grind-exit-stance").title == "Your stance: Not set",
+              "Toe / heel shows the stance it needs");
+        activate(state, model, cb, "grind-exit-stance", "");
+        check(capture.command == "grindexit stance goofy", "The stance is set");
+        model.grind_exit = {true, true, true, 2};
+        activate(state, model, cb, "grind-exit-stance", "");
+        check(capture.command == "grindexit stance regular", "and changed");
+        activate(state, model, cb, "grind-exit-sides", "");
+        check(capture.command == "grindexit sides travel", "LT / RT switch to left / right of travel");
+        model.grind_exit = {true, true, false, 2};
+        check(grind_row("grind-exit-sides").title == "Input Mode: Left / Right" && grind_row("grind-exit-stance").id.empty(),
+              "which needs no stance");
+        activate(state, model, cb, "grind-exits", "");
+        check(capture.command == "grindexit exits off", "and the triggers turn off");
         model.multiplayer.local_name = "steam_name";
         model.player_card = {true, "Card Name", {}};
         const auto card_page = render(state, model, cb, player_section);

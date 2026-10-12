@@ -163,7 +163,7 @@ void warn(const char* text) {
     ImGui::PopStyleColor();
 }
 bool choice(SkateMenu& menu, const char* id, int& selected, std::initializer_list<const char*> options, bool enabled,
-            float total) {
+            float total, std::initializer_list<const char*> tooltips) {
     ImGui::PushID(id);
     const auto count = static_cast<int>(options.size());
     const float gap = px(4);
@@ -182,6 +182,8 @@ bool choice(SkateMenu& menu, const char* id, int& selected, std::initializer_lis
         }
         ImGui::EndDisabled();
         const bool hovered = enabled && ImGui::IsItemHovered();
+        const char* tooltip = i < static_cast<int>(tooltips.size()) ? tooltips.begin()[i] : nullptr;
+        if (tooltip && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("%s", tooltip);
         if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible)
             draw->AddRect(at, ImVec2(at.x + width, at.y + height), paper, 0, 0, px(2));
         ImGui::PopID();

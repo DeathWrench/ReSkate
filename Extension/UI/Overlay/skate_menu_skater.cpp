@@ -187,6 +187,28 @@ void movement_controls(SkateMenu& menu, const Model& model, const CallbacksV3& c
     end_card();
     board_break_deck_card(menu, model, callbacks);
 
+    // Grind exit control (Extension/Skater/grind_exit_control.h).
+    const auto& grind = model.grind_exit;
+    const bool grind_console = grind.available && callbacks.queue_console_command;
+    begin_card(menu, "grind-exits", "GRIND EXITS", "Choose the side you pop out of a grind using LT/RT");
+    bool grind_on = grind.enabled;
+    if (toggle_row(menu, "Grind exit triggers", "Press LT or RT while grinding to pick the side you pop out to.",
+            grind_on, grind_console))
+        send_console(menu, callbacks, grind_on ? "grindexit exits on" : "grindexit exits off");
+    field(menu, "Input Mode");
+    int grind_sides = grind.toe_heel ? 0 : 1;
+    if (choice(menu, "grind-sides", grind_sides, {"Toe / Heel", "Left / Right"}, grind_console, 0.0f,
+            {"Direction is based on your skater's toe/heel side", "Direction is based on left or right of your direction of travel"}))
+        send_console(menu, callbacks, grind_sides == 0 ? "grindexit sides toeheel" : "grindexit sides travel");
+    if (grind.toe_heel) {
+        field(menu, "Your stance");
+        int grind_stance = grind.stance == 2 ? 1 : grind.stance == 1 ? 0 : -1;
+        if (choice(menu, "grind-stance", grind_stance, {"Regular", "Goofy"}, grind_console))
+            send_console(menu, callbacks, grind_stance == 1 ? "grindexit stance goofy" : "grindexit stance regular");
+        if (grind.stance == 0) warn("Pick your stance. Until then LT / RT are left / right of travel.");
+    }
+    end_card();
+
     begin_card(menu, "boosts", "BOOSTS", "Buttons are set in Settings > Controls");
     ImGui::BeginDisabled(!callbacks.queue_debug);
     field(menu, "Forward boost");

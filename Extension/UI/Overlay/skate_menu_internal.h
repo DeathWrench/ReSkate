@@ -29,9 +29,10 @@ void field(SkateMenu& menu, const char* label, const char* tooltip = nullptr);
 void info(SkateMenu& menu, const char* label, const std::string& value);
 void note(const char* text);
 void warn(const char* text);
-// width 0 fills the rest of the row.
+// width 0 fills the rest of the row. tooltips, when given, are shown on hovering the option at the
+// same position (one per option; nullptr for none).
 bool choice(SkateMenu& menu, const char* id, int& selected, std::initializer_list<const char*> options,
-            bool enabled = true, float width = 0.0f);
+            bool enabled = true, float width = 0.0f, std::initializer_list<const char*> tooltips = {});
 void tag(SkateMenu& menu, const char* text, ImU32 colour);
 bool primary_button(SkateMenu& menu, const char* label, bool enabled = true);
 // Height left for a tab's body, keeping room for the feedback line below it.

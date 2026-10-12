@@ -1167,6 +1167,12 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
         if (list.setting("Board Break", on_off(m.board_break.enabled), m.board_break.available && console)) act("board-break");
         if (list.setting("Board Break deck", m.board_break.deck, m.board_break.available && m.board_break.has_deck && console))
             act("board-break-deck");
+        const auto &grind = m.grind_exit;
+        if (list.setting("Grind exit triggers", on_off(grind.enabled), grind.available && console)) act("grind-exits");
+        if (list.setting("Input Mode", grind.toe_heel ? "Toe / Heel" : "Left / Right", grind.available && console)) act("grind-exit-sides");
+        if (grind.toe_heel &&
+            list.setting("Your stance", grind.stance == 2 ? "Goofy" : grind.stance == 1 ? "Regular" : "Not set", grind.available && console))
+            act("grind-exit-stance");
         const auto &wear = m.offline.board_wear;
         if (list.setting("Board wear", on_off(wear.effective), wear.available && cb.queue_offline_feature)) act("board-wear");
         if (list.setting("Reset board wear", {}, wear.available && wear.effective && console)) act("board-wear-reset");

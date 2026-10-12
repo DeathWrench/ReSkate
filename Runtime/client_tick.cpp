@@ -16,6 +16,7 @@
 #include "Extension/HallOfMeat/hall_of_meat.h"
 #include "Extension/RoadRash/road_rash.h"
 #include "Extension/BoardBreak/board_break.h"
+#include "Extension/Skater/grind_exit_control.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
@@ -817,6 +818,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     dingosdk::hall_of_meat::on_client_tick();
     dingosdk::road_rash::on_client_tick(client);
     dingosdk::board_break::on_client_tick(client);
+    dingosdk::grind_exit_control::on_client_tick(client);
     if (!has_request && now < r.next_model && state == r.previous_state) return;
     r.next_model = now + 500;
     DINGO_PROFILE_ZONE("tick/update_model/world model (500 ms)");
@@ -959,6 +961,8 @@ void update_model(std::uintptr_t client, TickState& frame) {
     const auto breakable_deck = dingosdk::board_break::deck();
     model.board_break = {dingosdk::board_break::available(), dingosdk::board_break::enabled(), !breakable_deck.empty(),
                          dingosdk::board_break::deck_label(breakable_deck)};
+    model.grind_exit = {dingosdk::grind_exit_control::available(), dingosdk::grind_exit_control::enabled(),
+                        dingosdk::grind_exit_control::toe_heel(), dingosdk::grind_exit_control::stance()};
     model.bindings = dingosdk::local_profile_controller_bindings();
     model.parks = dingosdk::local_profile_parks();
     model.world = dingosdk::local_profile_world_layers();
