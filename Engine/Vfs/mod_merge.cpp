@@ -47,25 +47,7 @@ constexpr std::array<std::string_view, 2> launch_superbundles{"Win32/globals.toc
 // more than that the mod could not be merged: what was found is not for the
 // mod's author to read. The catalogue is only read once a mod turns out to add
 // an item at all.
-bool store_copy_problems(const Catalog& all, MergeReport& report, const std::vector<std::string>& checked,
-                         std::size_t threads, bool background) {
-    // (Only when some are skipped is the catalogue copied, without them.)
-    std::optional<Catalog> fewer;
-    if (!checked.empty()) {
-        fewer = all;
-        std::erase_if(fewer->mods, [&](const Mod& mod) {
-            return std::ranges::any_of(checked, [&](const std::string& name) { return lower(name) == lower(mod.name); });
-        });
-    }
-    const Catalog& catalog = fewer ? *fewer : all;
-    std::optional<content_cache::Catalogs> store;
-    const auto found = check_store_copies(catalog, [&store](const std::string& key) {
-        if (!store) store = content_cache::read_catalogs(content_cache::directory());
-        return store->reserved(key);
-    }, &report.notes, threads, background);
-    for (const auto& source : found.mods) report.problems[source.mod].emplace_back(store_copies_problem);
-    return !found.mods.empty();
-}
+
 } // namespace
 
 MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, const MergeOptions& options) noexcept {
