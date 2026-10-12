@@ -121,6 +121,13 @@ int main() {
                                  "homo", "homos", "rapers"})
             if (!contains_forbidden_words(said)) std::printf("FAIL: not forbidden: %s\n", said), ++failures;
         expect(mask_bad_words("bigger coons") == "bigger *****", "a short word is not masked only where it is said");
+        // A number is not a word written with look-alike digits: a time, a score.
+        const std::vector<std::string> short_words{"ss", "ass", "tit"};
+        set_word_lists(short_words, {});
+        expect(mask_bad_words("TallyMark finished 4th in 2:55.0!") == "TallyMark finished 4th in 2:55.0!" && !contains_bad_words("455 points, 717 to go") &&
+                   !contains_bad_words("5 5 5"),
+               "a number is filtered as a word");
+        expect(contains_bad_words("you a55") && contains_bad_words("@55") && contains_bad_words("t1t"), "a word with digits for letters is not filtered");
         set_word_lists({}, {});
         expect(!contains_bad_words("darn zorblat fuck") && !contains_forbidden_words("zorblat") && mask_bad_words("darn") == "darn",
                "empty lists still filter");

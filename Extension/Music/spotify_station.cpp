@@ -99,7 +99,7 @@ void show_locked(std::uintptr_t metadata) noexcept {
     // (Each song made to read as Spotify's, into the log while the speakers are worked out.)
     if (static int said{}; said++ < 60) {
         try {
-            logging::log(logging::Level::info, logging::Channel::music, "Spotify station: a song of the game's {} as Spotify's ({} in all).", done ? "now reads" : "could not be made to read", shown.size());
+            logging::log(logging::Level::debug, logging::Channel::music, "Spotify station: a song of the game's {} as Spotify's ({} in all).", done ? "now reads" : "could not be made to read", shown.size());
         } catch (...) {}
     }
 }
@@ -206,7 +206,7 @@ void bound(std::uint32_t channel, bool music_channel, std::uint32_t playlist, st
     if (const auto signature = (std::uint64_t{channel} << 40) ^ (std::uint64_t{playlist} << 8) ^ members ^ (static_cast<std::uint64_t>(station + 1) << 52);
         last_said.exchange(signature, std::memory_order_relaxed) != signature && station >= 0) {
         try {
-            logging::log(logging::Level::info, logging::Channel::music, "Spotify station: the game bound channel {} to playlist {}, station {}{}.",
+            logging::log(logging::Level::debug, logging::Channel::music, "Spotify station: the game bound channel {} to playlist {}, station {}{}.",
                 channel, playlist, station, music_channel ? "" : " (not yet a music channel)");
         } catch (...) {}
     }
@@ -322,7 +322,7 @@ void tick() noexcept {
             else if (first) external_player::send(external_player::Command::play);
             entered = GetTickCount64();
             try {
-                logging::log(logging::Level::info, logging::Channel::music, "Spotify station: station {} is on{}.", now,
+                logging::log(logging::Level::debug, logging::Channel::music, "Spotify station: station {} is on{}.", now,
                     playlist.empty() ? std::string() : " (Spotify playlist " + playlist + ")");
             } catch (...) {}
         } else {
@@ -364,7 +364,7 @@ void tick() noexcept {
                 station_index.store(found, std::memory_order_relaxed);
                 station_channel.store(channel, std::memory_order_relaxed);
                 try {
-                    logging::log(logging::Level::info, logging::Channel::music, "Spotify station: station {} is taken to be on, on channel {} (its tile has no playlist of the game's behind it yet).", found, channel);
+                    logging::log(logging::Level::debug, logging::Channel::music, "Spotify station: station {} is taken to be on, on channel {} (its tile has no playlist of the game's behind it yet).", found, channel);
                 } catch (...) {}
             }
         }
@@ -390,7 +390,7 @@ void tick() noexcept {
         else if (!playlist.empty() && !track.empty()) spotify_web::play(playlist, track);
         picked_at = GetTickCount64(); // (with a track or not: the game's next that follows is not Spotify's)
         try {
-            logging::log(logging::Level::info, logging::Channel::music, "Spotify station: a row was picked{}.", track.empty() ? std::string(" (not one with a track)") : " (" + track + ")");
+            logging::log(logging::Level::debug, logging::Channel::music, "Spotify station: a row was picked{}.", track.empty() ? std::string(" (not one with a track)") : " (" + track + ")");
         } catch (...) {}
     }
     // A YouTube Music station that has come on starts its playlist a moment after, unless a row
@@ -422,7 +422,7 @@ void tick() noexcept {
         } catch (...) {}
         if (playing) external_player::send(external_player::Command::next);
         try {
-            logging::log(logging::Level::info, logging::Channel::music, "Spotify station: the game asked for its next song; {}.", playing ? "Spotify's next" : "Spotify is paused, so it is left where it is");
+            logging::log(logging::Level::debug, logging::Channel::music, "Spotify station: the game asked for its next song; {}.", playing ? "Spotify's next" : "Spotify is paused, so it is left where it is");
         } catch (...) {}
     }
     try {
@@ -443,7 +443,7 @@ void tick() noexcept {
         if (unshown || revision != said) show(now, track.artist, track.title);
         if (revision != said) {
             said = revision;
-            logging::log(logging::Level::info, logging::Channel::music, "Spotify station: {} {}: {} - {}{}.", track.spotify ? "Spotify" : track.app,
+            logging::log(logging::Level::debug, logging::Channel::music, "Spotify station: {} {}: {} - {}{}.", track.spotify ? "Spotify" : track.app,
                 track.playing ? "is playing" : "is paused on", track.artist, track.title, track.artwork.empty() ? "" : " (with a cover)");
         }
     } catch (...) {}

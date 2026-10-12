@@ -84,11 +84,13 @@ bool read_music_catalog(MusicCatalog& result) {
     // (And the External Audio station, external_audio.h, when an application is picked for it:
     // it is in a row of its own in the music screen.)
     if (!external_audio::app().empty()) spotify_playlists.push_back({external_audio::station, external_audio::station_name, {}, {}});
-    // (And YouTube Music's playlists, youtube_music.h, each with its songs as its rows.)
+    // (And YouTube Music's playlists, the player's folders of music and their radio stations,
+    // youtube_music.h, each with its songs as its rows.)
     {
         std::size_t number{};
         for (const auto& theirs : youtube_music::playlists()) {
             spotify_web::Playlist playlist{youtube_music::station_prefix + std::to_string(number++), theirs.name, theirs.artwork, {}};
+            if (!theirs.usable) continue;
             for (const auto& song : theirs.songs) playlist.tracks.push_back({song.artist, song.title, youtube_music::track_prefix + song.id});
             spotify_playlists.push_back(std::move(playlist));
         }
@@ -263,7 +265,7 @@ bool read_music_catalog(MusicCatalog& result) {
                 const bool liked = theirs.id == spotify_web::liked_songs;
                 const bool tube = theirs.id.starts_with(youtube_music::station_prefix);
                 id = theirs.id == external_audio::station ? std::string(external_audio::playlist_id)
-                    : tube ? youtube_music::playlist_prefix + theirs.id.substr(std::strlen(youtube_music::station_prefix))
+                    : tube ? youtube_music::tile_id(std::strtoul(theirs.id.c_str() + std::strlen(youtube_music::station_prefix), nullptr, 10))
                     : spotify_station::playlist_prefix + (liked ? "!" + theirs.id : theirs.id);
                 name = theirs.name;
                 // (Spotify's own picture is for Spotify's playlists that have none.)
@@ -294,7 +296,7 @@ bool read_music_catalog(MusicCatalog& result) {
         static std::string last;
         if (said != last) {
             last = said;
-            dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Spotify stations and the songs they were given: {}.", said.empty() ? "none" : said);
+            dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music, "Spotify stations and the songs they were given: {}.", said.empty() ? "none" : said);
         }
     }
     for (auto it = playlists.begin(); it != playlists.end();)

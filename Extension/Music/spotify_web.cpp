@@ -39,6 +39,8 @@ std::condition_variable wake;
 std::deque<std::string> commands; // "login", "logout", "refresh", "play <id>"
 std::string client_id, refresh_token, user_name, problem_text;
 std::vector<Playlist> known;
+std::vector<Queued> lined_up;
+std::atomic<std::uint64_t> queue_asked{};
 bool is_busy{};
 std::atomic<bool> started{};
 // (The worker's alone.)
@@ -209,7 +211,7 @@ std::string token() {
                 refresh_token.clear();
             }
             keep();
-            problem("the sign-in is no longer good; sign in again (spotify login)");
+            problem("the sign-in is no longer good; sign in again (music spotify login)");
         } else {
             problem(std::format("Spotify could not be reached to renew the sign-in ({})", reply.status));
         }
@@ -306,6 +308,35 @@ std::vector<Track> tracks_of(const Reply& reply) {
     return tracks;
 }
 
+// What Spotify has lined up (its "queue"): the song playing and those to come.
+void fetch_queue() {
+    const auto reply = api(L"GET", "/v1/me/player/queue");
+    std::vector<Queued> found;
+    if (reply.status == 200) {
+        try {
+            const auto json = Json::parse(reply.body);
+            const auto take = [&](const Json& song) {
+                if (!song.is_object() || found.size() >= 40) return;
+                Queued queued{{}, song.value("name", ""), song.value("uri", ""), {}};
+                if (song.contains("artists") && song.at("artists").is_array() && song.at("artists").size() && song.at("artists").at(std::size_t{0}).is_object())
+                    queued.artist = song.at("artists").at(std::size_t{0}).value("name", "");
+                // (The smallest of its album's pictures: they are listed from the largest.)
+                if (song.contains("album") && song.at("album").is_object() && song.at("album").contains("images") && song.at("album").at("images").is_array() && song.at("album").at("images").size()) {
+                    const auto& images = song.at("album").at("images");
+                    if (const auto& image = images.at(images.size() - 1); image.is_object()) queued.cover = image.value("url", "");
+                    if (!queued.cover.starts_with("https://")) queued.cover.clear();
+                }
+                if (!queued.title.empty()) found.push_back(std::move(queued));
+            };
+            if (json.contains("currently_playing")) take(json.at("currently_playing"));
+            if (json.contains("queue") && json.at("queue").is_array())
+                for (std::size_t i = 0; i < json.at("queue").size(); ++i) take(json.at("queue").at(i));
+        } catch (...) {}
+    }
+    std::lock_guard lock(mutex);
+    lined_up = std::move(found);
+}
+
 void fetch_playlists() {
     std::vector<Playlist> found;
     if (const auto me = api(L"GET", "/v1/me"); me.status == 200) {
@@ -318,7 +349,7 @@ void fetch_playlists() {
     // Liked Songs first, when the sign-in lets them be read (one made before this asked for
     // that does not: signing in again does).
     if (const auto liked = api(L"GET", "/v1/me/tracks?limit=50"); liked.status == 200) found.push_back({liked_songs, "Liked Songs", {}, tracks_of(liked)});
-    else if (liked.status == 401 || liked.status == 403) say(logging::Level::info, "Liked Songs need the sign-in made again (spotify login).");
+    else if (liked.status == 401 || liked.status == 403) say(logging::Level::info, "Liked Songs need the sign-in made again (music spotify login).");
     const auto reply = api(L"GET", "/v1/me/playlists?limit=50");
     if (reply.status != 200) {
         if (reply.status) problem(std::format("the playlists could not be fetched ({})", reply.status));
@@ -364,7 +395,7 @@ void sign_in() {
         std::lock_guard lock(mutex);
         client = client_id;
     }
-    if (client.empty()) return problem("no client id is set (spotify client <id>)");
+    if (client.empty()) return problem("no client id is set (music spotify client <id>)");
     const auto verifier = random_text(64), state = random_text(16);
     const auto challenge = sha256_base64url(verifier);
     if (verifier.empty() || challenge.empty()) return problem("the sign-in could not be prepared");
@@ -429,7 +460,7 @@ void start_playlist(const std::string& playlist, const std::string& track) {
     }
     if (reply.status == 403) return problem("Spotify only lets Premium accounts start a playlist from another application");
     if (reply.status != 200 && reply.status != 202 && reply.status != 204) return problem(std::format("the playlist could not be started ({})", reply.status));
-    say(logging::Level::info, "started playlist " + playlist + (track.empty() ? std::string() : " at " + track) + ".");
+    say(logging::Level::debug, "started playlist " + playlist + (track.empty() ? std::string() : " at " + track) + ".");
 }
 
 void run() noexcept {
@@ -446,10 +477,11 @@ void run() noexcept {
             wake.wait(lock, [] { return !commands.empty(); });
             command = std::move(commands.front());
             commands.pop_front();
-            is_busy = true;
+            is_busy = command != "queue"; // (a look at the queue is not something the player waits on)
         }
         try {
             if (command == "login") sign_in();
+            else if (command == "queue") fetch_queue();
             else if (command == "refresh") fetch_playlists();
             else if (command.starts_with("client ")) {
                 {
@@ -464,6 +496,7 @@ void run() noexcept {
                     std::lock_guard lock(mutex);
                     refresh_token.clear();
                     known.clear();
+                    lined_up.clear();
                     user_name.clear();
                     problem_text.clear();
                 }
@@ -482,6 +515,7 @@ void ask(std::string command) {
         std::lock_guard lock(mutex);
         // (Only the last playlist asked for matters.)
         if (command.starts_with("play ")) std::erase_if(commands, [](const std::string& waiting) { return waiting.starts_with("play "); });
+        if (command == "queue") std::erase_if(commands, [](const std::string& waiting) { return waiting == "queue"; });
         commands.push_back(std::move(command));
     }
     wake.notify_one();
@@ -526,6 +560,20 @@ void play(const std::string& playlist, const std::string& track) {
 std::vector<Playlist> playlists() {
     std::lock_guard lock(mutex);
     return known;
+}
+std::vector<Queued> queue() {
+    std::lock_guard lock(mutex);
+    return refresh_token.empty() ? std::vector<Queued>{} : lined_up;
+}
+void want_queue(bool now) {
+    {
+        std::lock_guard lock(mutex);
+        if (refresh_token.empty()) return;
+    }
+    const auto tick = GetTickCount64();
+    if (!now && tick - queue_asked.load(std::memory_order_relaxed) < 4000) return;
+    queue_asked.store(tick, std::memory_order_relaxed);
+    ask("queue");
 }
 State state() {
     std::lock_guard lock(mutex);

@@ -485,7 +485,7 @@ std::int32_t __fastcall music_select_next_hook(std::uintptr_t queue, std::uintpt
                 std::uint8_t asked{};
                 native_queue_channel(image_base.load(std::memory_order_acquire), queue, chosen_channel);
                 dingosdk::memory::peek(queue + 0xf1, asked);
-                dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Trace: channel {} (queue 0x{:x}) chose song {} of its queue{}.", chosen_channel, queue, chosen,
+                dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music, "Trace: channel {} (queue 0x{:x}) chose song {} of its queue{}.", chosen_channel, queue, chosen,
                     asked ? " (asked for its next)" : "");
             } catch (...) {}
         }
@@ -562,7 +562,7 @@ std::uintptr_t __fastcall music_channel_playlist_bind_hook(std::uintptr_t channe
                 }
                 if (station >= 0) {
                     try {
-                        dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music,
+                        dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music,
                             "Spotify station: playlist {} has {} member(s), its first is row {} of station {}, its place is {}{}.", playlist_id, station_members, first, station,
                             cursor, add ? "; the game's song was added" : "");
                     } catch (...) {}
@@ -589,7 +589,7 @@ std::uintptr_t __fastcall music_channel_playlist_bind_hook(std::uintptr_t channe
         if (auto own = bound_playlist[channel].load(std::memory_order_relaxed); !from_screen && own && image) {
             spotify_station::grabbed();
             try {
-                dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music,
+                dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music,
                     "Spotify station: channel {} was asked for playlist {} by the world, not the music screen (a speaker's music was grabbed): it stays on Spotify.", channel, playlist_id);
             } catch (...) {}
             return bind_channel_playlist(channel_pointer, reinterpret_cast<std::uintptr_t>(&own));
@@ -599,7 +599,7 @@ std::uintptr_t __fastcall music_channel_playlist_bind_hook(std::uintptr_t channe
         : bind_channel_playlist(channel_pointer, playlist_id_pointer);
     if (have_binding && channel < bound_playlist.size()) bound_playlist[channel].store(playlist_id, std::memory_order_relaxed);
     if (have_binding && channel < channel_bound_at.size()) channel_bound_at[channel].store(GetTickCount64(), std::memory_order_relaxed);
-    if (static std::atomic<int> said{}; have_binding && said.fetch_add(1, std::memory_order_relaxed) < 600) {
+    if (static std::atomic<int> said{}; have_binding && dingosdk::logging::enabled(dingosdk::logging::Level::debug) && said.fetch_add(1, std::memory_order_relaxed) < 600) {
         try {
             void* frames[10]{};
             const auto count = CaptureStackBackTrace(1, 10, frames, nullptr);
@@ -610,7 +610,7 @@ std::uintptr_t __fastcall music_channel_playlist_bind_hook(std::uintptr_t channe
                 std::snprintf(text, sizeof(text), " +0x%llx", static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(frames[i]) - image));
                 callers += text;
             }
-            dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Trace: channel {} bound to playlist {} ({} member(s), station {}); the Spotify station is on channel {}, a menu is {}; from{}.",
+            dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music, "Trace: channel {} bound to playlist {} ({} member(s), station {}); the Spotify station is on channel {}, a menu is {}; from{}.",
                 channel, playlist_id, station_members, station, static_cast<int>(spotify_station::channel()), spotify_station::music_screen() ? "up" : "not up", callers);
         } catch (...) {}
     }

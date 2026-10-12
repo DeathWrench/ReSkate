@@ -450,7 +450,7 @@ void on_client_tick(std::uintptr_t client) noexcept {
         try {
             const char* trigger = d.trigger > 0 ? "LT" : d.trigger < 0 ? "RT" : "-";
             const char* toward = d.toward > 0 ? "left of travel" : d.toward < 0 ? "right of travel" : "-";
-            logging::log(logging::Level::info, logging::Channel::skater,
+            logging::log(logging::Level::debug, logging::Channel::skater,
                          "Grind exit: {} ({} -> {}; {}; {}{}). state {}, rail speed {:.2f}, along {:.2f}, up {:.2f}, sideways {:+.2f} -> {:+.2f}, toe across {:+.2f}",
                          reason_text(d.reason), trigger, toward, d.trigger ? basis_text(d.basis) : "-",
                          d.switch_stance ? "switch" : "normal/fakie", d.lean_blocked ? ", lean held back" : "", d.state, d.rail_speed,

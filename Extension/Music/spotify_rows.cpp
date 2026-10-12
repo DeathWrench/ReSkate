@@ -110,7 +110,7 @@ std::uintptr_t play_song_hook(std::uintptr_t player, std::uintptr_t asset, std::
                 }
         }
         // (Each song the game begins while a station is on, into the log while this is worked out.)
-        if (static std::atomic<int> said{}; said.fetch_add(1, std::memory_order_relaxed) < 600)
+        if (static std::atomic<int> said{}; logging::enabled(logging::Level::debug) && said.fetch_add(1, std::memory_order_relaxed) < 600)
         {
             // (Which song, and from where in the game it was begun.)
             std::uintptr_t metadata{}, artist{}, title{};
@@ -125,11 +125,11 @@ std::uintptr_t play_song_hook(std::uintptr_t player, std::uintptr_t asset, std::
             const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
             std::string callers;
             for (unsigned i = 0; i < count; ++i) callers += std::format(" +0x{:x}", reinterpret_cast<std::uintptr_t>(frames[i]) - image);
-            logging::log(logging::Level::info, logging::Channel::music, "Spotify rows: the game began {} (\"{} - {}\") on channel {}, from{}.", ours ? "a row of ours" : "a song of its own",
+            logging::log(logging::Level::debug, logging::Channel::music, "Spotify rows: the game began {} (\"{} - {}\") on channel {}, from{}.", ours ? "a row of ours" : "a song of its own",
                 artist_text, title_text, channel, callers);
         }
         // (A row of ours keeps its own artist and title: they are what its row says.)
-        // The station's own song beginning: its sound file is known for it ("spotify through 3").
+        // The station's own song beginning: its sound file is known for it ("music through 3").
         if (!ours && spotify_station::active() && channel == spotify_station::channel()) music_inject::station_song_begins();
         // Any song of the game's begun while a station is on has Spotify's sound (a speaker's in
         // the world), so it reads as Spotify's. (A row of ours keeps what its row says.)
@@ -159,7 +159,7 @@ void trace(const char* what, std::uint32_t playlist, const unsigned char* song) 
     if (const auto now = GetTickCount64() / 1000; second.exchange(now, std::memory_order_relaxed) != now) in_second.store(0, std::memory_order_relaxed);
     if (in_second.fetch_add(1, std::memory_order_relaxed) >= 30 || traced.fetch_add(1, std::memory_order_relaxed) >= 1500) return;
     try {
-        logging::log(logging::Level::info, logging::Channel::music, "Playlist {}: {}{}.", playlist, what, song ? " " + song_text(song) : std::string());
+        logging::log(logging::Level::debug, logging::Channel::music, "Playlist {}: {}{}.", playlist, what, song ? " " + song_text(song) : std::string());
     } catch (...) {}
 }
 using PlaylistSong = void* (*)(std::uintptr_t, std::uint32_t*, const unsigned char*);
@@ -201,7 +201,7 @@ void request_hook(std::uintptr_t queue, std::uintptr_t asset) {
                 }
         }
         // (Each song asked for, into the log while grabbing a speaker's music is worked out.)
-        if (static std::atomic<int> said{}; spotify_station::recent() && said.fetch_add(1, std::memory_order_relaxed) < 600) {
+        if (static std::atomic<int> said{}; logging::enabled(logging::Level::debug) && spotify_station::recent() && said.fetch_add(1, std::memory_order_relaxed) < 600) {
             std::uintptr_t metadata{}, artist{}, title{};
             char artist_text[96]{}, title_text[96]{};
             if (graph && memory::peek(graph + graph_metadata, metadata) && (metadata &= ~std::uintptr_t{4}) != 0 && memory::peek(metadata + metadata_artist, artist) &&
@@ -214,7 +214,7 @@ void request_hook(std::uintptr_t queue, std::uintptr_t asset) {
             const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
             std::string callers;
             for (unsigned i = 0; i < count; ++i) callers += std::format(" +0x{:x}", reinterpret_cast<std::uintptr_t>(frames[i]) - image);
-            logging::log(logging::Level::info, logging::Channel::music, "Trace: queue 0x{:x} was asked for {} (\"{} - {}\"), from{}.", queue, ours ? "a row of ours" : "a song of the game's", artist_text, title_text, callers);
+            logging::log(logging::Level::debug, logging::Channel::music, "Trace: queue 0x{:x} was asked for {} (\"{} - {}\"), from{}.", queue, ours ? "a row of ours" : "a song of the game's", artist_text, title_text, callers);
         }
     } catch (...) {}
     request_original(queue, asset);
@@ -294,7 +294,7 @@ std::string ensure(std::uintptr_t base, std::uintptr_t manager, const std::strin
         return {};
     }
     try {
-        logging::log(logging::Level::info, logging::Channel::music, "Spotify rows: registered \"{}\".", id);
+        logging::log(logging::Level::debug, logging::Channel::music, "Spotify rows: registered \"{}\".", id);
     } catch (...) {}
     return id;
 }

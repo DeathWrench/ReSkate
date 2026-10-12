@@ -79,7 +79,7 @@ void told(const char* text) {
         if (parts.empty()) return;
         if (parts[0] == "LOG") {
             static std::atomic<int> logged{};
-            if (parts.size() > 1 && logged.fetch_add(1, std::memory_order_relaxed) < 300) say(logging::Level::info, "(librespot) " + parts[1]);
+            if (parts.size() > 1 && logged.fetch_add(1, std::memory_order_relaxed) < 300) say(logging::Level::debug, "(librespot) " + parts[1]);
             // (What it says just before it gives up on an account that is not Premium.)
             if (parts.size() > 1 && parts[1].find("does not support") != std::string::npos && parts[1].find("accounts") != std::string::npos) not_premium.store(true);
         } else if (parts[0] == "READY") {

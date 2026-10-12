@@ -276,65 +276,66 @@ void start_memory_trace_from_environment() noexcept {
 }
 
 void register_perf_commands(Commands& registry) {
-    // Spotify in the music screen (spotify_station.h): what it sees, and the player's account.
-    auto spotify = action("spotify", "Spotify in the music screen: what is selected, what Spotify is playing, and the account", Group::console);
+    // The music sources in the music screen (Spotify, YouTube Music, the player's files, radio,
+    // another application): what is on, what is playing, and the Spotify account.
+    auto spotify = action("music", "The music sources (Spotify, YouTube Music, local files, radio, external audio): what is on, what is playing, and the Spotify account", Group::console);
     spotify.execution = Execution::local;
     spotify.run = [](const Model&, const Values&, const Output& out) {
         out(spotify_station::status());
         out(music_inject::status());
         out(spotify_device::status());
         const auto account = spotify_web::state();
-        out(std::format("Spotify account: {}{}; {} playlist(s){}{}.", !account.has_client ? "no client id set (spotify client <id>)" : account.signed_in ? "signed in" : "not signed in (spotify login)",
+        out(std::format("Spotify account: {}{}; {} playlist(s){}{}.", !account.has_client ? "no client id set (music spotify client <id>)" : account.signed_in ? "signed in" : "not signed in (music spotify login)",
             account.user.empty() ? std::string() : " as " + account.user, account.playlists, account.busy ? "; busy" : "",
             account.problem.empty() ? std::string() : "; " + account.problem));
     };
     registry.add(std::move(spotify));
-    auto setup = action("spotify setup", "Open the page in your browser that sets Spotify up (the device, your playlists, how loud it is)", Group::console);
+    auto setup = action("music setup", "Open the page in your browser that sets the music sources up (Spotify, YouTube Music, local files, radio, external audio, and how it sounds)", Group::console);
     setup.execution = Execution::local;
     setup.run = [](const Model&, const Values&, const Output& out) {
         if (spotify_dashboard::open()) out("Opening " + spotify_dashboard::address() + " in your browser.");
-        else out("The Spotify setup page is not being served.");
+        else out("The music setup page is not being served.");
     };
     registry.add(std::move(setup));
-    auto client = action("spotify client", "The client id of your Spotify application (its redirect address: http://127.0.0.1:47824/callback)", Group::console,
+    auto client = action("music spotify client", "The client id of your Spotify application (its redirect address: http://127.0.0.1:47824/callback)", Group::console,
         {argument("id")});
     client.execution = Execution::local;
     client.run = [](const Model&, const Values& args, const Output& out) {
         spotify_web::set_client(std::get<std::string>(args[0]));
-        out("Spotify client id set. Sign in with: spotify login");
+        out("Spotify client id set. Sign in with: music spotify login");
     };
     registry.add(std::move(client));
-    auto login = action("spotify login", "Sign in to Spotify in your browser, for your playlists in the music screen", Group::console);
+    auto login = action("music spotify login", "Sign in to Spotify in your browser, for your playlists in the music screen", Group::console);
     login.execution = Execution::local;
     login.run = [](const Model&, const Values&, const Output& out) {
-        if (!spotify_web::state().has_client) return out("Set your Spotify application's client id first: spotify client <id>");
+        if (!spotify_web::state().has_client) return out("Set your Spotify application's client id first: music spotify client <id>");
         spotify_web::login();
         out("Your browser is opening Spotify's sign-in. Your playlists are in the music screen the next time the game starts.");
     };
     registry.add(std::move(login));
-    auto logout = action("spotify logout", "Forget the Spotify sign-in", Group::console);
+    auto logout = action("music spotify logout", "Forget the Spotify sign-in", Group::console);
     logout.execution = Execution::local;
     logout.run = [](const Model&, const Values&, const Output& out) {
         spotify_web::logout();
         out("The Spotify sign-in is forgotten.");
     };
     registry.add(std::move(logout));
-    auto through = variable("spotify through", "Spotify's sound through the game on the Spotify station: 0 off, 1 in place of songs, 2 in place of every stereo sound file",
+    auto through = variable("music through", "The music sources' sound through the game while one of their tiles is on: 0 off, 1 in place of songs, 2 in place of every stereo sound file",
         Group::console, argument("0-2", Type::integer));
     through.execution = Execution::local;
     through.inspect = [](const Model&) { return State{true, std::to_string(music_inject::mode()), {}, "0 off, 1 songs, 2 every stereo sound file", false}; };
     through.run = [](const Model&, const Values& args, const Output& out) {
         music_inject::set_mode(static_cast<int>(std::clamp<std::int64_t>(std::get<std::int64_t>(args[0]), 0, 3)));
-        out(std::format("Spotify through the game: mode {}.", music_inject::mode()));
+        out(std::format("Music through the game: mode {}.", music_inject::mode()));
     };
     registry.add(std::move(through));
-    auto gain = variable("spotify gain", "How loud Spotify is through the game, in percent of how Spotify plays it (100 as it is, up to 1600)",
+    auto gain = variable("music gain", "How loud the music sources are through the game, in percent (100 as it is, up to 1600)",
         Group::console, argument("percent", Type::integer));
     gain.execution = Execution::local;
     gain.inspect = [](const Model&) { return State{true, std::to_string(static_cast<int>(music_inject::gain() * 100.0f + 0.5f)), {}, "percent", false}; };
     gain.run = [](const Model&, const Values& args, const Output& out) {
         music_inject::set_gain(static_cast<float>(std::clamp<std::int64_t>(std::get<std::int64_t>(args[0]), 0, 1600)) / 100.0f);
-        out(std::format("Spotify through the game: {}% loud.", static_cast<int>(music_inject::gain() * 100.0f + 0.5f)));
+        out(std::format("Music through the game: {}% loud.", static_cast<int>(music_inject::gain() * 100.0f + 0.5f)));
     };
     registry.add(std::move(gain));
 

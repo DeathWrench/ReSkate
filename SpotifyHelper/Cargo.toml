@@ -22,7 +22,9 @@ log = "0.4"
 sha1 = "0.10"
 hex = "0.4"
 # (For sound that is not Spotify's: a program's output, decoded. The version librespot uses.)
-symphonia = { version = "0.5.5", default-features = false, features = ["aac", "isomp4", "mp3", "ogg", "vorbis"] }
+symphonia = { version = "0.5.5", default-features = false, features = ["aac", "isomp4", "mp3", "ogg", "vorbis", "flac", "wav", "pcm"] }
+# (For an internet radio station: what is at an address, as it comes. The one already in the tree.)
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "native-tls"] }
 
 [profile.release]
 opt-level = 2

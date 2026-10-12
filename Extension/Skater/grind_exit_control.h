@@ -30,7 +30,8 @@
 //     result through the poses ReSkate already syncs.
 // It is limited to the supported game build: the launch hook is the trainer's, which installs
 // only when the game's code matches (Extension/Trainer/trainer_jump.cpp), and every address
-// comes from Engine/Game/Build/20260929. Every pop out of a grind is written to ReSkate.log with
+// comes from Engine/Game/Build/20260929. With debug logging on, every
+// pop out of a grind is written to ReSkate.log with
 // what was decided and why. On/off, the side convention and the stance are kept in
 // %LOCALAPPDATA%\ReSkate\grindexit\control.txt.
 namespace dingosdk::grind_exit_control {

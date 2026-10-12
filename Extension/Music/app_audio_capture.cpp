@@ -1,4 +1,5 @@
 #include "app_audio_capture.h"
+#include "audio_dsp.h"
 #include <Windows.h>
 #include <audioclient.h>
 #include <audioclientactivationparams.h>
@@ -177,10 +178,29 @@ bool set_mute(const std::vector<DWORD>& processes, bool mute) {
 std::atomic<bool> external{};
 std::atomic<unsigned> source_rate{capture_rate};
 
+// Puts sound into the ring, turned up by `gain` and shaped as the player set it (audio_dsp.h);
+// silence when there are no samples. How loud the loudest of it was.
+float store(const float* samples, unsigned frames, float gain, unsigned rate) {
+    auto at = written.load(std::memory_order_relaxed);
+    float loudest = 0, piece[1024];
+    for (unsigned done = 0; done < frames;) {
+        const unsigned count = std::min(frames - done, 512u);
+        for (unsigned i = 0; i < count * 2; ++i) piece[i] = samples ? std::clamp(samples[done * 2 + i] * gain, -1.0f, 1.0f) : 0.0f;
+        audio_dsp::process(piece, count, rate);
+        for (unsigned i = 0; i < count; ++i, ++at) {
+            ring[(at & (ring_frames - 1)) * 2] = piece[i * 2];
+            ring[(at & (ring_frames - 1)) * 2 + 1] = piece[i * 2 + 1];
+            loudest = std::max({loudest, std::fabs(piece[i * 2]), std::fabs(piece[i * 2 + 1])});
+        }
+        done += count;
+    }
+    written.store(at, std::memory_order_release);
+    return loudest;
+}
+
 void write_frames(const BYTE* data, UINT32 frames, bool silent) {
     if (external.load(std::memory_order_relaxed)) return; // (the sound is another's for now)
-    auto at = written.load(std::memory_order_relaxed);
-    float loudest = 0, raw = 0;
+    float raw = 0;
     const auto* samples = reinterpret_cast<const float*>(data);
     if (!silent)
         for (UINT32 i = 0; i < frames * 2; ++i) raw = std::max(raw, std::fabs(samples[i]));
@@ -188,13 +208,7 @@ void write_frames(const BYTE* data, UINT32 frames, bool silent) {
     // turned down (the change had not reached it yet): then it is left as it is.
     float gain = is_muted.load(std::memory_order_relaxed) ? 1.0f / quiet_volume : 1.0f;
     if (raw * gain > 1.5f) gain = 1.0f;
-    for (UINT32 i = 0; i < frames; ++i, ++at) {
-        const float left = silent ? 0.0f : std::clamp(samples[i * 2] * gain, -1.0f, 1.0f), right = silent ? 0.0f : std::clamp(samples[i * 2 + 1] * gain, -1.0f, 1.0f);
-        ring[(at & (ring_frames - 1)) * 2] = left;
-        ring[(at & (ring_frames - 1)) * 2 + 1] = right;
-        loudest = std::max({loudest, std::fabs(left), std::fabs(right)});
-    }
-    written.store(at, std::memory_order_release);
+    const float loudest = store(silent ? nullptr : samples, frames, gain, capture_rate);
     // (A slow fall, so the level reads as the last second's.)
     const auto before = peak.load(std::memory_order_relaxed);
     peak.store(std::max(loudest, before * 0.97f), std::memory_order_relaxed);
@@ -397,15 +411,7 @@ void set_external(bool on, unsigned rate) noexcept {
     source_rate.store(on && rate ? rate : capture_rate, std::memory_order_relaxed);
 }
 void push(const float* interleaved, unsigned frames) noexcept {
-    auto at = written.load(std::memory_order_relaxed);
-    float loudest = 0;
-    for (unsigned i = 0; i < frames; ++i, ++at) {
-        const float left = interleaved[i * 2], right = interleaved[i * 2 + 1];
-        ring[(at & (ring_frames - 1)) * 2] = left;
-        ring[(at & (ring_frames - 1)) * 2 + 1] = right;
-        loudest = std::max({loudest, std::fabs(left), std::fabs(right)});
-    }
-    written.store(at, std::memory_order_release);
+    const float loudest = store(interleaved, frames, 1.0f, source_rate.load(std::memory_order_relaxed));
     peak.store(std::max(loudest, peak.load(std::memory_order_relaxed) * 0.97f), std::memory_order_relaxed);
 }
 std::uint64_t ahead_frames() noexcept {

@@ -272,6 +272,34 @@ void tick() noexcept {
         if (started) app_audio::mute_source(on && !device && !tube && since < 2500);
     }
     if (now - looked < 1000) return;
+    // How fast the game is taking the sound, against the clock: more than it can play (it is
+    // catching up after standing still, as when the player comes back to its window, and the
+    // music is heard fast for a moment: reported 2026-10-12) or less. Said when it is not as it
+    // should be, with whether the game's window is the one in front.
+    {
+        static std::uint64_t counted{}, counted_starved{};
+        static unsigned told{};
+        const auto frames = replaced_frames.load(std::memory_order_relaxed);
+        const auto capture = app_audio::state();
+        const double seconds = static_cast<double>(now - looked) / 1000.0;
+        if (on && looked && seconds < 3.0 && capture.readers && told < 80) {
+            const double pace = static_cast<double>(frames - counted) / (48000.0 * seconds * capture.readers);
+            DWORD front{};
+            GetWindowThreadProcessId(GetForegroundWindow(), &front);
+            const bool focused = front == GetCurrentProcessId();
+            static bool was_focused{true};
+            if (pace > 1.12 || (pace < 0.88 && pace > 0.01) || focused != was_focused) {
+                ++told;
+                try {
+                    logging::log(logging::Level::info, logging::Channel::music, "Pace: the game took the sound at {:.2f} of the clock's speed over {:.1f} s ({} reader(s), {} frame(s) it wanted were not there); its window is {}.", pace,
+                        seconds, capture.readers, capture.starved - counted_starved, focused ? "in front" : "not in front");
+                } catch (...) {}
+            }
+            was_focused = focused;
+        }
+        counted = frames;
+        counted_starved = capture.starved;
+    }
     looked = now;
     // How the capture of an application's sound is going, into the log as it changes (a player
     // who hears nothing has this to send): whether it runs, why not, and whether any sound has
@@ -286,7 +314,7 @@ void tick() noexcept {
         if (text != said_capture) {
             said_capture = text;
             try {
-                logging::log(capture.capturing ? logging::Level::info : logging::Level::warning, logging::Channel::music, "Sound through the game: {}.", text);
+                logging::log(capture.capturing ? logging::Level::debug : logging::Level::warning, logging::Channel::music, "Sound through the game: {}.", text);
             } catch (...) {}
         }
     }
@@ -301,7 +329,7 @@ void tick() noexcept {
             char name[sizeof(player.name)];
             std::memcpy(name, player.name, sizeof(name));
             name[sizeof(name) - 1] = 0;
-            logging::log(logging::Level::info, logging::Channel::music, "Sound file player {}: \"{}\", {} channel(s) at {} Hz, {} s long{}.", i, name,
+            logging::log(logging::Level::debug, logging::Channel::music, "Sound file player {}: \"{}\", {} channel(s) at {} Hz, {} s long{}.", i, name,
                 player.channels.load(std::memory_order_relaxed), player.rate.load(std::memory_order_relaxed), player.seconds.load(std::memory_order_relaxed),
                 spotify_station::active() ? " (the Spotify station is on)" : "");
         } catch (...) {}

@@ -469,7 +469,7 @@ void update_music_catalog_refresh() {
     } catch (...) {
         outcome = "it failed";
     }
-    dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Music screen: its playlists and songs were given again ({}): {} playlist(s), {} song(s).", outcome,
+    dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music, "Music screen: its playlists and songs were given again ({}): {} playlist(s), {} song(s).", outcome,
         playlist_total, song_total);
 }
 
@@ -483,7 +483,7 @@ void update_spotify_cover() {
     const auto why = [](int reason, const char* text) {
         if (said_why == reason) return;
         said_why = reason;
-        dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Spotify station cover: {}.", text);
+        dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music, "Spotify station cover: {}.", text);
     };
     if (!s.active.load(std::memory_order_acquire) || ui.updating || cosmetic_runtime().update_thread != GetCurrentThreadId() || !spotify_station::active()) return;
     const auto now = GetTickCount64();
@@ -524,6 +524,6 @@ void update_spotify_cover() {
     said_why = 0;
     // The game looks a song's cover up when the song starts, and this one has started.
     spotify_station::refresh_now_playing();
-    dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Spotify station cover: \"{}\" has {}.", id, cover);
+    dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music, "Spotify station cover: \"{}\" has {}.", id, cover);
 }
 }

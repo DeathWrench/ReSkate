@@ -157,16 +157,24 @@ struct Word {
 std::vector<Word> words(std::string_view text) {
     std::vector<Word> out;
     Word current;
+    // A run of digits alone is a number, not a word written with look-alikes: a time such as
+    // "2:55.0" is not "ss" (seen 2026-10-12, a race's finishing time masked in the chat).
+    bool number = true;
+    const auto take = [&] {
+        if (!current.letters.empty() && !number) out.push_back(std::move(current));
+        current = {};
+        number = true;
+    };
     for (std::size_t i = 0; i < text.size(); ++i) {
         if (const char letter = fold(text[i])) {
             current.letters += letter;
             current.at.push_back(i);
-        } else if (!current.letters.empty()) {
-            out.push_back(std::move(current));
-            current = {};
+            if (text[i] < '0' || text[i] > '9') number = false;
+        } else {
+            take();
         }
     }
-    if (!current.letters.empty()) out.push_back(std::move(current));
+    take();
     // Three or more letters spelled out one at a time ("f u c k", "s.o.b.") also read as a word.
     std::vector<Word> spelled;
     for (std::size_t i = 0; i < out.size();) {

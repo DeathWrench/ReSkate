@@ -64,7 +64,8 @@ same thing; a regular skater's recording would confirm which of the two the flag
 around grinds, the pad and the launch calls, to CSV, plus snapshots of the skater's state memory). It
 is not part of this change; it can be offered separately for re-measuring after a game update.
 
-Every pop out of a grind is written to `ReSkate.log` with what was decided and why.
+With the log level set to debug (`loglevel debug`), every pop out of a grind is written to
+`ReSkate.log` with what was decided and why.
 
 ## Measured
 

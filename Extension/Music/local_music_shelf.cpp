@@ -41,13 +41,16 @@ struct ShelfRow {
 bool mods_row(std::string_view id) { return id.starts_with("mod:"); }
 bool spotify_row(std::string_view id) { return spotify_station::is_station(id); }
 bool youtube_row(std::string_view id) { return id.starts_with(youtube_music::playlist_prefix); }
+bool files_row(std::string_view id) { return id.starts_with(youtube_music::files_prefix); }
+bool radio_row(std::string_view id) { return id.starts_with(youtube_music::radio_prefix); }
 bool external_row(std::string_view id) { return id.starts_with(external_audio::playlist_prefix); }
 struct ModsShelf {
     std::uintptr_t manager{};
     md::Value featured_anchor{}, list{};
     ULONGLONG next_poll{};
     // In the order they are shown.
-    std::array<ShelfRow, 4> rows{{{"Spotify", &spotify_row, 0x5d}, {"YouTube Music", &youtube_row, 0x7d}, {"External Audio", &external_row, 0x6d}, {"Mods", &mods_row, 0x4d}}};
+    std::array<ShelfRow, 6> rows{{{"Spotify", &spotify_row, 0x5d}, {"YouTube Music", &youtube_row, 0x7d}, {"Local Files", &files_row, 0x8d}, {"Online Radio", &radio_row, 0x9d},
+        {"External Audio", &external_row, 0x6d}, {"Mods", &mods_row, 0x4d}}};
 };
 ModsShelf mods_shelf;
 md::MenuLifetime music_shelf_lifetime;
@@ -176,7 +179,7 @@ void music_poll_mods(std::uintptr_t base) {
     }
 }
 // Publish the independent Mods shelf before native widgets bind.
-std::string music_shelf_append_one(std::uintptr_t base, std::uintptr_t model, std::uint64_t exact_list, const std::array<bool, 4>& wanted) {
+std::string music_shelf_append_one(std::uintptr_t base, std::uintptr_t model, std::uint64_t exact_list, const std::array<bool, 6>& wanted) {
     namespace md = dingosdk::multiplayer::menu_data;
     game::ModelWriteLock lock(model);
     md::Context shelf{base, model};
@@ -306,7 +309,8 @@ std::uint64_t music_model_construct_hook(std::uintptr_t manager, std::uint8_t mo
         bool has_mod_playlists = false;
         for (const auto& playlist : mod_music_playlists())
             if (!playlist.songs.empty()) { has_mod_playlists = true; break; }
-        const auto report = music_shelf_append_one(local_runtime().base, manager, handle, {spotify_station::spotify_used(), !youtube_music::playlists().empty(), !external_audio::app().empty(), has_mod_playlists});
+        const auto report = music_shelf_append_one(local_runtime().base, manager, handle, {spotify_station::spotify_used(), youtube_music::has(youtube_music::Kind::youtube), youtube_music::has(youtube_music::Kind::files), youtube_music::has(youtube_music::Kind::radio),
+            !external_audio::app().empty(), has_mod_playlists});
         dingosdk::logging::event(dingosdk::logging::Channel::music,
             dingosdk::Json{{"event", "music_shelf_append"}, {"report", report}}.dump().c_str());
     } catch (...) {} // A shelf failure must not interrupt the native constructor.

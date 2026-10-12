@@ -79,6 +79,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Music/spotify_dashboard.cpp
     Extension/Music/external_audio.cpp
     Extension/Music/youtube_music.cpp
+    Extension/Music/audio_dsp.cpp
     Extension/Music/spotify_rows.cpp
     Extension/Music/app_audio_capture.cpp
     Extension/Music/music_inject.cpp
@@ -110,6 +111,7 @@ add_library(dingosdk_runtime SHARED
     Launcher/mod_manager.cpp
     Extension/Assets/loose_files.cpp
     Extension/Scripting/lua_startup.cpp
+    Extension/Scripting/lua_native_block.cpp
     Extension/Scripting/custom_script_loader.cpp
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp
@@ -303,6 +305,13 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
         "EMOTES_PNG RCDATA \"${dingosdk_emotes_native}\\\\emotes.png\"\n")
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/emotes.rc")
 endif()
+# The music sources' setup page (Extension/Music/spotify_dashboard.h).
+file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/Extension/Music/setup_page.html" dingosdk_music_page_native)
+string(REPLACE "\\" "\\\\" dingosdk_music_page_native "${dingosdk_music_page_native}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/music_setup_page.rc"
+    "MUSIC_SETUP_HTML RCDATA \"${dingosdk_music_page_native}\"\n")
+target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/music_setup_page.rc")
+set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/music_setup_page.rc" APPEND PROPERTY OBJECT_DEPENDS "${PROJECT_SOURCE_DIR}/Extension/Music/setup_page.html")
 # The Spotify station's picture in the music screen (Extension/Music/spotify_cover.h).
 if(EXISTS "${PROJECT_SOURCE_DIR}/assets/spotify.png")
     file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/assets/spotify.png" dingosdk_spotify_art_native)

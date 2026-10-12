@@ -1231,7 +1231,7 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
         if (menu != was) {
             was = menu;
             try {
-                dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::music, "Trace: a menu of the game's is {}.", menu ? "up" : "no longer up");
+                dingosdk::logging::log(dingosdk::logging::Level::debug, dingosdk::logging::Channel::music, "Trace: a menu of the game's is {}.", menu ? "up" : "no longer up");
             } catch (...) {}
         }
         dingosdk::spotify_station::set_music_screen(menu);

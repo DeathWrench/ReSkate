@@ -3,6 +3,7 @@
 #include "external_audio.h"
 #include "youtube_music.h"
 #include "app_audio_capture.h"
+#include "audio_dsp.h"
 #include "local_music_ui.h"
 #include "music_inject.h"
 #include "spotify_cover.h"
@@ -11,13 +12,17 @@
 #include "spotify_web.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
+#include "Extension/Boot/user_data_redirect.h"
 #include <WinSock2.h>
 #include <WS2tcpip.h>
 #include <Windows.h>
 #include <shellapi.h>
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <string>
 #include <thread>
 
@@ -27,113 +32,46 @@ constexpr unsigned short first_port = 8421;
 std::atomic<unsigned short> port{};
 std::atomic<bool> started{};
 
-constexpr char page[] = R"html(<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ReSkate · Spotify</title>
-<style>
-:root{--bg:#101214;--card:#1a1d21;--line:#2a2f36;--text:#e9edf1;--dim:#98a2ad;--green:#1ed760;--warn:#ffb454}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,Segoe UI,sans-serif}
-main{max-width:760px;margin:0 auto;padding:28px 16px 60px}h1{font-size:22px;margin:0 0 4px}p.sub{color:var(--dim);margin:0 0 22px}
-section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px;margin:0 0 16px}
-h2{font-size:15px;margin:0 0 10px;letter-spacing:.02em}
-.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.grow{flex:1;min-width:0}
-.dot{width:10px;height:10px;border-radius:50%;background:#555;flex:none}.dot.on{background:var(--green)}.dot.warn{background:var(--warn)}
-.dim{color:var(--dim)}small{color:var(--dim)}
-button{background:#2a2f36;color:var(--text);border:1px solid #3a414a;border-radius:8px;padding:8px 14px;font:inherit;cursor:pointer}
-button:hover{background:#343a43}button.primary{background:var(--green);border-color:var(--green);color:#04130a;font-weight:600}
-input[type=text]{background:#0e1012;color:var(--text);border:1px solid #3a414a;border-radius:8px;padding:8px 10px;font:inherit;width:100%}
-input[type=range]{width:100%}select{background:#0e1012;color:var(--text);border:1px solid #3a414a;border-radius:8px;padding:8px 10px;font:inherit;width:100%}
-.now{display:flex;gap:14px;align-items:center}.now img{width:72px;height:72px;border-radius:8px;object-fit:cover;background:#0e1012}
-.title{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-ol{margin:8px 0 0;padding-left:20px;color:var(--dim)}ul{margin:8px 0 0;padding:0;list-style:none}li.pl{display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid var(--line)}
-code{background:#0e1012;border:1px solid var(--line);border-radius:6px;padding:1px 6px}
-.note{color:var(--warn)}
-</style></head><body><main>
-<h1>ReSkate · Spotify</h1><p class="sub">Set up Spotify for the in-game music player. This page is only reachable from this computer.</p>
+// Something built into the DLL (cmake/Runtime.cmake): the page itself (setup_page.html), and
+// the mod's own fonts, which the page is set in.
+std::string built_in(const wchar_t* name) {
+    HMODULE module{};
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&built_in), &module)) return {};
+    const auto resource = FindResourceW(module, name, MAKEINTRESOURCEW(10) /* RT_RCDATA */);
+    const auto handle = resource ? LoadResource(module, resource) : nullptr;
+    const auto* data = handle ? static_cast<const char*>(LockResource(handle)) : nullptr;
+    return data ? std::string(data, SizeofResource(module, resource)) : std::string();
+}
 
-<section><h2>Now playing</h2>
-<div class="now"><img id="cover" alt=""><div class="grow"><div class="title" id="title">Nothing yet</div><div class="dim" id="artist"></div><small id="tile"></small></div></div>
-<div class="row" style="margin-top:12px"><button data-cmd="previous">Previous</button><button data-cmd="toggle" id="toggle">Play</button><button data-cmd="next">Next</button></div>
-</section>
-
-<section><h2>Spotify device</h2>
-<div class="row"><span class="dot" id="deviceDot"></span><div class="grow" id="deviceText">…</div></div>
-<ol id="deviceSteps"><li>Open Spotify on your phone or this computer (same network as this PC).</li><li>Open the device list and pick <b>ReSkate</b>.</li><li>That is remembered: next time it connects by itself.</li></ol>
-<small>Needs Spotify Premium. Audio comes straight from Spotify into the game.</small>
-</section>
-
-<section><h2>Your playlists</h2>
-<div class="row"><span class="dot" id="accountDot"></span><div class="grow" id="accountText">…</div><button id="login" class="primary">Sign in</button><button id="logout">Sign out</button><button id="refresh">Refresh</button></div>
-<div id="clientBox" style="margin-top:12px"><small>Listing your playlists uses a Spotify developer app. Create one at developer.spotify.com, add the redirect URI <code>http://127.0.0.1:47824/callback</code>, and paste its client ID here.</small>
-<div class="row" style="margin-top:8px"><div class="grow"><input type="text" id="client" placeholder="Client ID" autocomplete="off" spellcheck="false"></div><button id="saveClient">Save</button></div></div>
-<div class="note" id="problem"></div>
-<ul id="playlists"></ul>
-<small>New playlists appear as tiles in the game's music screen the next time it is opened. A whole new row may need the game restarted.</small>
-</section>
-
-<section><h2>YouTube Music</h2>
-<div id="ytSetup"><small>Plays YouTube videos and playlists through the game. It needs <b>yt-dlp</b>, a free tool that is not part of ReSkate: this downloads it (about 18 MB) from its own releases on GitHub into your ReSkate folder. Using it is against YouTube's terms of service; that choice is yours.</small>
-<div class="row" style="margin-top:10px"><button id="ytTools" class="primary">Set up YouTube Music</button><small id="ytProgress"></small></div></div>
-<div id="ytReady"><small>Paste a link to a YouTube or YouTube Music video or playlist (up to 100 songs each).</small>
-<div class="row" style="margin-top:8px"><div class="grow"><input type="text" id="ytLink" placeholder="https://music.youtube.com/playlist?list=…" autocomplete="off" spellcheck="false"></div><button id="ytAdd">Add</button></div>
-<ul id="ytLists"></ul>
-<div style="margin-top:14px"><b>Private and age-restricted songs</b><br><small>These need your YouTube sign-in as a Netscape <code>cookies.txt</code> exported from your browser. Use an extension like <i>Get cookies.txt LOCALLY</i> on youtube.com to export it, then choose the file here. It is kept on this computer only, in your ReSkate folder; treat it like a password. With a sign-in set, each song takes a few seconds longer to start.</small>
-<div class="row" style="margin-top:8px"><input type="file" id="ytCookies" accept=".txt,text/plain"><button id="ytCookiesRemove">Remove cookies.txt</button><small id="ytCookiesText"></small></div><div class="note" id="ytRuntime"></div></div>
-<div class="row" style="margin-top:10px"><div style="width:190px">YouTube sign-in from</div><div class="grow"><select id="ytBrowser"><option value="">None</option><option value="firefox">Firefox</option><option value="edge">Edge</option><option value="chrome">Chrome</option><option value="brave">Brave</option><option value="opera">Opera</option><option value="vivaldi">Vivaldi</option></select></div></div>
-<small>Or let yt-dlp read the sign-in from a browser directly. Firefox works best; Chrome and Edge often refuse while they are open. A cookies.txt, when you have added one, is used instead.</small><br><small>New playlists appear as tiles in the game's music screen the next time it is opened. A whole new row may need the game restarted.</small></div>
-<div class="note" id="ytProblem"></div><small id="ytNone"></small>
-</section>
-
-<section><h2>External audio</h2>
-<small>Play any app on this computer through the game: pick it here, then choose the <b>External Audio</b> tile in the game's music screen. The app's own sound is turned down while it plays through the game.</small>
-<div class="row" style="margin-top:10px"><div class="grow"><select id="app"></select></div><button id="saveApp">Use this app</button></div>
-<small id="appText"></small>
-</section>
-
-<section><h2>Sound</h2>
-<div class="row"><div style="width:130px">Loudness <b id="gainText"></b></div><div class="grow"><input type="range" id="gain" min="0" max="400" step="5"></div></div>
-<div class="row" style="margin-top:10px"><label><input type="checkbox" id="speakers"> Speakers in the world play Spotify too</label></div>
-</section>
-</main>
-<script>
-const $=id=>document.getElementById(id);let busy=false,gainHeld=0,cookieNote=0;
-async function post(path,body){await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-ReSkate':'1'},body:JSON.stringify(body||{})});load()}
-document.querySelectorAll('[data-cmd]').forEach(b=>b.onclick=()=>post('/api/command',{command:b.dataset.cmd}));
-$('login').onclick=()=>post('/api/login');$('logout').onclick=()=>post('/api/logout');$('refresh').onclick=()=>post('/api/refresh');
-$('saveClient').onclick=()=>post('/api/client',{id:$('client').value.trim()});
-$('gain').oninput=()=>{gainHeld=Date.now();$('gainText').textContent=$('gain').value+'%'};$('gain').onchange=()=>post('/api/settings',{gain:+$('gain').value});
-$('ytTools').onclick=()=>post('/api/youtube/tools');
-$('ytAdd').onclick=()=>{const link=$('ytLink').value.trim();if(link){$('ytLink').value='';post('/api/youtube/add',{link})}};
-$('ytCookies').onchange=async()=>{const f=$('ytCookies').files[0];if(!f)return;const text=await f.text();$('ytCookies').value='';
-const r=await fetch('/api/youtube/cookies',{method:'POST',headers:{'Content-Type':'application/json','X-ReSkate':'1'},body:JSON.stringify({text})});
-$('ytCookiesText').textContent=r.ok?'Saved.':'That is not a Netscape cookies.txt with YouTube cookies in it.';cookieNote=Date.now();load()};
-$('ytCookiesRemove').onclick=()=>post('/api/youtube/cookies',{text:''});
-$('ytBrowser').onchange=()=>post('/api/youtube/browser',{browser:$('ytBrowser').value});
-$('saveApp').onclick=()=>post('/api/external',{app:$('app').value});
-$('speakers').onchange=()=>post('/api/settings',{speakers:$('speakers').checked});
-async function load(){if(busy)return;busy=true;try{const s=await (await fetch('/api/state')).json();
-$('title').textContent=s.now.title||'Nothing yet';$('artist').textContent=s.now.artist||'';$('toggle').textContent=s.now.playing?'Pause':'Play';
-$('tile').textContent=s.station?'A Spotify tile is on in the game':'No Spotify tile is on in the game: pick one in the music screen to hear it';
-if(s.now.cover){if($('cover').dataset.src!==s.now.cover){$('cover').dataset.src=s.now.cover;$('cover').src=s.now.cover}}else{$('cover').removeAttribute('src');$('cover').dataset.src=''}
-$('deviceDot').className='dot'+(s.device.connected?' on':' warn');$('deviceText').textContent=s.device.text;$('deviceSteps').style.display=s.device.connected?'none':'';
-const a=s.account;$('accountDot').className='dot'+(a.signed_in?' on':'');
-$('accountText').textContent=a.signed_in?('Signed in'+(a.user?' as '+a.user:'')+(a.busy?' · working…':'')):(a.has_client?'Not signed in':'No client ID yet');
-$('login').style.display=a.signed_in||!a.has_client?'none':'';$('logout').style.display=a.signed_in?'':'none';$('refresh').style.display=a.signed_in?'':'none';
-$('clientBox').style.display=a.signed_in?'none':'';if(document.activeElement!==$('client')&&!$('client').value)$('client').value=a.client||'';
-$('problem').textContent=a.problem||'';
-$('playlists').innerHTML='';for(const p of a.playlists){const li=document.createElement('li');li.className='pl';const n=document.createElement('span');n.textContent=p.name;const c=document.createElement('small');c.textContent=p.tracks+' tracks';li.append(n,c);$('playlists').append(li)}
-const y=s.youtube;$('ytNone').textContent=y.available?'':'This ReSkate.dll was built without the part that plays it.';
-$('ytSetup').style.display=y.available&&!y.tools?'':'none';$('ytReady').style.display=y.available&&y.tools?'':'none';
-$('ytProgress').textContent=y.busy&&!y.tools?('Downloading… '+(y.percent?y.percent+'%':'')):'';$('ytTools').disabled=y.busy;$('ytAdd').disabled=y.busy;$('ytAdd').textContent=y.busy?'Working…':'Add';
-$('ytProblem').textContent=y.problem||'';$('ytCookiesRemove').style.display=y.cookies?'':'none';$('ytRuntime').textContent=(y.cookies||y.browser)&&!y.runtime?'Getting what the sign-in needs (a small JavaScript runtime)… songs will not play until it is here. If this stays, check your connection or install Node.js (nodejs.org).':'';if(Date.now()-cookieNote>4000)$('ytCookiesText').textContent=y.cookies?'A cookies.txt is in use.':'';if(document.activeElement!==$('ytBrowser'))$('ytBrowser').value=y.browser||'';$('ytLists').innerHTML='';
-y.playlists.forEach((p,i)=>{const li=document.createElement('li');li.className='pl';const n=document.createElement('span');n.textContent=p.name+' · '+p.songs+' songs';const b=document.createElement('button');b.textContent='Remove';b.onclick=()=>post('/api/youtube/remove',{index:i});li.append(n,b);$('ytLists').append(li)});
-if(document.activeElement!==$('app')){const e=s.external,names=e.apps.includes(e.app)||!e.app?e.apps:[e.app,...e.apps];$('app').innerHTML='';
-for(const n of names){const o=document.createElement('option');o.value=n;o.textContent=n+(e.apps.includes(n)?'':' (not playing sound now)');$('app').append(o)}if(e.app)$('app').value=e.app}
-$('appText').textContent=s.external.app?('Using '+s.external.app+(s.external.on?' · on now · '+s.external.capture:'')):'No app picked yet. Only apps that are making sound right now are listed: start it playing first.';
-if(Date.now()-gainHeld>1500){$('gain').value=s.settings.gain;$('gainText').textContent=s.settings.gain+'%'}$('speakers').checked=s.settings.speakers;
-}catch(e){$('deviceText').textContent='The game is not answering (is it still running?)'}busy=false}
-load();setInterval(load,2000);
-</script></body></html>)html";
+// The sound's settings, as the player left them: <Local AppData>\\ReSkate\\music-settings.json.
+std::filesystem::path settings_file() { return redirected_local_app_data().parent_path() / L"music-settings.json"; }
+void keep_settings() {
+    try {
+        Json json = Json::object();
+        json["gain"] = static_cast<std::uint64_t>(music_inject::gain() * 100.0f + 0.5f);
+        json["speakers"] = music_inject::mode() != 3;
+        json["levelling"] = audio_dsp::levelling();
+        json["notices"] = youtube_music::notices();
+        Json bands = Json::array();
+        for (int i = 0; i < audio_dsp::bands; ++i) bands.push_back(static_cast<std::int64_t>(std::lround(audio_dsp::band(i))));
+        json["equaliser"] = std::move(bands);
+        std::ofstream(settings_file(), std::ios::binary | std::ios::trunc) << json.dump(2);
+    } catch (...) {}
+}
+void read_settings() {
+    try {
+        std::ifstream in(settings_file(), std::ios::binary);
+        if (!in) return;
+        const auto json = Json::parse(std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()));
+        if (json.contains("gain") && json.at("gain").is_number()) music_inject::set_gain(static_cast<float>(std::clamp<std::int64_t>(json.at("gain").get<std::int64_t>(), 0, 400)) / 100.0f);
+        if (json.contains("speakers") && json.at("speakers").is_boolean()) music_inject::set_mode(json.at("speakers").get<bool>() ? 1 : 3);
+        if (json.contains("levelling") && json.at("levelling").is_boolean()) audio_dsp::set_levelling(json.at("levelling").get<bool>());
+        if (json.contains("notices") && json.at("notices").is_boolean()) youtube_music::set_notices(json.at("notices").get<bool>());
+        if (json.contains("equaliser") && json.at("equaliser").is_array())
+            for (std::size_t i = 0; i < json.at("equaliser").size() && i < audio_dsp::bands; ++i)
+                if (json.at("equaliser").at(i).is_number()) audio_dsp::set_band(static_cast<int>(i), static_cast<float>(std::clamp<std::int64_t>(json.at("equaliser").at(i).get<std::int64_t>(), -12, 12)));
+    } catch (...) {}
+}
 
 std::string state_json() {
     Json out = Json::object();
@@ -143,10 +81,12 @@ std::string state_json() {
     now["title"] = track.available ? track.title : std::string();
     now["playing"] = track.available && track.playing;
     now["cover"] = track.available ? spotify_cover::url() : std::string();
+    now["loading"] = youtube_music::on() && youtube_music::state().loading;
     out["now"] = std::move(now);
     out["station"] = spotify_station::active();
     Json device = Json::object();
     device["connected"] = spotify_device::connected();
+    device["in_use"] = spotify_device::in_use();
     device["text"] = spotify_device::status();
     out["device"] = std::move(device);
     const auto account_state = spotify_web::state();
@@ -177,15 +117,94 @@ std::string state_json() {
         youtube["browser"] = tube.browser;
         youtube["cookies"] = tube.cookies;
         youtube["runtime"] = tube.runtime;
-        Json lists = Json::array();
-        for (const auto& playlist : tube.playlists) {
+        // The playlists of each kind (youtube_music.h), each with its place among them all,
+        // which is what it is taken out by.
+        using youtube_music::Kind;
+        Json lists = Json::array(), folders = Json::array(), stations = Json::array();
+        for (std::size_t i = 0; i < tube.playlists.size(); ++i) {
+            const auto& playlist = tube.playlists[i];
             Json entry = Json::object();
+            entry["index"] = static_cast<std::uint64_t>(i);
             entry["name"] = playlist.name;
             entry["songs"] = static_cast<std::uint64_t>(playlist.songs.size());
-            lists.push_back(std::move(entry));
+            if (playlist.kind == Kind::files) entry["path"] = playlist.url;
+            if (playlist.kind == Kind::radio && !playlist.songs.empty()) entry["address"] = playlist.songs.front().source;
+            (playlist.kind == Kind::files ? folders : playlist.kind == Kind::radio ? stations : lists).push_back(std::move(entry));
         }
         youtube["playlists"] = std::move(lists);
+        const auto problem_of = [&](Kind kind) { return tube.problem_kind == kind ? tube.problem : std::string(); };
+        youtube["problem"] = problem_of(Kind::youtube);
         out["youtube"] = std::move(youtube);
+        Json local = Json::object();
+        local["available"] = tube.available;
+        local["busy"] = tube.busy;
+        local["problem"] = problem_of(Kind::files);
+        local["folders"] = std::move(folders);
+        out["local"] = std::move(local);
+        Json radio = Json::object();
+        radio["available"] = tube.available;
+        radio["busy"] = tube.busy;
+        radio["problem"] = problem_of(Kind::radio);
+        radio["stations"] = std::move(stations);
+        radio["searched"] = tube.searched;
+        Json found = Json::array();
+        for (const auto& station : tube.found) {
+            Json entry = Json::object();
+            entry["name"] = station.name;
+            entry["address"] = station.address;
+            entry["icon"] = station.icon;
+            entry["about"] = station.about;
+            found.push_back(std::move(entry));
+        }
+        radio["found"] = std::move(found);
+        out["radio"] = std::move(radio);
+        // What is lined up: the songs of the playlist that is playing, when it is one of these.
+        if (tube.playing && tube.playing_list < tube.playlists.size()) {
+            const auto& playlist = tube.playlists[tube.playing_list];
+            Json queue = Json::object();
+            queue["playlist"] = static_cast<std::uint64_t>(tube.playing_list);
+            queue["name"] = playlist.name;
+            queue["kind"] = playlist.kind == Kind::files ? "local" : playlist.kind == Kind::radio ? "radio" : "youtube";
+            queue["at"] = static_cast<std::uint64_t>(tube.playing_song);
+            Json songs = Json::array();
+            for (const auto& song : playlist.songs) {
+                Json entry = Json::object();
+                entry["artist"] = song.artist;
+                entry["title"] = song.title;
+                // Its picture: its video's and its station's from where they are; its file's from here.
+                entry["cover"] = playlist.kind == Kind::youtube ? "https://i.ytimg.com/vi/" + song.id + "/mqdefault.jpg"
+                    : playlist.kind == Kind::radio ? (playlist.url.starts_with("https://") ? playlist.url : std::string())
+                    : std::format("/api/art/{}/{}?{}", tube.playing_list, songs.size(), song.id);
+                songs.push_back(std::move(entry));
+            }
+            queue["songs"] = std::move(songs);
+            out["queue"] = std::move(queue);
+        }
+    }
+    // (And Spotify's own queue, when Spotify is what is playing and the player has signed in:
+    // the song playing, then those Spotify says come after it.)
+    if (!out.contains("queue") && spotify_station::active() && !youtube_music::on() && !external_audio::on() && account_state.signed_in) {
+        spotify_web::want_queue();
+        // (Looked at again at once when the song has changed.)
+        static std::atomic<std::uint64_t> seen{};
+        if (seen.exchange(track.revision) != track.revision) spotify_web::want_queue(true);
+        if (const auto lined_up = spotify_web::queue(); !lined_up.empty()) {
+            Json queue = Json::object();
+            queue["playlist"] = static_cast<std::uint64_t>(0);
+            queue["name"] = "Spotify";
+            queue["kind"] = "spotify";
+            queue["at"] = static_cast<std::uint64_t>(0);
+            Json songs = Json::array();
+            for (const auto& song : lined_up) {
+                Json entry = Json::object();
+                entry["artist"] = song.artist;
+                entry["title"] = song.title;
+                entry["cover"] = song.cover;
+                songs.push_back(std::move(entry));
+            }
+            queue["songs"] = std::move(songs);
+            out["queue"] = std::move(queue);
+        }
     }
     Json external = Json::object();
     external["app"] = external_audio::app();
@@ -204,6 +223,10 @@ std::string state_json() {
     Json settings = Json::object();
     settings["gain"] = static_cast<std::uint64_t>(music_inject::gain() * 100.0f + 0.5f);
     settings["speakers"] = music_inject::mode() != 3;
+    settings["levelling"] = audio_dsp::levelling();
+    Json bands = Json::array();
+    for (int i = 0; i < audio_dsp::bands; ++i) bands.push_back(static_cast<std::int64_t>(std::lround(audio_dsp::band(i))));
+    settings["equaliser"] = std::move(bands);
     out["settings"] = std::move(settings);
     return out.dump();
 }
@@ -244,7 +267,33 @@ bool change(const std::string& path, const std::string& body) {
         if (!youtube_music::set_cookies(json.value("text", ""))) return false;
     } else if (path == "/api/youtube/browser") {
         youtube_music::set_browser(json.value("browser", ""));
-    } else if (path == "/api/youtube/remove") {
+    } else if (path == "/api/local/add") {
+        youtube_music::add_folder(json.value("path", ""));
+    } else if (path == "/api/radio/search") {
+        youtube_music::search_radio(json.value("query", ""));
+    } else if (path == "/api/radio/add") {
+        youtube_music::add_station(json.value("name", ""), json.value("address", ""), json.value("icon", ""));
+    } else if (path == "/api/queue/play") {
+        if (!json.contains("playlist") || !json.at("playlist").is_number() || !json.contains("song") || !json.at("song").is_number()) return false;
+        // Spotify has no way to go straight to a song of its queue: it is gone on to, song by song.
+        if (json.contains("spotify") && json.at("spotify").is_boolean() && json.at("spotify").get<bool>()) {
+            const auto count = static_cast<int>(std::clamp<std::int64_t>(json.at("song").get<std::int64_t>(), 0, 25));
+            // (One at a time: a press while it is still going on is not taken.)
+            static std::atomic<bool> going{};
+            if (going.exchange(true)) return true;
+            std::thread([count] {
+                for (int i = 0; i < count; ++i) {
+                    external_player::send(external_player::Command::next);
+                    Sleep(450);
+                }
+                spotify_web::want_queue(true);
+                going.store(false);
+            }).detach();
+            return true;
+        }
+        youtube_music::play_at(static_cast<std::size_t>(std::clamp<std::int64_t>(json.at("playlist").get<std::int64_t>(), 0, 1000)),
+            static_cast<std::size_t>(std::clamp<std::int64_t>(json.at("song").get<std::int64_t>(), 0, 100000)));
+    } else if (path == "/api/youtube/remove" || path == "/api/library/remove") {
         if (!json.contains("index") || !json.at("index").is_number()) return false;
         youtube_music::remove(static_cast<std::size_t>(std::clamp<std::int64_t>(json.at("index").get<std::int64_t>(), 0, 1000)));
     } else if (path == "/api/external") {
@@ -254,15 +303,20 @@ bool change(const std::string& path, const std::string& body) {
     } else if (path == "/api/settings") {
         if (json.contains("gain") && json.at("gain").is_number()) music_inject::set_gain(static_cast<float>(std::clamp<std::int64_t>(json.at("gain").get<std::int64_t>(), 0, 400)) / 100.0f);
         if (json.contains("speakers") && json.at("speakers").is_boolean()) music_inject::set_mode(json.at("speakers").get<bool>() ? 1 : 3);
+        if (json.contains("levelling") && json.at("levelling").is_boolean()) audio_dsp::set_levelling(json.at("levelling").get<bool>());
+        if (json.contains("equaliser") && json.at("equaliser").is_array())
+            for (std::size_t i = 0; i < json.at("equaliser").size() && i < audio_dsp::bands; ++i)
+                if (json.at("equaliser").at(i).is_number()) audio_dsp::set_band(static_cast<int>(i), static_cast<float>(std::clamp<std::int64_t>(json.at("equaliser").at(i).get<std::int64_t>(), -12, 12)));
+        keep_settings();
     } else {
         return false;
     }
     return true;
 }
 
-void answer(SOCKET client, const char* status, const char* type, const std::string& body) {
-    const auto head = std::format("HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n", status, type,
-        body.size());
+void answer(SOCKET client, const char* status, const char* type, const std::string& body, const char* cache = "no-store") {
+    const auto head = std::format("HTTP/1.1 {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nCache-Control: {}\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n", status, type,
+        body.size(), cache);
     send(client, head.data(), static_cast<int>(head.size()), 0);
     for (std::size_t sent = 0; sent < body.size();) {
         const int did = send(client, body.data() + sent, static_cast<int>(std::min<std::size_t>(body.size() - sent, 65536)), 0);
@@ -312,7 +366,23 @@ void serve(SOCKET client) {
     const auto host = header(request, "Host");
     const auto own = std::to_string(port.load());
     if (host != "127.0.0.1:" + own && host != "localhost:" + own) return answer(client, "403 Forbidden", "text/plain", "not for this address");
-    if (method == "GET" && (path == "/" || path == "/index.html")) return answer(client, "200 OK", "text/html; charset=utf-8", page);
+    if (method == "GET" && (path == "/" || path == "/index.html")) {
+        const auto page = built_in(L"MUSIC_SETUP_HTML");
+        return page.empty() ? answer(client, "500 Internal Server Error", "text/plain", "the page was not built into this ReSkate.dll") : answer(client, "200 OK", "text/html; charset=utf-8", page);
+    }
+    if (method == "GET" && path.starts_with("/font/")) {
+        const auto font = built_in(path == "/font/heading.ttf" ? L"FONT_HEADING" : path == "/font/body.ttf" ? L"FONT_BODY" : path == "/font/brush.ttf" ? L"FONT_BRUSH" : L"");
+        return font.empty() ? answer(client, "404 Not Found", "text/plain", "no such font") : answer(client, "200 OK", "font/ttf", font, "public, max-age=86400");
+    }
+    if (method == "GET" && path.starts_with("/api/art/")) {
+        // The picture in a file of the player's, for the queue: /api/art/<playlist>/<song>.
+        std::size_t playlist{}, song{};
+        if (sscanf_s(path.c_str(), "/api/art/%zu/%zu", &playlist, &song) != 2) return answer(client, "404 Not Found", "text/plain", "no such picture");
+        const auto image = youtube_music::art(playlist, song);
+        const bool png = image.size() > 8 && image[0] == 0x89 && image[1] == 'P', jpeg = image.size() > 8 && image[0] == 0xff && image[1] == 0xd8;
+        if (!png && !jpeg) return answer(client, "404 Not Found", "text/plain", "no picture", "private, max-age=3600");
+        return answer(client, "200 OK", png ? "image/png" : "image/jpeg", std::string(image.begin(), image.end()), "private, max-age=3600");
+    }
     if (method == "GET" && path == "/api/state") return answer(client, "200 OK", "application/json", state_json());
     if (method == "POST") {
         // A change comes from this page alone: its script sends a header that a page of another
@@ -342,12 +412,12 @@ void run() noexcept {
     }
     if (listener == INVALID_SOCKET) {
         try {
-            logging::log(logging::Level::warning, logging::Channel::music, "Spotify setup page: no port on this computer was free for it.");
+            logging::log(logging::Level::warning, logging::Channel::music, "Music setup page: no port on this computer was free for it.");
         } catch (...) {}
         return;
     }
     try {
-        logging::log(logging::Level::info, logging::Channel::music, "Spotify setup page: {} (\"spotify setup\" in the console opens it).", address());
+        logging::log(logging::Level::info, logging::Channel::music, "Music setup page: {} (\"music setup\" in the console opens it).", address());
     } catch (...) {}
     for (;;) {
         const SOCKET client = accept(listener, nullptr, nullptr);
@@ -366,10 +436,12 @@ void run() noexcept {
 
 void start() noexcept {
     if (started.exchange(true)) return;
+    read_settings();
     try {
         std::thread(run).detach();
     } catch (...) {}
 }
+void save_settings() noexcept { keep_settings(); }
 std::string address() {
     const auto at = port.load();
     return at ? "http://127.0.0.1:" + std::to_string(at) + "/" : std::string();
