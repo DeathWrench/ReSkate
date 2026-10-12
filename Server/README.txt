@@ -158,6 +158,22 @@ rotation_extend_minutes
                    and "rotation extend [minutes]" adds time at once.
 rotation_announce  Tell players on a card when the map has 10, 5 and 1
                    minutes left (default true).
+latest_versions    Keep this server's custom maps at Thunderstore's newest
+                   version (default false). A map mod in Mods whose folder is a
+                   Thunderstore package (Owner-Name) is looked up when the
+                   server starts and every latest_check_minutes; when a newer
+                   version is out, that version is written into the folder's
+                   manifest.json and the maps are read again. Nothing is
+                   downloaded: the server only needs to know the version, and
+                   players, who are sent to the server's version of a map,
+                   fetch it as they join. A player who already has a later
+                   version than the server keeps it. The map being played is
+                   left until nobody is on it. A folder that is not a
+                   Thunderstore package is never touched.
+                   The level list is not changed: when a new version adds,
+                   removes or renames levels, copy its reskate-levels.json in.
+latest_check_minutes
+                   How often Thunderstore is asked, 5-1440 (default 60).
 parks              Layout for each park lot, e.g. "skatepark_01", or "empty".
 world_layer_sync   Force the "layers" below on every player.
 layers             World layer key -> "on" / "off".
@@ -540,6 +556,11 @@ or Travel, and voice, distances, placement and kicks from the Multiplayer menu.
   maps                          The maps this server knows.
   maps reload                   Read the Mods folder again: a map mod copied in
                                 while the server runs can be switched to at once.
+  maps update                   Ask Thunderstore now for the newest version of
+                                each of this server's maps and take it (see
+                                maps.latest_versions); the log says what it did.
+  maps latest on|off            Turn maps.latest_versions on or off.
+  maps latest every <minutes>   How often Thunderstore is asked.
   map-pool [add|remove <map>|clear]   The maps players vote between and the
                                 rotation uses (see maps.pool).
   rotation [<minutes>|off]      Change the map on a timer (see maps.rotation_minutes).

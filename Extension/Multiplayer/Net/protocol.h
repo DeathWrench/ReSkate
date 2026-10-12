@@ -220,12 +220,33 @@ inline std::string_view map_package_version(std::string_view package) noexcept {
     const auto second = first == std::string_view::npos ? first : package.find('-', first + 1);
     return second == std::string_view::npos ? std::string_view{} : package.substr(second + 1);
 }
-// The version of a map installed here, when the host's package is the same map at another
-// one: players skate the host's version, so that is fetched first. Nothing when the versions
-// agree, either names none, or they are different packages.
+// Whether version `a` is a later one than `b`: their numbers compared in turn ("1.10.0" is
+// later than "1.9.2"), a missing one counting as 0. False when either is not numbers and dots.
+inline bool map_version_newer(std::string_view a, std::string_view b) noexcept {
+    const auto next = [](std::string_view &text, std::uint64_t &value) {
+        value = 0;
+        std::size_t i = 0;
+        for (; i < text.size() && text[i] >= '0' && text[i] <= '9' && i < 9; ++i) value = value * 10 + static_cast<std::uint64_t>(text[i] - '0');
+        if (!i || (i < text.size() && text[i] != '.')) return false;
+        text.remove_prefix(i < text.size() ? i + 1 : i);
+        return true;
+    };
+    if (a.empty() || b.empty()) return false;
+    bool newer{}, decided{};
+    while (!a.empty() || !b.empty()) {
+        std::uint64_t left{}, right{};
+        if ((!a.empty() && !next(a, left)) || (!b.empty() && !next(b, right))) return false;
+        if (!decided && left != right) newer = left > right, decided = true;
+    }
+    return newer;
+}
+// The version of a map installed here, when the host's package is the same map at a later
+// one: that is fetched first, so players skate at least the host's version. Nothing when the
+// versions agree, the one here is the later (a player ahead of the host is left as they are),
+// either names none, or they are different packages.
 inline std::string_view other_map_version(std::string_view host, std::string_view mine) noexcept {
     const auto wanted = map_package_version(host), have = map_package_version(mine);
-    if (wanted.empty() || have.empty() || wanted == have) return {};
+    if (wanted.empty() || have.empty() || wanted == have || map_version_newer(have, wanted)) return {};
     const auto host_name = host.substr(0, host.size() - wanted.size()), my_name = mine.substr(0, mine.size() - have.size());
     if (host_name.size() != my_name.size()) return {};
     for (std::size_t i = 0; i < host_name.size(); ++i)

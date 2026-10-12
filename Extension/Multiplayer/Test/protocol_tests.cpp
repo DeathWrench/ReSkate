@@ -1172,6 +1172,13 @@ void dedicated_server_codec() {
               other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Sandos-Vancouver_Plaza").empty() &&
               other_map_version("Sandos-Vancouver_Plaza-2.0.0", "Other-Vancouver_Plaza-1.9.0").empty() &&
               other_map_version("Sandos-Vancouver_Plaza-2.0.0", "").empty() && other_map_version("", "").empty() &&
+              // (A player ahead of the host keeps their version.)
+              other_map_version("Sandos-Vancouver_Plaza-1.9.0", "Sandos-Vancouver_Plaza-2.0.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-1.9.2", "Sandos-Vancouver_Plaza-1.10.0").empty() &&
+              other_map_version("Sandos-Vancouver_Plaza-1.10.0", "Sandos-Vancouver_Plaza-1.9.2") == "1.9.2" &&
+              map_version_newer("1.10.0", "1.9.2") && map_version_newer("2.0", "1.9.9") && map_version_newer("1.0.1", "1.0") &&
+              !map_version_newer("1.0.0", "1.0.0") && !map_version_newer("1.0", "1.0.0") && !map_version_newer("1.9.2", "1.10.0") &&
+              !map_version_newer("", "1.0.0") && !map_version_newer("1.0.0-beta", "0.9.0") && !map_version_newer("abc", "1.0.0") &&
               map_package_version("Sandos-Vancouver_Plaza-2.0.0") == "2.0.0" && map_package_version("Sandos-Vancouver_Plaza").empty(),
           "A map's version is not compared with the host's as it should be");
     check(map_package_name("Sandos-Vancouver_Plaza", "2.0.0") == "Sandos-Vancouver_Plaza-2.0.0" &&

@@ -741,6 +741,30 @@ std::string Host::rotation_text() const {
 void Host::resend_maps() {
     for (auto &[id, guest] : guests_) guest->maps_sent = false;
 }
+std::string Host::reload_maps() {
+    std::vector<std::string> before;
+    for (const auto &level : levels()) before.push_back(level.asset);
+    const auto problems = load_levels(config_.mods);
+    resend_maps(); // whoever picks maps is sent the list again
+    std::string added;
+    std::size_t gone{};
+    for (const auto &level : levels())
+        if (std::find(before.begin(), before.end(), level.asset) == before.end()) added += (added.empty() ? "" : ", ") + level.name;
+    for (const auto &asset : before)
+        if (!find_level(asset)) ++gone;
+    std::string text = "Maps read again from Mods: " + std::to_string(levels().size()) + " maps" +
+                       (added.empty() ? ", none new" : ", new: " + added) + (gone ? ", " + std::to_string(gone) + " no longer there" : "") + ".";
+    for (const auto &problem : problems) text += "\nMods: skipped " + problem;
+    return text;
+}
+std::string Host::map_folder_in_play() const {
+    if (!players()) return {};
+    // The package is the folder and the version (protocol.h: map_package_name).
+    const auto package = map_package(config_.map);
+    const auto version = multiplayer::map_package_version(package);
+    if (package.empty()) return {};
+    return version.empty() ? package : package.substr(0, package.size() - version.size() - 1);
+}
 // The rotation's vote: three maps of the pool other than this one, picked at random, then any
 // map of the pool, then staying. Asked as a poll, so every game can answer it (/1, /2...); games
 // that know next_map_vote show the maps to pick from.

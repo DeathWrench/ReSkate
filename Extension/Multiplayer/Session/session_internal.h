@@ -446,7 +446,7 @@ bool identity_link(Session &s, std::uint64_t other);
 void add_chat(Session &s, std::uint64_t sender, std::string name, std::string text, bool local = false, bool marks = true);
 // The colour and badge of one of the backend's categories.
 std::pair<std::uint32_t, std::string> mark_role(IdentityList list);
-// A player's role colour and badge ("Dev", "Staff", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend" or none), shown in chat
+// A player's role colour and badge ("Dev", "ReSkate Admin", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend" or none), shown in chat
 // and on their nametag. `local`: the local player.
 std::pair<std::uint32_t, std::string> player_role(Session &s, std::uint64_t id, bool local, bool marks = true);
 // Sends one line from this player; returns why not when it cannot.
@@ -462,6 +462,7 @@ std::string answer_server_poll(Session &s, std::size_t answer);
 inline std::atomic<bool> server_vote_open_flag{};
 inline std::atomic<MapPackageLookup> map_package_lookup{};
 inline std::atomic<bool> fetching_map_flag{};
+inline std::atomic<bool> map_load_held{};
 // A guest without the map is downloading it: the clock they are loading against starts over
 // each time they say so, for as long as map_fetch_limit_us from the first time.
 inline void guest_fetching(Peer &peer, std::uint64_t now) {

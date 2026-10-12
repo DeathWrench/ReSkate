@@ -183,21 +183,33 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
     if (name == "maps" && lower(argument) == "reload") {
         // A map mod copied into Mods while the server runs: its maps can be switched to at once.
         if (!console && !can(admin, "map")) return "Your role cannot reload the maps.";
-        std::vector<std::string> before;
-        for (const auto &level : levels()) before.push_back(level.asset);
-        const auto problems = load_levels(config_.mods);
-        resend_maps(); // whoever picks maps is sent the list again
-        std::string added;
-        std::size_t gone{};
-        for (const auto &level : levels())
-            if (std::find(before.begin(), before.end(), level.asset) == before.end()) added += (added.empty() ? "" : ", ") + level.name;
-        for (const auto &asset : before)
-            if (!find_level(asset)) ++gone;
-        std::string text = "Maps read again from Mods: " + std::to_string(levels().size()) + " maps" +
-                           (added.empty() ? ", none new" : ", new: " + added) + (gone ? ", " + std::to_string(gone) + " no longer there" : "") + ".";
-        for (const auto &problem : problems) text += "\nMods: skipped " + problem;
+        const auto text = reload_maps();
         if (!console) log_(text);
         return text;
+    }
+    if (name == "maps" && lower(split(argument).first) == "update") {
+        // Now, whatever "maps latest" is: Thunderstore is asked about each map mod (server_map_update.h).
+        if (!console && !can(admin, "map")) return "Your role cannot update the maps.";
+        map_update_requested_ = true;
+        return std::string("Asking Thunderstore for the newest version of each of this server's maps; what it finds is in the log.");
+    }
+    if (name == "maps" && lower(split(argument).first) == "latest") { // maps latest [on|off | every <minutes>]
+        if (!console && !can(admin, "map")) return "Your role cannot change how the maps are updated.";
+        const auto [word, wanted] = split(split(argument).second);
+        const auto now_text = std::string("maps latest on|off | maps latest every <5-1440 minutes> (now ") + (config_.latest_versions ? "on" : "off") +
+                              ", every " + std::to_string(config_.latest_check_minutes) + " min)";
+        if (lower(word) == "every") {
+            const auto minutes = number(wanted);
+            if (!minutes || *minutes < 5 || *minutes > 1440) return now_text;
+            config_.latest_check_minutes = static_cast<unsigned>(*minutes);
+            return changed("Thunderstore is asked about this server's maps every " + std::to_string(*minutes) + " minutes.");
+        }
+        const auto on = on_off(word);
+        if (!on) return now_text;
+        config_.latest_versions = *on;
+        if (*on) map_update_requested_ = true;
+        return changed(*on ? "This server keeps its maps at Thunderstore's newest version, and players are held to it."
+                           : "This server's maps stay at the versions in its Mods folder.");
     }
     if (name == "maps") {
         std::string text = std::to_string(levels().size()) + " maps (custom maps come from Mods next to the server)";

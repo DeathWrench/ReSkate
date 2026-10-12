@@ -70,7 +70,7 @@ inline std::pair<std::uint32_t, std::string> player_role(std::uint64_t id, bool 
         case multiplayer::IdentityList::developer: return {nametag_developer, "Dev"};
         case multiplayer::IdentityList::content_creator: return {nametag_creator, "Content Creator"};
         case multiplayer::IdentityList::centrix: return {nametag_centrix, "Centrix"};
-        case multiplayer::IdentityList::staff: return {nametag_staff, "Staff"};
+        case multiplayer::IdentityList::staff: return {nametag_staff, "ReSkate Admin"};
         default: return {nametag_homie, "Homie"};
         }
     }

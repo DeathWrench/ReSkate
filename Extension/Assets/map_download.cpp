@@ -346,6 +346,9 @@ View view() {
 
 void tick() {
     const auto now = stage.load();
+    // The session leaves the map alone until it has been applied (an update's level is one the
+    // game already has, and would load from files that are being replaced).
+    multiplayer::hold_map_load(now == Stage::downloading || now == Stage::installing || now == Stage::applying);
     if (now == Stage::applying) {
         if (apply_wanted.load()) {
             // (A merge of the player's own may be running: wait for it and start this one.)

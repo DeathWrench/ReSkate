@@ -607,16 +607,23 @@ void draw_vote(const MultiplayerVote& vote, ImFont* heading, ImFont* body, ImVec
     draw->AddText(heading, size, ImVec2(left, y), theme::paper, question.c_str(), nullptr, inner);
     y += question_extent.y + gap;
     // The votes cast, yes in green from the left and no in red from the right: a vote is
-    // decided by those who vote. The mark is where yes has to reach to pass; nothing is cast
-    // yet, the bar is empty.
+    // decided by those who vote. The mark is in the middle whatever share the vote needs, and
+    // green reaches it when the vote would pass: up to the yes votes needed it grows over the
+    // left half, and past them over the right half. Nothing cast yet, the bar is empty.
     const unsigned cast = static_cast<unsigned>(vote.yes) + vote.no;
     draw->AddRectFilled(ImVec2(left, y), ImVec2(right, y + bar), skate_theme::tile_light);
     if (cast) {
-        const float split = std::floor(left + inner * static_cast<float>(vote.yes) / static_cast<float>(cast));
+        float share = static_cast<float>(vote.yes) / static_cast<float>(cast);
+        if (const unsigned needed = vote.needed) {
+            const unsigned yes = vote.yes;
+            share = yes <= needed ? 0.5f * static_cast<float>(yes) / static_cast<float>(needed)
+                                  : 0.5f + 0.5f * static_cast<float>(yes - needed) / static_cast<float>(cast - needed);
+        }
+        const float split = std::floor(left + inner * std::clamp(share, 0.0f, 1.0f));
         if (vote.yes) draw->AddRectFilled(ImVec2(left, y), ImVec2(split, y + bar), green);
         if (vote.no) draw->AddRectFilled(ImVec2(split, y), ImVec2(right, y + bar), red);
-        if (running && vote.needed && vote.needed <= cast) {
-            const float mark = std::floor(left + inner * static_cast<float>(vote.needed) / static_cast<float>(cast));
+        if (running && vote.needed) {
+            const float mark = std::floor(left + inner * 0.5f);
             draw->AddRectFilled(ImVec2(mark - scale, y - 3.0f * scale), ImVec2(mark + scale, y + bar + 3.0f * scale), theme::paper);
         }
     }

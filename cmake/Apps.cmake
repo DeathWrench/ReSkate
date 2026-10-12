@@ -180,6 +180,7 @@ if(WIN32)
         Server/server_engine.cpp Server/server_host.cpp Server/server_party.cpp
         Extension/Multiplayer/Session/party_book.cpp Server/server_config.cpp Server/steam_server.cpp
         Server/server_update.cpp Server/server_release.cpp Launcher/updater.cpp
+        Server/server_map_update.cpp Engine/Vfs/thunderstore_package.cpp
         Server/global_bans.cpp Server/server_words.cpp Extension/Multiplayer/developer_identity.cpp Extension/Multiplayer/word_lists.cpp
         Extension/Multiplayer/Steam/steam_transport.cpp Extension/Multiplayer/Net/protocol.cpp
         Extension/Multiplayer/Net/delta_codec.cpp Extension/Multiplayer/Net/wire_codec.cpp
@@ -196,7 +197,7 @@ else()
     find_package(OpenSSL REQUIRED)
     add_executable(dingosdk_server Server/main.cpp Server/server_engine.cpp Server/server_host.cpp Server/server_party.cpp
         Extension/Multiplayer/Session/party_book.cpp Server/server_config.cpp Server/steam_server.cpp
-        Server/server_update.cpp Server/server_release.cpp
+        Server/server_update.cpp Server/server_release.cpp Server/server_map_update.cpp Engine/Vfs/thunderstore_package.cpp
         Server/global_bans.cpp Server/server_words.cpp Extension/Multiplayer/developer_identity.cpp Extension/Multiplayer/word_lists.cpp
         Extension/Multiplayer/Steam/steam_transport.cpp Extension/Multiplayer/Net/protocol.cpp
         Extension/Multiplayer/Net/delta_codec.cpp Extension/Multiplayer/Net/wire_codec.cpp

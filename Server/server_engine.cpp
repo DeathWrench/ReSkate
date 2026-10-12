@@ -1,5 +1,6 @@
 #include "server_engine.h"
 #include "global_bans.h"
+#include "server_map_update.h"
 #include "server_update.h"
 #include "Extension/Multiplayer/Session/monotonic_clock.h"
 #include "Engine/Core/Text/word_filter.h"
@@ -395,6 +396,7 @@ void ServerEngine::worker_loop() {
     auto next_update_check = std::chrono::steady_clock::now() + std::chrono::minutes(15);
     auto next_ban_check = std::chrono::steady_clock::now();
     std::future<BanListCheck> ban_check;
+    MapUpdater map_updater; // "maps.latest_versions" and "maps update" (server_map_update.h)
     bool bans_unread = true;
     std::optional<bool> name_allowed;
     const auto target_tick_interval = std::chrono::microseconds(1000000 / std::max(10U, config_.tps));
@@ -416,6 +418,12 @@ void ServerEngine::worker_loop() {
 
         // Live ReSkate Identity Sync (Centrix, Dev, Staff, Homie, Content Creator, Global Bans)
         const auto now_time = std::chrono::steady_clock::now();
+        if (const auto maps = map_updater.tick(config_.latest_versions, config_.latest_check_minutes, config_.mods, host_->map_folder_in_play(),
+                                               host_->take_map_update_request());
+            !maps.lines.empty() || maps.changed) {
+            for (const auto &line : maps.lines) log(line);
+            if (maps.changed) log(host_->reload_maps());
+        }
         if (!ban_check.valid() && now_time >= next_ban_check) {
             ban_check = std::async(std::launch::async, read_global_bans);
         }

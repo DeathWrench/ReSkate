@@ -100,6 +100,10 @@ struct ServerConfig {
     unsigned rotation_extend = 15;       // minutes, 0 to 240
     // Players are told on a card when the map has 10, 5 and 1 minutes left.
     bool rotation_announce = true;
+    // The custom maps in Mods that are Thunderstore packages are kept at Thunderstore's newest
+    // version (server_map_update.h), looked up at start and every so many minutes.
+    bool latest_versions = false;
+    unsigned latest_check_minutes = 60;
     unsigned max_players = 16; // players; the server itself is not one
     // The most poses a second one player is sent (crowd_limits); 0: no limit.
     unsigned crowd_budget = crowd_pose_budget;

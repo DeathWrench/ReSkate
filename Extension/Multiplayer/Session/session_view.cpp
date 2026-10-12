@@ -666,7 +666,7 @@ std::pair<std::uint32_t, std::string> mark_role(IdentityList list) {
     case IdentityList::developer: return {nametag_developer, "Dev"};
     case IdentityList::content_creator: return {nametag_creator, "Content Creator"};
     case IdentityList::centrix: return {nametag_centrix, "Centrix"};
-    case IdentityList::staff: return {nametag_staff, "Staff"};
+    case IdentityList::staff: return {nametag_staff, "ReSkate Admin"};
     default: return {nametag_homie, "Homie"};
     }
 }

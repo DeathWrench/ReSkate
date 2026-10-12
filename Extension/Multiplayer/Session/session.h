@@ -43,6 +43,11 @@ struct MapNeed {
 std::optional<MapNeed> take_map_need();
 // Whether a session is waiting on a map being fetched right now. Thread-safe.
 bool fetching_map() noexcept;
+// Held while a map is being downloaded, installed or applied: the session does not load the
+// host's map meanwhile, and waits as it does for one that is missing. A map that is being
+// replaced by another version is one the game already knows, so without this it would load as
+// soon as the new files are in place, before the mods are applied again. Thread-safe.
+void hold_map_load(bool hold) noexcept;
 // How a host learns the package of the map it is on, to tell its guests: the level's asset in,
 // the package (or nothing) out. Called on the client thread, often; it should be quick.
 using MapPackageLookup = std::string (*)(std::string_view asset);

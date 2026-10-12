@@ -706,6 +706,7 @@ std::string take_leave_notice() { return std::exchange(session().leave_notice, {
 std::optional<MapNeed> take_map_need() { return std::exchange(session().map_need, std::nullopt); }
 void set_map_package_lookup(MapPackageLookup lookup) noexcept { map_package_lookup.store(lookup, std::memory_order_relaxed); }
 bool fetching_map() noexcept { return fetching_map_flag.load(std::memory_order_relaxed); }
+void hold_map_load(bool hold) noexcept { map_load_held.store(hold, std::memory_order_relaxed); }
 MultiplayerChat chat() {
     auto &s = session();
     std::lock_guard lock(s.mutex);
@@ -804,7 +805,9 @@ bool prepare_join_map(Session &s, bool ready, std::string_view current, MapLoade
         // fetched at the host's version as a missing one is (the downloader puts it in the
         // installed one's place), and loads when the two agree.
         const auto have = std::string(other_map_version(s.map_package, host_map_package(s.join_destination)));
-        const auto result = have.empty() ? loader(s.join_destination, s.map_load_submitted, detail) : MapLoadResult::missing;
+        // (Nor while its files are being put in place and applied: hold_map_load.)
+        const bool held = map_load_held.load(std::memory_order_relaxed);
+        const auto result = have.empty() && !held ? loader(s.join_destination, s.map_load_submitted, detail) : MapLoadResult::missing;
         if (result == MapLoadResult::missing) {
             const auto name = s.map_label.empty() ? world_level_name(world_destination_asset(s.join_destination)) : s.map_label;
             const char *who = dedicated_host(s) ? "server" : "host";

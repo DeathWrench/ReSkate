@@ -90,6 +90,8 @@ Layout layout(const ServerConfig &c) {
     maps.set("rotation_vote_seconds", c.rotation_vote_seconds);
     maps.set("rotation_extend_minutes", c.rotation_extend);
     maps.set("rotation_announce", c.rotation_announce);
+    maps.set("latest_versions", c.latest_versions);
+    maps.set("latest_check_minutes", c.latest_check_minutes);
     auto parks = Json::object();
     for (unsigned lot = 0; lot < park_lots.size(); ++lot) parks[park_lots[lot].key] = c.parks[lot];
     maps.set("parks", std::move(parks));
@@ -336,6 +338,8 @@ ServerConfig load_config(const std::filesystem::path &file, std::vector<std::str
     c.rotation_vote_seconds = std::clamp(get("maps", "rotation_vote_seconds", c.rotation_vote_seconds), 10U, 120U);
     c.rotation_extend = std::min(get("maps", "rotation_extend_minutes", c.rotation_extend), 240U);
     c.rotation_announce = get("maps", "rotation_announce", c.rotation_announce);
+    c.latest_versions = get("maps", "latest_versions", c.latest_versions);
+    c.latest_check_minutes = std::clamp(get("maps", "latest_check_minutes", c.latest_check_minutes), 5U, 1440U);
     if (const auto *parks = find("maps", "parks"); parks && parks->is_object())
         for (unsigned lot = 0; lot < park_lots.size(); ++lot) c.parks[lot] = parks->value(park_lots[lot].key, c.parks[lot]);
     c.world_layer_sync = get("maps", "world_layer_sync", c.world_layer_sync);
