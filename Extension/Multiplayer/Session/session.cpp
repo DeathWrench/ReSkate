@@ -1,6 +1,5 @@
 #include "session_internal.h"
 #include "Engine/Core/Debug/trace.h"
-#include "Extension/Objects/object_prompt.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
 #include "Extension/Multiplayer/Hud/native_indicators.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
@@ -72,7 +71,6 @@ void reset_peer(Session &s, std::size_t slot) {
     s.peers[slot] = {};
 }
 void stop(Session &s, std::string reason) {
-    object_prompt::forget_viewer();
     s.local_typing_until = 0;
     // A join that ends before the host's map was ready never got in.
     if (s.mode == Mode::join && s.awaiting_map && !s.travelling && s.join_started)
@@ -345,6 +343,8 @@ void publish_party(Session &s) {
     // Nobody is in one just for being in the same lobby or on the same server.
     set_native_party_changes(session);
     const bool shown = session ? s.local_party != 0 : s.mode != Mode::off;
+    // What a dedicated server placed (its parks) says "Server", as its chat lines do.
+    set_native_party_server(dedicated_host(s) ? s.host_id : 0, "Server");
     update_native_party(s.base, roster, capacity, shown);
 }
 // Links the players' own throwdowns (Extension/Throwdowns/throwdown_relay.cpp). Runs
@@ -452,8 +452,6 @@ std::uint64_t far_sample_interval(const Peer &p, float distance) {
 }
 void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::uint64_t now) {
     if (!world_playing(s, local)) return;
-    // For naming who placed the object in front of the skater (object_prompt.h).
-    object_prompt::set_viewer(local.pose.root.position);
     const auto view = latest_game_view();
     // ReSkate's nametags and chat bubbles: every shown player, placed above their head
     // each frame.

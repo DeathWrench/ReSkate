@@ -629,7 +629,7 @@ bool queue_command(std::string_view action, std::string_view argument, std::stri
          action != "chat-bubbles" && action != "chat-bubbles-own" && action != "chat-bubbles-distance" &&
          action != "chat-bubbles-duration" && action != "chat-bubbles-history" &&
          !own_mark_command(action) &&
-         action != "voice" && action != "voice-mute" &&
+         action != "voice" && action != "voice-mute" && action != "objects-solid" &&
          action != "voice-volume" && action != "voice-allow" && action != "voice-range" && action != "chat" && action != "typing" && action != "ban" && action != "unban" &&
          action != "world-layer-sync" && action != "noclip-allow" && action != "nobail-allow" && action != "boosts-allow" &&
          action != "tuning-enforce" && action != "tp" &&
@@ -828,6 +828,24 @@ std::string command(std::string_view action, std::string_view argument, std::str
             s.voice.mute(id, enabled == "on");
             publish(s);
             return enabled == "on" ? "Player voice muted." : "Player voice unmuted.";
+        }
+        if (action == "objects-solid") {
+            const auto split = argument.find(' ');
+            if (split == std::string_view::npos) return "Choose a player whose objects to make solid.";
+            std::uint64_t id{};
+            const auto result = std::from_chars(argument.data(), argument.data() + split, id);
+            const auto enabled = argument.substr(split + 1);
+            // "server": the dedicated server's own objects (its parks), which no player row stands for.
+            if (argument.substr(0, split) == "server" && dedicated_host(s)) id = s.host_id;
+            else if (result.ec != std::errc{} || result.ptr != argument.data() + split) id = 0;
+            if (!id || !find_peer(s, id) || (enabled != "on" && enabled != "off"))
+                return "objects-solid <SteamID64 of a connected player, or server> on|off";
+            const bool solid = enabled == "on";
+            s.objects_solid[id] = solid;
+            set_network_object_owner_solid(id, solid);
+            profile_runtime::set_local_preference("SolidObjects." + std::to_string(id), solid);
+            publish(s);
+            return solid ? "That player's objects are solid for you." : "That player's objects are ghosts for you.";
         }
         // Host-only settings check the mode themselves; guests get a refusal.
         using Setting = std::string (*)(Session &, std::string_view);

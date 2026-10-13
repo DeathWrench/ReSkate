@@ -2697,6 +2697,7 @@ void draw_settings_tab(ServerStatusSnapshot& stats) {
         try {
             auto cfg_path = ServerEngine::instance().folder() / "ReSkateServer.json";
             auto loaded = load_config(cfg_path);
+            loaded.mods = ServerEngine::instance().config().mods; // where the Mods folder is: not in the file
             ServerEngine::instance().config() = loaded;
             sync_form_from_config(s_form, loaded);
             show_notification("Reloaded configuration from ReSkateServer.json.", 3.5, blue);

@@ -292,6 +292,15 @@ std::string send_party_chat(Session &s, std::string_view typed) {
     add_chat(s, local, s.transport.name(local), "[Party] " + text, true);
     return {};
 }
+bool objects_solid(Session &s, std::uint64_t id) {
+    const auto [choice, first] = s.objects_solid.try_emplace(id);
+    if (first) {
+        const bool server = dedicated_host(s) && id == s.host_id;
+        choice->second = profile_runtime::local_preference("SolidObjects." + std::to_string(id)).value_or(server);
+        set_network_object_owner_solid(id, choice->second);
+    }
+    return choice->second;
+}
 void send_typing(Session &s, bool on) {
     if (s.mode != Mode::host && s.mode != Mode::join) return;
     const auto now = now_us();
@@ -490,8 +499,11 @@ void sync_objects(Session &s, const NativeFrame &local, std::uint64_t now) {
         return;
     std::vector<NetworkObjectOwner> owners;
     for (const auto &peer : active_peers(s))
-        if (const auto &objects = visible_objects(s, peer); peer.handshaken && peer.world_ready && objects.revision())
+        if (const auto &objects = visible_objects(s, peer); peer.handshaken && peer.world_ready && objects.revision()) {
+            // Before its objects are spawned: a dedicated server is in no player list to be seen in.
+            (void)objects_solid(s, peer.member.id);
             owners.push_back({peer.member.id, peer.member.epoch, objects.layout()});
+        }
     set_remote_network_objects(captured->map, owners);
     s.object_owners_sent = std::move(current);
     s.object_map_sent = captured->map;

@@ -339,6 +339,7 @@ void publish(Session &s, const NativeFrame *local) {
         view.roster.back().party = p.member.party;
         view.roster.back().party_leader = p.member.party_leader;
         view.roster.back().party_member = party_member(s, p.member.id);
+        view.roster.back().objects_solid = objects_solid(s, p.member.id);
         if (!p.rate_at) {
             p.rate_at = now;
             p.native_rate_count = native_count;

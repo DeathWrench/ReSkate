@@ -245,6 +245,9 @@ void ServerEngine::run_startup() {
         try {
             config_ = load_config(config_file_);
         } catch (...) {}
+        // Not part of the file, so a reload leaves it empty: park mods were then looked for
+        // beside the server instead of in Mods ("is not in the Mods folder").
+        config_.mods = folder_ / "Mods";
 
         // If auto-update is configured and updates are enabled, check and apply update before opening ports
         if (config_.auto_update && updates_enabled()) {

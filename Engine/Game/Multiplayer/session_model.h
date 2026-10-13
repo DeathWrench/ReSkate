@@ -73,6 +73,8 @@ struct MultiplayerPlayer {
     // The player's party (0 = none), whether they lead it, and whether it is the local player's.
     std::uint32_t party{};
     bool party_leader{}, party_member{};
+    // The local player made this player's placed objects solid; they are ghosts otherwise.
+    bool objects_solid{};
 };
 // A party invite waiting for an answer (dedicated servers).
 struct MultiplayerPartyInvite {

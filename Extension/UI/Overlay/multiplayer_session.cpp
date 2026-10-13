@@ -532,6 +532,23 @@ void session_page(SkateMenu &menu, const Model &model) {
                                                      : "Remove them and keep them out of every lobby you host.");
             right -= px(14);
         }
+        // Their placed objects: ghosts for you (skated and walked through) until made solid.
+        if (peer && peer->id != mp.local_id) {
+            const float button = px(124);
+            right -= button;
+            ImGui::SetCursorScreenPos(ImVec2(right, middle));
+            if (peer->objects_solid) skate_theme::push_primary_button();
+            if (ImGui::Button(peer->objects_solid ? "Objects: solid" : "Objects: ghost", ImVec2(button, 0))) {
+                std::array<char, 65> unused{};
+                send_private(menu, "objects-solid", std::to_string(peer->id) + (peer->objects_solid ? " off" : " on"), unused, false);
+            }
+            if (peer->objects_solid) skate_theme::pop_primary_button();
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", peer->objects_solid
+                    ? "Everything this player places is solid for you. Press to pass through their objects instead."
+                    : "You pass through everything this player places. Press to make their objects solid, to skate them.");
+            right -= px(14);
+        }
         const float status_width = menu.bold->CalcTextSizeA(px(12), FLT_MAX, 0, status).x + px(14);
         right -= status_width;
         ImGui::SetCursorScreenPos(ImVec2(right, middle));

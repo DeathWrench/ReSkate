@@ -29,6 +29,7 @@ void apply_host_park_choices(const ParkChoices& choices) {
 std::optional<NetworkObjectSnapshot> capture_local_network_objects() { return {}; }
 void set_remote_network_objects(std::string_view, std::span<const NetworkObjectOwner>) {}
 void clear_remote_network_objects() {}
+void set_network_object_owner_solid(std::uint64_t, bool) {}
 std::vector<std::pair<std::uint64_t, std::uint64_t>> removed_object_owners;
 void remove_remote_network_objects(std::uint64_t owner, std::uint64_t epoch) {
     if (owner && epoch) removed_object_owners.emplace_back(owner, epoch);
@@ -290,6 +291,7 @@ std::uintptr_t remote_board_entity() noexcept { return 0; }
 std::uint64_t remote_skater_generation() noexcept { return 0; }
 void note_remote_distance(float) noexcept {}
 void update_native_party(std::uintptr_t, const PartyRoster &, unsigned, bool) noexcept {}
+void set_native_party_server(std::uint64_t, std::string_view) noexcept {}
 void set_native_party_changes(bool) noexcept {}
 bool post_native_party_invite(std::uint64_t) noexcept { return false; }
 void set_native_nametags_enabled(bool) noexcept {}

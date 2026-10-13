@@ -338,6 +338,8 @@ struct Session {
     std::uint64_t secret{}, epoch{}, map{}, host_id{}, next_send{}, last_hello{}, last_roster{},
         last_cosmetic_capture{}, last_routes{}, last_network_log{}, network_now{};
     std::uint32_t sequence{}, roster_sequence{};
+    // Whose placed objects are solid for this player (the rest are ghosts): see objects_solid().
+    std::map<std::uint64_t, bool> objects_solid;
     std::uint64_t local_pose_count{}, logged_local_pose_count{};
     std::size_t last_skater_bones{}, last_board_bones{};
     std::optional<Appearance> sent_appearance;
@@ -512,6 +514,11 @@ std::vector<MultiplayerChatCommand> chat_commands(const Session &s);
 void send_throwdown(Session &s, std::vector<std::uint8_t> message);
 // Tell the session this player is typing (`on`) or has stopped. Relayed like chat.
 void send_typing(Session &s, bool on);
+// Whether `id`'s placed objects are solid for this player. The saved choice for them when
+// there is one; else a player's are ghosts, and a dedicated server's own (its parks, which
+// everyone is there to skate) are solid. Read when they are first seen and handed to the
+// objects (network_object_runtime.h).
+bool objects_solid(Session &s, std::uint64_t id);
 // session_send.cpp
 Packet packet(Session &s, PacketKind kind, std::uint64_t now);
 void reset_direct(Session &s, Peer &p, std::uint64_t now);
