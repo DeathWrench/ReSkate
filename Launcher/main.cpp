@@ -91,11 +91,9 @@ void run_headless(const app::Session& session, std::vector<std::wstring> argumen
 
 // Whether the launcher was put in a game's folder of a Steam library (...\steamapps\common\<game>),
 // which is where Steam keeps skate. and updates it: ReSkate has a folder of its own, with its
-// own copy of the game. Not under Wine: on Proton, Steam starts the launcher from the game's
-// folder in the game's place, and that is how it is set up there (README, "Linux (Proton)").
+// own copy of the game. The same under Wine: on Proton, Steam is given the launcher's place in
+// that folder of its own (README, "Linux (Proton)").
 bool in_steam_library() {
-    const auto ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (ntdll && GetProcAddress(ntdll, "wine_get_version")) return false;
     std::wstring self(32768, L' ');
     self.resize(GetModuleFileNameW(nullptr, self.data(), static_cast<DWORD>(self.size())));
     if (self.empty()) return false;

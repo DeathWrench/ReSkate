@@ -57,16 +57,17 @@ ReSkate supports one game build at a time (Steam build `25414733`).
 
 ### Linux (Proton)
 
-1. Install skate. with Steam and put `ReSkateLauncher.exe` and `ReSkate.dll` beside `Skate.exe`, in
-   Steam's skate. folder (Steam → skate. → Manage → Browse local files). Proton is the one case where
-   the launcher goes there, because Steam has to start it in the game's place.
-2. In Steam → skate. → Properties → Launch Options, enter:
+1. Install skate. with Steam, and put `ReSkateLauncher.exe` and `ReSkate.dll` in a new, empty folder
+   of their own, for example `~/Games/ReSkate` (not Steam's skate. folder: the launcher refuses to
+   run from there).
+2. In Steam → skate. → Properties → Launch Options, enter this with your own folder's path:
 
    ```
-   bash -c 'exec "${@/EAAntiCheat.GameServiceLauncher.exe/ReSkateLauncher.exe}"' -- %command%
+   bash -c 'exec "${@/*EAAntiCheat.GameServiceLauncher.exe//home/you/Games/ReSkate/ReSkateLauncher.exe}"' -- %command%
    ```
 
-3. Press **Play** on skate. in your Steam library.
+3. Press **Play** on skate. in your Steam library. The launcher installs its own copy of the game
+   into that folder the first time.
 
 Steam starts EA's anti-cheat launcher (`EAAntiCheat.GameServiceLauncher.exe`), not `Skate.exe`, and the
 anti-cheat refuses to run under Proton (*E111000B … Wine, Proton, and Steam Deck are not supported*).
@@ -74,8 +75,9 @@ The launch option swaps it for ReSkate's launcher, which starts the game itself.
 own Steam entry, rather than adding the launcher as a non-Steam game, keeps skate.'s app ID and its
 Proton prefix.
 
-Tested with ReSkate 1.1.3 and Proton Experimental on CachyOS: the launcher, the server browser, joining
-a public server and hosting a lobby. Steam Deck should work the same way but is untested. If you load a
+The launcher in a folder of its own is new and has not been tested on Proton yet. With the launcher
+beside `Skate.exe`, as it was set up before, ReSkate 1.1.3 was tested with Proton Experimental on
+CachyOS: the launcher, the server browser, joining a public server and hosting a lobby. Steam Deck should work the same way but is untested. If you load a
 custom map and then join a server on another map, the screen can stay black
 ([#31](https://github.com/Dingo-Shenanigans/ReSkate/issues/31)): load the server's map first.
 

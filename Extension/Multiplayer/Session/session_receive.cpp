@@ -444,6 +444,11 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
         }
     }
     if (s.mode == Mode::join && physical(s.host_id) == links.end()) {
+        // What the other end said as it closed the link, when it was said to this player
+        // ("You were kicked...", "You are banned...", "Your mods..."), is put in front of
+        // them (take_removed_notice): otherwise it is only the status line of a menu they
+        // may never open. A link that just went away says nothing of the kind.
+        if (const auto said = s.transport.status().detail; said.starts_with("You ") || said.starts_with("Your ")) s.removed_notice = said;
         stop(s, s.transport.status().detail);
         return;
     }
