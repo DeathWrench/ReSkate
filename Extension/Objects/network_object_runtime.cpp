@@ -64,6 +64,27 @@ void refresh_budget() {
     extra_budget.store(static_cast<std::uint32_t>(count), std::memory_order_release);
 }
 } // namespace network_objects_detail
+std::uint64_t nearest_network_object_owner(const std::array<float, 3> &position, float reach) noexcept {
+    try {
+        std::unique_lock lock(local_runtime().native_mutex, std::try_to_lock);
+        if (!lock.owns_lock()) return 0;
+        float best = reach * reach;
+        std::uint64_t owner{};
+        // Local objects are in `live` too, under owner 0, so the nearest being your own answers 0.
+        for (const auto &[key, live] : network_objects_detail::state().live) {
+            float squared{};
+            for (std::size_t i = 0; i < 3; ++i)
+                squared += (live.applied.position[i] - position[i]) * (live.applied.position[i] - position[i]);
+            if (squared < best) {
+                best = squared;
+                owner = std::get<0>(key);
+            }
+        }
+        return owner;
+    } catch (...) {
+        return 0;
+    }
+}
 std::uint32_t network_object_extra_budget() noexcept {
     return network_objects_detail::extra_budget.load(std::memory_order_acquire);
 }

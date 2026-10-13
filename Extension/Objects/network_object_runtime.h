@@ -42,4 +42,9 @@ bool network_object_observe(std::uint64_t entity, const profile::PlacedObject &o
 bool network_object_native_ready();
 std::uint32_t network_object_extra_budget() noexcept;
 void move_network_object(std::uint64_t entity, const profile::PlacedObject &object);
+// The player (SteamID64) whose object is nearest `position`, among every object in the
+// world within `reach` metres; 0 when that is one of the local player's own, or none is
+// near. Asked from inside a UI script, so it never waits: 0 when another thread is
+// changing the objects.
+std::uint64_t nearest_network_object_owner(const std::array<float, 3> &position, float reach) noexcept;
 } // namespace dingosdk::profile_runtime

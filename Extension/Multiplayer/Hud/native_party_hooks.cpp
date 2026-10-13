@@ -6,6 +6,9 @@
 #include "Extension/Throwdowns/throwdown_relay.h"
 #include "Engine/Core/Platform/memory.h"
 #include "follow_camera.h"
+#include "Extension/Customization/local_player_card_runtime.h"
+#include "Extension/Objects/network_object_runtime.h"
+#include "Extension/Objects/object_prompt.h"
 #include "Engine/Game/Build/20260929/profile.h"
 #include <algorithm>
 #include <cmath>
@@ -679,6 +682,24 @@ void clear_stale_cooldowns() {
 // the SDK started pressed no Coop button here, so IsCoop still says solo and the row never comes
 // (analysis/coop-challenges-re/coop_criteria_hud.md). It is set just before either graph runs.
 constexpr std::uint32_t graph_objective_list = 0xeae864ca, graph_challenge_rewards = 0x1e01dd61;
+// Above zero on the thread that is running the placed-object prompt's graph (object_prompt.h).
+thread_local int object_prompt_running{};
+// profile_runtime::player_info_override: while that prompt runs, the info of whoever placed the
+// object nearest the skater, when that is another player the party HUD has a record for.
+std::uint64_t object_owner_info() noexcept {
+    if (!object_prompt_running) return 0;
+    try {
+        auto &s = state();
+        const auto position = object_prompt::viewer_position();
+        if (!position || !s.installed.load(std::memory_order_acquire)) return 0;
+        const auto owner = profile_runtime::nearest_network_object_owner(*position, object_prompt::reach);
+        Address ui{};
+        if (!owner || !memory::peek(s.base + engine::ui_manager, ui) || !ui) return 0;
+        return get_info_hook(ui, owner);
+    } catch (...) {
+        return 0;
+    }
+}
 void show_coop_objectives() {
     auto &s = state();
     const auto published = s.published.load(std::memory_order_acquire);
@@ -716,6 +737,11 @@ void run_expression(Address vm, std::uint32_t pc, Address profiler, void (*runne
     // The common path avoids RPM, schema scans and locks for unrelated scripts.
     const auto resource = *reinterpret_cast<const Address *>(vm + 0x38);
     const auto hash = *reinterpret_cast<const std::uint32_t *>(resource + 0x10);
+    struct Prompt {
+        bool on;
+        explicit Prompt(bool running) : on(running) { if (on) ++object_prompt_running; }
+        ~Prompt() { if (on) --object_prompt_running; }
+    } prompt(hash == object_prompt::graph);
     if ((hash == graph_objective_list || hash == graph_challenge_rewards) &&
         state().challenge_coop.load(std::memory_order_acquire)) {
         try { show_coop_objectives(); } catch (const std::exception &e) { status(e.what()); }
@@ -784,6 +810,7 @@ void install(Address base) {
                 "Cannot enable native party hooks; restart ReSkate.");
     require(hook_apply_queued() == HookOk, "Cannot enable native party hooks; restart ReSkate.");
     s.installed.store(true, std::memory_order_release);
+    profile_runtime::player_info_override.store(&object_owner_info, std::memory_order_release);
     try { install_requests(base); } catch (const std::exception &e) { status(e.what()); }
 }
 } // namespace native_party_detail
