@@ -16,7 +16,7 @@
 namespace dingosdk::server {
 namespace {
 constexpr std::string_view help_text =
-    "status | net [player] | players | say <text> | msg <player> <text> | msg-party <player> <text> | msg-admins <text> | kick <player> | ban <player or SteamID64> [name] | unban <SteamID64> | bans\n"
+    "status | net [player] | players | say <text> | msg <player> <text> | msg-party <player> <text> | msg-admins <text> | kick <player> [minutes|restart] | kick-time <minutes>|restart | ban <player or SteamID64> [name] | unban <SteamID64> | bans\n"
     "map <name, e.g. San Vansterdam> | maps [reload] | name <text> | password <text|off> | welcome <text|off> | listed on|off\n"
     "voice on|off | voice-range <50-1000> | distances <full> <half> <half-return> <low> | crowd <n>|off | rate <KB/s> | bone-scale <1-8>|off | bone-reach <0.5-20>|off\n"
     "placement everyone|admins|nobody | objects <number>|off | object-scaling on|off | effects on|off | clear-objects | noclip on|off | nobail on|off | boosts on|off | tuning on|off\n"
@@ -128,13 +128,43 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         return done;
     }
     if (name == "kick") {
+        // "kick <player> [minutes|restart]". A last word that is a time is one only when what
+        // comes before it is the player: the whole text is tried as a name first, so "Player
+        // 1234" is never a player and a time. After a SteamID64 the in-game menu sends the
+        // player's session epoch, a number far above any time, and the server window a reason.
         auto *guest = target(argument);
+        std::optional<unsigned> minutes;
+        if (const auto space = argument.rfind(' '); space != std::string_view::npos) {
+            const auto word = lower(trim(argument.substr(space + 1)));
+            const auto value = word == "restart" ? std::optional<std::uint64_t>(0) : number(word);
+            const bool by_id = number(split(argument).first).has_value();
+            if (value && (by_id || !guest || !guest->handshaken)) {
+                auto *named = target(trim(argument.substr(0, space)));
+                if (named && named->handshaken && *value <= 1440) {
+                    guest = named;
+                    minutes = static_cast<unsigned>(*value);
+                } else if (named && named->handshaken && !by_id) {
+                    return "kick <player> [minutes 1-1440|restart]";
+                }
+            }
+        }
         if (!guest || !guest->handshaken) return "No single connected player matches \"" + std::string(argument) + "\".";
         if (!outranks(guest->member.id)) return "You cannot kick a player of your rank or above.";
         const auto label = guest_name(*guest);
-        kicked_.insert(guest->member.id);
-        drop(guest->member.id, "You were kicked from this server.");
-        return changed(label + " was kicked until the server restarts.");
+        const auto how_long = keep_out(guest->member.id, minutes);
+        drop(guest->member.id, "You were kicked from this server" + how_long + ".");
+        return changed(label + " was kicked" + how_long + ".");
+    }
+    if (name == "kick-time") {
+        const auto word = lower(argument);
+        const auto value = word == "restart" || word == "off" ? std::optional<std::uint64_t>(0) : number(argument);
+        if (!value || *value > 1440)
+            return "kick-time <minutes 1-1440>|restart (now " +
+                   (config_.kick_minutes ? std::to_string(config_.kick_minutes) + " min" : std::string("until the server restarts")) + ")";
+        config_.kick_minutes = static_cast<unsigned>(*value);
+        return changed(config_.kick_minutes
+                           ? "Kicked players can join again after " + std::to_string(config_.kick_minutes) + " min. Players already kicked keep the time they were given."
+                           : std::string("Kicked players stay out until the server restarts. Players already kicked keep the time they were given."));
     }
     if (name == "ban") {
         auto [who, reason] = split(argument);
@@ -950,6 +980,11 @@ void Host::check_scoring(Guest &guest) {
 // time. Flagged players are taken out of linked throwdowns and coop challenges (the roster's
 // speeding flag: every client drops them from those), or kicked; the flag clears after a minute
 // of normal speed.
+std::string Host::keep_out(std::uint64_t id, std::optional<unsigned> chosen) {
+    const auto minutes = chosen.value_or(config_.kick_minutes);
+    kicked_[id] = minutes ? now_ + minutes * 60000000ULL : 0;
+    return minutes ? " for " + std::to_string(minutes) + (minutes == 1 ? " minute" : " minutes") : std::string(" until the server restarts");
+}
 bool Host::check_speed(Guest &guest, std::uint64_t sent) {
     if (config_.speed_check == "off" || !guest.handshaken || !guest.world_ready || !sent) return true;
     if (!guest.speed.sample(sent, now_)) return true;

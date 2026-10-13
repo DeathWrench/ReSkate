@@ -217,6 +217,15 @@ int run() {
         check(load_config(away.file).afk_kick == 15, "The away timer was not kept");
         away.afk_kick = 1441;
         check(config_error(away).find("afk_kick_minutes") != std::string::npos, "An away timer over a day was accepted");
+        // How long a kick lasts: until the restart unless set, and no more than a day.
+        ServerConfig kicks;
+        check(kicks.kick_minutes == 0 && config_error(kicks).find("kick_minutes") == std::string::npos, "A kick does not last until the restart by default");
+        kicks.file = folder / "kicks.json";
+        kicks.kick_minutes = 10;
+        save_config(kicks);
+        check(load_config(kicks.file).kick_minutes == 10, "The kick time was not kept");
+        kicks.kick_minutes = 1441;
+        check(config_error(kicks).find("kick_minutes") != std::string::npos, "A kick time over a day was accepted");
         ServerConfig words;
         check(words.word_warnings == 3 && config.word_warnings == 3, "word_warnings is not 3 unless set");
         words.word_warnings = 11;

@@ -542,8 +542,8 @@ void Host::check_vote(bool expired) {
     }
     case VoteKind::kick:
         if (find(done.target)) {
-            kicked_.insert(done.target);
-            drop(done.target, "You were kicked from this server by a vote.");
+            const auto how_long = keep_out(done.target);
+            drop(done.target, "You were kicked from this server by a vote" + how_long + ".");
         }
         break;
     case VoteKind::poll: break;

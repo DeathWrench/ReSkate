@@ -88,7 +88,7 @@ A player whose role has a command types it in chat with `/` in front (`/kick Nam
 | Messages | `msg`, `msg-party`, `msg-admins`, `announce`, `announce-to`, `announcements` |
 | Map and world | `map`, `maps`, `map-pool`, `rotation`, `park`, `park-mod`, `layer-sync`, `layer`, `layers`, `tod` |
 | Server settings | `name`, `password`, `welcome`, `listed`, `chat-color`, `status`, `net`, `activity-log` |
-| What players may do | `voice`, `voice-range`, `placement`, `objects`, `object-scaling`, `clear-objects`, `effects`, `noclip`, `nobail`, `boosts`, `tuning`, `parties`, `party-size`, `afk-kick`, `announce-throwdowns` |
+| What players may do | `voice`, `voice-range`, `placement`, `objects`, `object-scaling`, `clear-objects`, `effects`, `noclip`, `nobail`, `boosts`, `tuning`, `parties`, `party-size`, `afk-kick`, `kick-time`, `announce-throwdowns` |
 | Votes and polls | `votes`, `vote`, `vote-cancel`, `poll` |
 | Network | `distances`, `crowd`, `rate`, `tps` |
 | Anti-cheat | `speed-check`, `board-check`, `score-check`, `score-allow`, `bone-scale`, `bone-reach` |

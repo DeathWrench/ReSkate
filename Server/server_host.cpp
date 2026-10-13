@@ -1742,9 +1742,16 @@ void Host::tick(std::uint64_t now) {
         drop(id, "Disconnected.", how);
     }
     for (const auto &link : links) {
-        if (kicked_.contains(link.id)) {
-            transport_.disconnect(link.id, "You were kicked from this server.");
-            continue;
+        if (const auto kicked = kicked_.find(link.id); kicked != kicked_.end()) {
+            if (!kicked->second || now_ < kicked->second) {
+                const auto reason = kicked->second
+                    ? "You were kicked from this server. You can join again in " +
+                          std::to_string((kicked->second - now_) / 60000000 + 1) + " min."
+                    : std::string("You were kicked from this server.");
+                transport_.disconnect(link.id, reason.c_str());
+                continue;
+            }
+            kicked_.erase(kicked); // their time is up
         }
         if (is_banned(link.id)) {
             transport_.disconnect(link.id, "You are banned from this server.");

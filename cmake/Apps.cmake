@@ -1,9 +1,9 @@
 if(WIN32)
     add_executable(dingosdk_launcher WIN32 Launcher/main.cpp Launcher/launch.cpp
         Launcher/gui.cpp Launcher/gui_launcher.cpp Launcher/gui_renderer.cpp Launcher/gui_home.cpp
-        Launcher/gui_settings.cpp Launcher/gui_sign_in.cpp Launcher/gui_mods.cpp Launcher/gui_mods_browse.cpp
+        Launcher/gui_settings.cpp Launcher/gui_sign_in.cpp Launcher/gui_mods.cpp Launcher/gui_mods_browse.cpp Launcher/gui_mods_profiles.cpp
         Launcher/gui_gamepad.cpp Launcher/gamepad_input.cpp Launcher/gui_changelog.cpp Launcher/game_settings.cpp
-        Launcher/updater.cpp Launcher/mod_manager.cpp Launcher/thunderstore.cpp Launcher/problem.h)
+        Launcher/updater.cpp Launcher/mod_manager.cpp Launcher/mod_profiles.cpp Launcher/thunderstore.cpp Launcher/problem.h)
     target_link_libraries(dingosdk_launcher PRIVATE dingosdk_logging dingosdk_content_cache_install dingosdk_world_layer_scan dingosdk_launcher_support dingosdk_initfs
         dingosdk_mod_list dingosdk_mods dingosdk_json dingosdk_miniz dingosdk_imgui dingosdk_playstation_input winhttp shell32 dwmapi windowscodecs ole32)
     set_target_properties(dingosdk_launcher PROPERTIES OUTPUT_NAME "ReSkateLauncher")
@@ -29,6 +29,10 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     target_link_libraries(dingosdk_thunderstore_tests PRIVATE dingosdk_json dingosdk_miniz)
     target_include_directories(dingosdk_thunderstore_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME launcher_thunderstore COMMAND dingosdk_thunderstore_tests)
+    add_executable(dingosdk_mod_profiles_tests Launcher/Test/mod_profiles_tests.cpp Launcher/mod_profiles.cpp)
+    target_link_libraries(dingosdk_mod_profiles_tests PRIVATE dingosdk_mod_list dingosdk_json dingosdk_miniz)
+    target_include_directories(dingosdk_mod_profiles_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME launcher_mod_profiles COMMAND dingosdk_mod_profiles_tests "${CMAKE_CURRENT_BINARY_DIR}/mod-profiles-fixture")
     add_executable(dingosdk_thunderstore_package_tests Engine/Vfs/Test/thunderstore_package_tests.cpp Engine/Vfs/thunderstore_package.cpp)
     target_link_libraries(dingosdk_thunderstore_package_tests PRIVATE dingosdk_json)
     target_include_directories(dingosdk_thunderstore_package_tests PRIVATE "${PROJECT_SOURCE_DIR}")

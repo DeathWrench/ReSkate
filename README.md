@@ -30,7 +30,8 @@ the launcher, the runtime that loads into the game, and the dedicated server.
   - Drop a mod in `Mods/` and it is merged into the game at launch. Mods can add custom maps, loading
     screens, cosmetics and scripts.
   - Browse and install mods from the [Thunderstore community](https://thunderstore.io/c/reskate/) in the
-    launcher.
+    launcher. A mod that needs others (a mod pack) brings them with it.
+  - Save sets of mods as profiles, switch between them, and share one as a code or a file.
   - Most mod changes apply in game without a restart.
 - **Launcher.**
   - Checks that you have the supported game build, and can download exactly that build with your Steam
@@ -114,6 +115,10 @@ accepts `park random` from its console or an admin.
 
 - Install mods from the launcher's **MODS** page: browse Thunderstore, or drag a `.zip` or folder onto the
   window.
+- **PROFILES** on that page saves which mods are on, and in what order, under a name. Loading a profile
+  switches to it and downloads any of its mods you do not have; every mod stays installed once. **COPY CODE**
+  and **SAVE FILE** share a profile, and **IMPORT CODE** and **IMPORT FILE** take one in. The codes and
+  `.r2z` files are r2modman's, so the two managers read each other's.
 - In game, the **MODS** tab of the ReSkate menu (**Insert**) turns mods on and off and applies the changes.
 - Mods are checked against the game build they were made for. Outdated mods, or mods that can't be merged
   cleanly, are left out with a message naming them, and the rest still load.

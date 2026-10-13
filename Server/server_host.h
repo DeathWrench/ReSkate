@@ -287,7 +287,12 @@ class Host {
     PartyBook parties_;
     std::uint64_t party_revision_{};
     std::map<std::uint64_t, std::unique_ptr<Guest>> guests_;
-    std::set<std::uint64_t> kicked_;
+    // Kicked players and when each may join again (0: not before the server restarts).
+    std::map<std::uint64_t, std::uint64_t> kicked_;
+    // Keeps a player out for `minutes` (0: until the server restarts), or for as long as
+    // kick_minutes says when none is given, and says how long for their notice and the log:
+    // " for 10 minutes", or " until the server restarts".
+    std::string keep_out(std::uint64_t id, std::optional<unsigned> minutes = std::nullopt);
     // The name each player last joined under, for banning one who has left by their SteamID.
     std::map<std::uint64_t, std::string> seen_names_;
     // Warnings each player has had for words that are not allowed at all ("word_warnings"),
