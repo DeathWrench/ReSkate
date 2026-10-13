@@ -35,6 +35,10 @@ struct ChatState {
     std::deque<std::pair<std::uint64_t, Clock::time_point>> arrivals;
     std::uint64_t feed_version{}; // counts polls of `feed`; the caches below are rebuilt after one
     std::array<char, multiplayer_chat_max_bytes + 1> input{};
+    // Typing dots: the input as last seen while the box was open, and when it last changed.
+    bool typing_watch{}, typing_on{}, typing_changed_valid{};
+    std::string typing_seen;
+    Clock::time_point typing_changed{}, typing_sent{};
     bool scroll_to_bottom{};
     std::vector<std::string> completions; // "/" commands the typed text can still become
     std::uint64_t completions_version{};  // the Suggestions::version `completions` was copied from
@@ -269,6 +273,44 @@ bool is_emote_text(std::string_view text, std::string_view before, std::string_v
            text.substr(before.size() + 1, name.size()) == name && text.back() == ':';
 }
 
+// The session relays this. Dots mean the input changed in the last three seconds, not that
+// the box is merely open. A failed queue is tried again next frame. A "/" line is a command,
+// a private message or party chat: not everyone's business, so it shows no dots.
+void note_typing(ChatState& c, bool open) {
+    const auto now = Clock::now();
+    if (!open) {
+        if (c.typing_on && queue_multiplayer_action("typing", "0")) c.typing_on = false;
+        c.typing_watch = false;
+        c.typing_changed_valid = false;
+        return;
+    }
+    const std::string_view text(c.input.data());
+    if (const auto first = text.find_first_not_of(' '); first != std::string_view::npos && text[first] == '/') {
+        if (c.typing_on && queue_multiplayer_action("typing", "0")) c.typing_on = false;
+        c.typing_seen.assign(text);
+        c.typing_watch = true;
+        c.typing_changed_valid = false;
+        return;
+    }
+    if (!c.typing_watch) {
+        c.typing_seen.assign(text);
+        c.typing_watch = true;
+    } else if (text != c.typing_seen) {
+        c.typing_seen.assign(text);
+        c.typing_changed = now;
+        c.typing_changed_valid = true;
+    }
+    const bool active = c.typing_changed_valid && now - c.typing_changed < 3s;
+    if (active) {
+        if ((!c.typing_on || now - c.typing_sent >= 500ms) && queue_multiplayer_action("typing", "1")) {
+            c.typing_on = true;
+            c.typing_sent = now;
+        }
+    } else if (c.typing_on && queue_multiplayer_action("typing", "0")) {
+        c.typing_on = false;
+    }
+}
+
 ImU32 with_alpha(ImU32 colour, float alpha) {
     const auto base = static_cast<float>((colour >> IM_COL32_A_SHIFT) & 0xFF) / 255.0f;
     return (colour & ~IM_COL32_A_MASK) |
@@ -303,6 +345,7 @@ bool chat_pending() {
         c.seen = std::max(c.seen, c.feed.latest);
         while (c.arrivals.size() > multiplayer_chat_history) c.arrivals.pop_front();
     }
+    note_typing(c, s.chat_visible.load() && c.feed.available);
     if (s.chat_visible.load()) return true;
     if (!c.feed.available) return false;
     if (c.feed.vote.id || c.feed.announcement.id) return true; // the vote and announcement cards

@@ -1266,6 +1266,24 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
         broadcast(p, true, false, p.source);
         return;
     }
+    // Grey dots above the sender. Not a chat line, and not logged. A player who may not
+    // chat sends none. "On" is held to a few a second, and "off" is passed on only after an
+    // "on", so neither can flood the relay.
+    if (p.kind == PacketKind::typing) {
+        if (!routed_source(p, link->member, peer, true, id_) || !may(peer, multiplayer::role_chat)) return;
+        if (p.typing) {
+            if (link->typing_notice && now_ < link->typing_notice + 200000) return;
+            link->typing_notice = now_;
+            link->typing = true;
+        } else {
+            if (!link->typing) return;
+            link->typing = false;
+        }
+        link->last_packet = now_;
+        active(*link);
+        broadcast(p, true, false, p.source);
+        return;
+    }
     // Linked throwdowns (Extension/Throwdowns/throwdown_relay.cpp): opaque to the
     // server, relayed like chat to everyone else in the same world.
     if (p.kind == PacketKind::throwdown) {

@@ -188,6 +188,8 @@ class Host {
         std::vector<Packet> relay_poses;
         unsigned effects_pass{};
         ChatRate chat_rate;
+        std::uint64_t typing_notice{}; // last accepted "still typing", so a flood is not relayed
+        bool typing{};                 // an "on" was passed along and no "off" since
         ChatBudget admin_budget, throwdown_budget, party_budget;
         SpeedCheck speed;           // how fast their game runs, from their pose timestamps
         bool speeding{};            // flagged: out of linked activities (config speed_check)

@@ -290,6 +290,7 @@ void publish(Session &s, const NativeFrame *local) {
     view.lobby_searched = lobby.searched;
     view.lobby_status = lobby.hosting;
     view.browser_status = lobby.browser;
+    view.browse_ready_us = s.browsed ? s.browsed + multiplayer_browse_interval_us : 0;
     // Dedicated servers first: they are always up and never a stranger's own session.
     view.lobbies = s.servers.rows();
     // Looked up as the list is shown: the team's list can arrive, or change, after a server was found.

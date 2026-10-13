@@ -1029,6 +1029,26 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
             if (s.mode == Mode::host) broadcast(s, p, true, false, now, p.source);
             continue;
         }
+        // Grey dots above the sender. Not a chat line. "On" is held to a few a second so a
+        // modified client cannot flood the relay, and "off" only clears dots that are up, so
+        // it cannot outpace "on".
+        if (p.kind == PacketKind::typing) {
+            auto *sender = find_peer(s, p.source);
+            if (direct_link || !sender || !sender->handshaken) continue;
+            if (!routed_source(p, sender->member, message.peer, s.mode == Mode::host, s.host_id))
+                continue;
+            if (p.typing) {
+                if (sender->typing_notice && now < sender->typing_notice + 200000) continue;
+                sender->typing_notice = now;
+                sender->typing_until = now + typing_hold_us;
+            } else {
+                if (!sender->typing_until) continue;
+                sender->typing_until = 0;
+            }
+            sender->last_packet = now;
+            if (s.mode == Mode::host) broadcast(s, p, true, false, now, p.source);
+            continue;
+        }
         // Throwdown messages are relayed like chat, but only within one map: a drop
         // belongs to the world it was placed in.
         if (p.kind == PacketKind::throwdown) {

@@ -675,6 +675,23 @@ void chat_codec() {
     check(clean_chat_text(std::string(199, 'a') + "\xC3\xA9").size() == 199, "Chat cleaning cut a character in half");
     check(clean_chat_text("\x01\x02").empty(), "Chat cleaning left only controls");
     check(valid_chat_text(clean_chat_text("  typed \xE2\x80\x94 text  ")), "Cleaned chat text is not valid");
+    Packet typing;
+    typing.kind = PacketKind::typing; typing.session = 9; typing.epoch = 10; typing.map = 11;
+    typing.source = 76561198000000001ULL; typing.typing = true;
+    const auto typed = decode(encode(typing));
+    check(typed && typed->kind == PacketKind::typing && typed->typing && typed->source == typing.source,
+          "Typing notice failed to round-trip");
+    check(decode_wire(encode_wire(typing))->typing, "Typing notice failed the wire codec");
+    typing.typing = false;
+    const auto stopped = decode(encode(typing));
+    check(stopped && !stopped->typing, "A stopped typing notice stayed on");
+    typing.source = 0;
+    check(reject(typing), "A typing notice without a sender was encoded");
+    typing.source = 76561198000000001ULL;
+    typing.typing = true;
+    auto bad = encode(typing);
+    bad.back() = 2; // the on/off byte; anything but 0 or 1 is refused
+    check(!decode(bad), "A typing notice with a bad flag decoded");
 }
 // Linked throwdowns: the packet carries one opaque message; the message codec is strict.
 void throwdown_codec() {

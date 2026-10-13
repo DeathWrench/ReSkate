@@ -229,14 +229,14 @@ Useful launcher flags:
 | `DINGOSDK_VERSION` | `0.0.0` | version stamped into the binaries |
 | `DINGOSDK_LAUNCHER_AUTO_UPDATE` | `OFF` | let the launcher replace itself and `ReSkate.dll`, and the server replace itself (release builds) |
 | `DINGOSDK_RELEASE_REPO` | `Dingo-Shenanigans/ReSkate` | public GitHub repository whose latest release carries `launcher.json` and the files it pins |
-| `DINGOSDK_BACKTRACE_URL` | the project's endpoint | Backtrace minidump submission URL; empty turns crash uploads off |
+| `DINGOSDK_CRASH_REPORT_URL` | the project's endpoint | Sentry minidump endpoint URL; empty turns crash uploads off |
 | `DINGOSDK_TEST_GAME_ROOT` | empty | a Skate folder, for the tests that read real game data |
 
 ### Tests
 
 Each module keeps its regression tests in a `Test/` folder. Turn them on with any of
 `DINGOSDK_BUILD_MULTIPLAYER_TESTS`, `DINGOSDK_BUILD_LAUNCHER_TESTS`, `DINGOSDK_BUILD_PARK_EDITOR_TESTS`
-and `DINGOSDK_BUILD_BACKTRACE_TESTS`, then run CTest:
+and `DINGOSDK_BUILD_CRASH_REPORT_TESTS`, then run CTest:
 
 ```powershell
 cmake --preset vs2022-x64 -DDINGOSDK_BUILD_MULTIPLAYER_TESTS=ON -DDINGOSDK_BUILD_LAUNCHER_TESTS=ON
@@ -278,10 +278,16 @@ bytes they expect before touching them, so code from the wrong build is refused 
 ## Crash reports and privacy
 
 When the launcher or the game crashes, ReSkate uploads a minidump and that session's log to the
-project's Backtrace account, so crashes can be fixed. The log never contains your Steam password or
+project's self-hosted Sentry server, so crashes can be fixed. The log never contains your Steam password or
 login name.
 
-To turn it off, untick **Send crash reports** in the launcher's Settings (ADVANCED), or set the
+With **Send performance timings** ticked in the launcher's Settings (ADVANCED; off unless you turn it on),
+ReSkate also sends how long a few steps took: the update check, the Steam download, mod
+installs (with the package name), the mod merge, starting the game, each level load, joining a multiplayer
+session and fetching the ReSkate lists. Time spent in a level adds its name, average frame rate and count of
+long frames. Nothing about your account is included. Turning crash reports off turns this off too.
+
+To turn crash reports off, untick **Send crash reports** in the launcher's Settings (ADVANCED), or set the
 environment variable `RESKATE_CRASH_REPORTING=0`.
 
 ReSkate also keeps the game off EA's online services: the game's own crash reports, telemetry and

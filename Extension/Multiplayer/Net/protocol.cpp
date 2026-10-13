@@ -404,6 +404,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         throw std::invalid_argument("Invalid effects packet");
     if (p.kind == PacketKind::chat && (!p.source || !valid_chat_text(p.text)))
         throw std::invalid_argument("Invalid chat message");
+    if (p.kind == PacketKind::typing && !p.source)
+        throw std::invalid_argument("Invalid typing notice");
     if (p.kind == PacketKind::admin && (!p.source || !valid_admin_text(p.text)))
         throw std::invalid_argument("Invalid admin message");
     if (p.kind == PacketKind::throwdown && (!p.source || p.throwdown.empty() || p.throwdown.size() > max_throwdown_message))
@@ -475,7 +477,7 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         p.kind != PacketKind::throwdown && p.kind != PacketKind::teleport && p.kind != PacketKind::physics_tuning &&
         p.kind != PacketKind::party && p.kind != PacketKind::scoring && p.kind != PacketKind::physics_extras &&
         p.kind != PacketKind::effects && p.kind != PacketKind::permissions && p.kind != PacketKind::words &&
-        p.kind != PacketKind::next_maps)
+        p.kind != PacketKind::next_maps && p.kind != PacketKind::typing)
         throw std::invalid_argument("Unknown packet kind");
     const auto payload = greeting ? 72
                          : p.kind == PacketKind::away
@@ -589,6 +591,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         w.integer(p.text.size(), 2);
         w.bytes.insert(w.bytes.end(), p.text.begin(), p.text.end());
     }
+    if (p.kind == PacketKind::typing)
+        w.integer(p.typing ? 1 : 0, 1);
     if (p.kind == PacketKind::throwdown) {
         w.integer(p.throwdown.size(), 2);
         w.bytes.insert(w.bytes.end(), p.throwdown.begin(), p.throwdown.end());
@@ -957,6 +961,10 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             p.text.assign(reinterpret_cast<const char *>(bytes.data() + r.at), static_cast<std::size_t>(length));
             r.at = bytes.size();
             if (!valid_chat_text(p.text)) return {};
+        } else if (p.kind == PacketKind::typing) {
+            const auto on = r.integer(1);
+            if (!p.source || on > 1) return {};
+            p.typing = on != 0;
         } else if (p.kind == PacketKind::throwdown) {
             const auto length = r.integer(2);
             if (!p.source || !length || length > max_throwdown_message || length != bytes.size() - r.at)

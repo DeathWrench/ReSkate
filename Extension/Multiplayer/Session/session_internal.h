@@ -126,6 +126,9 @@ struct Peer {
     // as their poses are shown, so the sparks are where their skater is.
     std::deque<std::pair<std::uint64_t, Impact>> impacts;
     ChatRate chat_rate;
+    // Dots above this player until this time (0: they stopped). typing_notice is the last
+    // accepted "still typing", so a flood is not relayed.
+    std::uint64_t typing_until{}, typing_notice{};
     // Chat proofs (session_receive.cpp): the copies of their lines this player sent us over
     // their own Steam connection, and the lines the host passed on as theirs that wait for one.
     struct ChatProof {
@@ -223,6 +226,9 @@ struct Session {
     SteamTransport transport;
     SteamLobbies lobbies{make_steam_lobby_api(), [](std::uint64_t host) { return banned_host(host) || reskate_banned(host); }};
     SteamServerBrowser servers;
+    // When the lobby and server lists were last searched. Every search in the game, asked for
+    // or automatic, waits multiplayer_browse_interval_us after it (take_browse).
+    std::uint64_t browsed{};
     // Guest of a dedicated server: whether the roster lists us as an admin,
     // and the server's voice range from it.
     // On a dedicated server: what the player's role gives them (its permissions packet), and the
@@ -304,6 +310,9 @@ struct Session {
     bool chat_filter = true;     // bad words in chat show as **** (Engine/Core/Text/word_filter.h)
     // Chat bubbles above each skater's head (Hud/custom_nametags.h, nametag_overlay.cpp).
     bool chat_bubbles = true, chat_bubbles_own{};
+    // Grey dots above this skater until this time. The overlay sets it while the chat
+    // input is changing, and clears it after three seconds idle or when the box closes.
+    std::uint64_t local_typing_until{};
     float chat_bubbles_distance = 40.f, chat_bubbles_duration = 5.f;
     int chat_bubbles_history = 3;
     bool game_menu{};            // a game menu is up or the game's UI is hidden: no chat on screen
@@ -501,6 +510,8 @@ std::string send_party_chat(Session &s, std::string_view typed);
 std::vector<MultiplayerChatCommand> chat_commands(const Session &s);
 // One encoded throwdown message from this player to everyone else (through the host).
 void send_throwdown(Session &s, std::vector<std::uint8_t> message);
+// Tell the session this player is typing (`on`) or has stopped. Relayed like chat.
+void send_typing(Session &s, bool on);
 // session_send.cpp
 Packet packet(Session &s, PacketKind kind, std::uint64_t now);
 void reset_direct(Session &s, Peer &p, std::uint64_t now);

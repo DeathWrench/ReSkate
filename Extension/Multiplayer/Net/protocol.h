@@ -26,7 +26,10 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 50;
+constexpr std::uint16_t protocol_version = 51;
+// How long a receiver keeps typing dots after the last "still typing" notice. The sender
+// clears them after three seconds without input; this only covers a lost "stopped" packet.
+constexpr std::uint64_t typing_hold_us = 4000000;
 // A dedicated server's chat lines unless its owner says otherwise: violet (#8E5CFF) and lavender (#D9C8FF).
 inline constexpr std::uint32_t default_server_chat_badge = 0xffff5c8eU, default_server_chat_text = 0xffffc8d9U;
 constexpr std::size_t max_throwdown_message = 4096;
@@ -143,7 +146,10 @@ enum class PacketKind : std::uint16_t {
     // The maps a dedicated server's vote for the next map will offer (Server/server_votes.cpp:
     // the rotation's vote), sent about a minute before it so games have their pictures ready,
     // and to whoever joins after. Empty: none are chosen (the map changed).
-    next_maps = 34
+    next_maps = 34,
+    // The sender's chat box changed recently (typing true) or they stopped (false).
+    // Relayed like chat. Not a chat line: receivers draw grey dots above that skater.
+    typing = 35
 };
 // Packet::party_action. Requests go from a player to whoever hosts, a dedicated server or a
 // lobby's host (party_player = the other player involved, 0 for leave/open/close); invited
@@ -375,6 +381,8 @@ struct Packet {
     // scoring: the sender's scoring fingerprint, 0 for the game's own; `text` names the mods
     // that change it (empty, or valid_admin_text).
     std::uint64_t scoring{};
+    // typing: true while the sender's chat input changed recently, false when they stopped.
+    bool typing{};
 };
 // Empty means a compatible greeting. The caller supplies its current local
 // map/session and, after the handshake, the already accepted peer epoch.

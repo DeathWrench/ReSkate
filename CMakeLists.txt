@@ -22,7 +22,7 @@ if(WIN32)
 endif()
 include(cmake/Apps.cmake)
 if(WIN32)
-    include(cmake/Backtrace.cmake)
+    include(cmake/CrashReport.cmake)
 endif()
 
 option(DINGOSDK_BUILD_TESTS "Build logging regression tests" OFF)

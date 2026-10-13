@@ -191,6 +191,8 @@ struct Settings {
     bool updates{true};
     // Off: a crash uploads nothing (RESKATE_CRASH_REPORTING=0 for the launcher and the game).
     bool crash_reports{true};
+    // On: launches send how long their steps took (RESKATE_TRACING=1 for the launcher and the game).
+    bool performance_timings{};
     std::string steam_username;   // never the password
     bool steam_remember{true};
     bool steam_prefer_code{};

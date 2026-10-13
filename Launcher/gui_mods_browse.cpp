@@ -5,6 +5,7 @@
 #include "updater.h"
 
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Debug/trace.h"
 
 #include <cstdio>
 #include <format>
@@ -157,6 +158,9 @@ std::string install_package(ModsPanel& panel, const fs::path& root, const ts::Pa
         ~Cleanup() { std::error_code ignored; fs::remove(archive, ignored); fs::remove(folder, ignored); }
     } cleanup{folder, archive};
 
+    trace::Scope timing("launcher.mod_install", "task");
+    timing.tag("package", package.full_name);
+    timing.tag("version", version.number);
     set_activity(panel, "Downloading " + package.title() + " v" + version.number +
         (version.file_size ? "  (" + size_text(version.file_size) + ")" : std::string()));
     panel.progress = 0;

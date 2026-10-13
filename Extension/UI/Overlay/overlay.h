@@ -405,6 +405,7 @@ void set_skate_hud_feed(SkateHudFeed) noexcept;
 struct NametagBubble {
     std::string text, raw;
     float appear{1}, fade{1};
+    bool hint{}; // grey typing discs, not a chat line. text is ".", "..", or "..." for 1, 2, or 3 discs
 };
 struct Nametag {
     std::array<float, 3> position{}; // above the skater's head, world space

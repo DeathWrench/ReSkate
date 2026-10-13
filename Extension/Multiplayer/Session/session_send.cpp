@@ -292,6 +292,14 @@ std::string send_party_chat(Session &s, std::string_view typed) {
     add_chat(s, local, s.transport.name(local), "[Party] " + text, true);
     return {};
 }
+void send_typing(Session &s, bool on) {
+    if (s.mode != Mode::host && s.mode != Mode::join) return;
+    const auto now = now_us();
+    s.local_typing_until = on ? now + typing_hold_us : 0;
+    auto message = packet(s, PacketKind::typing, now);
+    message.typing = on;
+    broadcast(s, message, true, false, now);
+}
 void send_throwdown(Session &s, std::vector<std::uint8_t> message) {
     if ((s.mode != Mode::host && s.mode != Mode::join) || message.empty() || message.size() > max_throwdown_message) return;
     const auto now = now_us();
@@ -350,7 +358,8 @@ void broadcast(Session &s, const Packet &packet, bool reliable, bool fresh, std:
             continue;
         // Chat and throwdown messages always travel through the host, which relays
         // them once to everyone else; a direct copy as well would deliver them twice.
-        if ((packet.kind == PacketKind::chat || packet.kind == PacketKind::throwdown || packet.kind == PacketKind::effects) && s.mode == Mode::join &&
+        if ((packet.kind == PacketKind::chat || packet.kind == PacketKind::throwdown || packet.kind == PacketKind::effects ||
+             packet.kind == PacketKind::typing) && s.mode == Mode::join &&
             p.member.id != s.host_id)
             continue;
         if (packet.kind == PacketKind::voice) {

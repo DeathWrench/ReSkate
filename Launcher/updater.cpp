@@ -2,6 +2,7 @@
 
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Debug/trace.h"
 #include "Engine/Core/Platform/launcher_support.h"
 #include "launcher_update_config.h"
 #include "text_encoding.h"
@@ -298,6 +299,7 @@ std::optional<Config> fetch_config() {
     try {
         // Public releases: the newest release carries launcher.json and the files it pins. Only
         // this lookup uses GitHub's rate-limited API; the files come from the release's download links.
+        trace::Scope timing("launcher.update_check", "http.client");
         const auto latest = std::wstring(L"https://api.github.com/repos/") + launcher_release_repo + L"/releases/latest";
         logging::write(logging::Level::info, logging::Channel::launcher, L"Checking GitHub releases: " + std::wstring(launcher_release_repo));
         std::string text;
@@ -504,28 +506,48 @@ void replace_file(const fs::path& target, const RemoteFile& file, const Progress
     }
 }
 
+namespace {
+
+constexpr int previous_launcher_names = 8;
+
+// ReSkateLauncher.exe.old, then .old1, .old2, ...
+fs::path previous_launcher(const fs::path& self, int index) {
+    return self.wstring() + L".old" + (index ? std::to_wstring(index) : std::wstring{});
+}
+
+} // namespace
+
 void replace_running_launcher(const fs::path& self, const RemoteFile& file, const Progress& progress) {
     const auto verified = download_verified(self, file, progress);
-    const fs::path previous = self.wstring() + L".old";
-    DeleteFileW(previous.c_str());
-    // Windows allows renaming, but not overwriting, a running executable.
-    if (!MoveFileExW(self.c_str(), previous.c_str(), MOVEFILE_WRITE_THROUGH)) {
-        const auto error = GetLastError();
+    // Windows allows renaming, but not overwriting, a running executable. A .old that is still
+    // there belongs to a launcher that has not exited (or is held by antivirus) and cannot be
+    // deleted, so the next free name is used instead.
+    fs::path previous;
+    DWORD error = ERROR_ALREADY_EXISTS;
+    for (int index = 0; index < previous_launcher_names && error == ERROR_ALREADY_EXISTS; ++index) {
+        previous = previous_launcher(self, index);
+        DeleteFileW(previous.c_str());
+        error = MoveFileExW(self.c_str(), previous.c_str(), MOVEFILE_WRITE_THROUGH) ? ERROR_SUCCESS : GetLastError();
+    }
+    if (error != ERROR_SUCCESS) {
         DeleteFileW(verified.c_str());
         fail(std::format("Cannot move the running launcher aside (Windows error {})", error));
     }
     if (!MoveFileExW(verified.c_str(), self.c_str(), MOVEFILE_WRITE_THROUGH)) {
-        const auto error = GetLastError();
+        error = GetLastError();
         MoveFileExW(previous.c_str(), self.c_str(), MOVEFILE_WRITE_THROUGH);
         fail(std::format("Cannot install the launcher update (Windows error {})", error));
     }
 }
 
 void remove_previous_launcher(const fs::path& self) noexcept {
-    const std::wstring previous = self.wstring() + L".old";
     // The previous process may still be exiting; a later launch retries.
     for (int attempt = 0; attempt < 20; ++attempt) {
-        if (DeleteFileW(previous.c_str()) || GetLastError() == ERROR_FILE_NOT_FOUND) return;
+        bool remaining = false;
+        for (int index = 0; index < previous_launcher_names; ++index)
+            if (!DeleteFileW(previous_launcher(self, index).c_str()) && GetLastError() != ERROR_FILE_NOT_FOUND)
+                remaining = true;
+        if (!remaining) return;
         Sleep(100);
     }
 }
