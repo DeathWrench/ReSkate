@@ -465,6 +465,34 @@ bool music_playback_available() noexcept { return playback_available.load(std::m
 
 MusicSelectNext& music_select_next_original() noexcept { return select_next; }
 
+// The scorer asks for places the asset has no song at (selector_overruns, which sees only what
+// the queue holds before the game is asked: 2.0.9 still crashed here with places such as 0xd570,
+// far past any list the queue had). The game's callback reads whatever lies there as a song.
+// This is that callback with the one check it lacks: a place past the end has no song, which
+// the game's own answer for is 0. It replaces the game's whole function, which is these few
+// reads.
+MusicSongScore song_score{};
+MusicSongScore& music_song_score_original() noexcept { return song_score; }
+void __fastcall music_song_score_hook(std::uint32_t place, std::uint32_t* out, std::uintptr_t** context) {
+    const auto* const songs = *context ? reinterpret_cast<const std::uintptr_t*>(**context) : nullptr;
+    // (The count is the u32 before the first song, its top bit apart: song_count.)
+    const auto count = songs ? *(reinterpret_cast<const std::uint32_t*>(songs) - 1) & 0x7fffffffu : 0u;
+    if (place >= count) {
+        *out = 0;
+        static std::atomic<unsigned> said{};
+        if (said.fetch_add(1, std::memory_order_relaxed) < 8) {
+            try {
+                dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::music,
+                    "Next song: the game asked for song {} of a playlist asset that has {}, where it would have crashed; "
+                    "it was told there is none there.", place, count);
+            } catch (...) {}
+        }
+        return;
+    }
+    const auto song = songs[place] & ~std::uintptr_t{4};
+    *out = song ? *reinterpret_cast<const std::uint32_t*>(song + 0x7c) : 0;
+}
+
 // When each channel was last bound to a playlist.
 std::array<std::atomic<std::uint64_t>, 256> channel_bound_at{};
 
