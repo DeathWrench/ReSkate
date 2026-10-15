@@ -11,6 +11,7 @@ add_library(dingosdk_runtime SHARED
     Engine/Game/Abi/native_data.cpp
     Extension/Console/commands.cpp
     Extension/Console/perf_commands.cpp
+    Extension/Console/memory_ledger.cpp
     Extension/Skater/console_commands.cpp
     Extension/Skater/drone_outfit.cpp
     Extension/Multiplayer/console_commands.cpp
@@ -119,6 +120,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp
     Extension/World/native_entity_pages.cpp
+    Extension/World/world_pool_usage.cpp
     Extension/World/physics_world_size.cpp
     Extension/Rendering/display_startup.cpp
     Extension/Rendering/replay_export.cpp
@@ -226,7 +228,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Progression/neighborhood_unlock_override.cpp
     Extension/Boot/user_data_redirect.cpp
     Extension/Boot/ea_app_block.cpp
-    Extension/Boot/ea_service_block.cpp)
+    Extension/Boot/ea_service_block.cpp
+    Extension/Boot/eadp_errors_arena.cpp
+    Extension/Boot/descriptor_heap_size.cpp)
 
 target_link_libraries(dingosdk_runtime PRIVATE dingosdk_logging dingosdk_profiler dingosdk_supported_build dingosdk_overlay dingosdk_console_core dingosdk_steam_restart_guard
     dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_mod_list dingosdk_launcher_support dingosdk_miniz shell32 dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt

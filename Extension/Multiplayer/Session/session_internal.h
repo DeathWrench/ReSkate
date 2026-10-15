@@ -262,11 +262,13 @@ struct Session {
     // The map is not installed and is being fetched (take_map_need): since when, 0 for not.
     // The host is told with what is sent while waiting (Packet::map_fetching).
     std::uint64_t fetching_since{};
+    std::uint64_t map_fetch_deadline{};
     std::optional<MapNeed> map_need;          // take_map_need()
     // The session a missing map ended, for "rejoin": who hosted it and the password key it was joined with.
     struct Rejoin {
         Invite invite;
         std::optional<PasswordKey> password;
+        std::uint64_t deadline_us{};
     };
     std::optional<Rejoin> rejoin;
     std::string leave_notice;                 // take_leave_notice()
@@ -475,14 +477,14 @@ std::string answer_server_poll(Session &s, std::size_t answer);
 inline std::atomic<bool> server_vote_open_flag{};
 inline std::atomic<MapPackageLookup> map_package_lookup{};
 inline std::atomic<bool> fetching_map_flag{};
-inline std::atomic<bool> map_load_held{};
+inline std::atomic<std::uint64_t> map_fetch_deadline_flag{}, map_load_held{};
 // A guest without the map is downloading it: the clock they are loading against starts over
 // each time they say so, for as long as map_fetch_limit_us from the first time.
 inline void guest_fetching(Peer &peer, std::uint64_t now) {
     // (Only for a guest who is past the password.)
     if (!peer.handshaken && !peer.map_authorized) return;
     if (!peer.fetching_since) peer.fetching_since = now;
-    if (now - peer.fetching_since > map_fetch_limit_us) return;
+    if (map_fetch_policy::host_expired(peer.fetching_since, now)) return;
     if (!peer.handshaken) peer.connected_at = now;
     else if (peer.travel_since) peer.travel_since = now;
 }

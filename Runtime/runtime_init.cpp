@@ -340,7 +340,6 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         dingosdk::spotify_web::start();
         dingosdk::youtube_music::start(); // (the player's YouTube playlists, read before the music screen is built)
         dingosdk::spotify_dashboard::start(); // (the page in the browser that sets Spotify up) // (the player's playlists, fetched before the music screen is built)
-        dingosdk::console::start_memory_trace_from_environment();
         const bool fixed_stop_provider = (global_offline_hook && progression_guard_armed) &&
             dingosdk::prepare_fixed_stop_entitlement_provider(r.base);
         record("{\"event\":\"fixed_stop_entitlement_provider_initialized\",\"prepared\":" +

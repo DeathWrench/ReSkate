@@ -8,8 +8,10 @@
 #include "Extension/Multiplayer/Hud/game_ui_state.h"
 #include "Extension/Music/music_inject.h"
 #include "Extension/World/texture_handle_limit.h"
+#include "Extension/Assets/native_render_resource_pool.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Profiling/profiler.h"
+#include "Extension/Console/memory_ledger.h"
 #include "Extension/Settings/job_spin.h"
 #include "Extension/Settings/replay_drafts.h"
 #include "Engine/Game/World/client_state.h"
@@ -201,8 +203,18 @@ Card largest_card() {
     factory->Release();
     return card;
 }
+// RESKATE_MESH_POOL_MB: the pool's size for this session in MB, whatever the card (520 to 3584);
+// for finding what size a map that fails needs.
+std::uint32_t override_kb() {
+    wchar_t value[16]{};
+    const auto length = GetEnvironmentVariableW(L"RESKATE_MESH_POOL_MB", value, 16);
+    if (!length || length >= 16) return 0;
+    const auto megabytes = std::wcstoul(value, nullptr, 10);
+    return megabytes ? static_cast<std::uint32_t>(std::clamp<std::uint64_t>(std::uint64_t{megabytes} * 1024, stock_kb, most_kb)) : 0;
+}
 // KiB for the pool on this card, or 0 to keep the game's own value.
 std::uint32_t size_kb(std::uint64_t memory) {
+    if (const auto chosen = override_kb()) return chosen;
     // Cards report a little under or over their nominal size.
     constexpr std::uint64_t six_gib = 6ull << 30, twelve_gib = 12ull << 30, slack = 256ull << 20;
     if (memory <= six_gib + slack) return 0;
@@ -1257,6 +1269,7 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             dingosdk::map_download::tick();
             dingosdk::map_icons::tick();
     dingosdk::texture_handle_limit::tick();
+    dingosdk::report_native_render_resources();
     // (Whether a menu of the game's is up, the music screen among them: a playlist changed then
     // is the player's own choice, and one changed in play is a speaker's music being grabbed.)
     {
@@ -1326,12 +1339,19 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
                             if (entry.th32OwnerProcessID == self) ++threads;
                         CloseHandle(snapshot);
                     }
+                    // The GPU's share (its system memory is not in the committed figure), and while
+                    // the memory ledger is on, who holds the most (memory_ledger.h).
+                    std::string more;
+                    try {
+                        if (const auto gpu = dingosdk::memory_ledger::gpu_line(); !gpu.empty()) more += " " + gpu + ".";
+                        if (const auto owners = dingosdk::memory_ledger::owners_line(); !owners.empty()) more += " " + owners + ".";
+                    } catch (...) {}
                     dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
                         "Memory: %.2f GB committed, %.2f GB in RAM; %d player(s) in the session, %d built as skaters (player distance %.0f m); map %s. "
-                        "Outside the game's own pools: %.2f GB in use of %.2f GB in %lu heap(s); %u thread(s), %lu handle(s).",
+                        "Outside the game's own pools: %.2f GB in use of %.2f GB in %lu heap(s); %u thread(s), %lu handle(s).%s",
                         gigabytes(counters.PrivateUsage), gigabytes(counters.WorkingSetSize), players, skaters, mp.player_distance,
                         (session && !mp.map.empty() ? mp.map : r.multiplayer_map).c_str(),
-                        gigabytes(heap_allocated), gigabytes(heap_committed), heap_count, threads, handles);
+                        gigabytes(heap_allocated), gigabytes(heap_committed), heap_count, threads, handles, more.c_str());
                 }
             }
         }

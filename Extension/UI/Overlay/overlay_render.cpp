@@ -224,6 +224,8 @@ bool setup_graphics() {
     GetWindowThreadProcessId(description.OutputWindow, &pid);
     if (pid != GetCurrentProcessId()) return false;
     if (FAILED(s.swapchain->GetDevice(IID_PPV_ARGS(&s.device)))) return false;
+    dingosdk::overlay::record_gpu_identity(s.device.Get());
+    dingosdk::overlay::watch_device_removal(s.device.Get());
     const auto adapter = s.device->GetAdapterLuid();
     dingosdk::logging::printf(dingosdk::logging::Level::debug, dingosdk::logging::Channel::graphics, "Device=%p adapter_luid=%08lx:%08lx node_count=%u",
         s.device.Get(), static_cast<unsigned long>(adapter.HighPart),
@@ -345,6 +347,8 @@ bool setup_graphics() {
         return false;
     }
     s.commands->SetName(L"ReSkate overlay draw");
+    dingosdk::overlay::watch_draws(s.commands.Get());
+    dingosdk::overlay::watch_addresses(s.commands.Get());
     s.fence->SetName(L"ReSkate overlay fence");
     s.fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!s.fence_event) return false;

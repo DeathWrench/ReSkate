@@ -1,4 +1,5 @@
 #pragma once
+#include "map_fetch_policy.h"
 #include "Extension/Multiplayer/Remote/cosmetics.h"
 #include "Extension/Multiplayer/Session/peer_slots.h"
 #include "Extension/Multiplayer/Session/object_state.h"
@@ -226,9 +227,9 @@ bool valid_map_asset(std::string_view asset) noexcept;
 bool valid_map_pool(std::span<const std::uint16_t> pool, std::size_t maps) noexcept; // distinct indices below `maps`
 bool valid_map_label(std::string_view label) noexcept; // empty, or a name like a member's
 // How long a host goes on waiting for a player who says they are fetching the map
-// (Packet::map_fetching), from the first time they say so: a large map on a slow line. Past
-// it they are held to the time a load takes again.
-inline constexpr std::uint64_t map_fetch_limit_us = 45ull * 60 * 1000000;
+// (Packet::map_fetching), from the first time they say so, including installation and joining.
+// Repeated requests never extend this limit. Each host uses its own monotonic clock.
+inline constexpr std::uint64_t map_fetch_limit_us = map_fetch_policy::session_us;
 // The Thunderstore package a map comes from, so a player without it can be offered it:
 // "Owner-Name", or "Owner-Name-1.2.3" when the host knows its version. Empty for the game's own
 // maps and for a map mod that is not from Thunderstore.

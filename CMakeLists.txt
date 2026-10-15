@@ -62,7 +62,21 @@ endif()
 option(DINGOSDK_BUILD_MULTIPLAYER_TESTS "Build multiplayer protocol regression tests" OFF)
 if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     enable_testing()
+    add_executable(dingosdk_map_fetch_policy_tests Extension/Multiplayer/Test/map_fetch_policy_tests.cpp)
+    target_include_directories(dingosdk_map_fetch_policy_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME map_fetch_policy COMMAND dingosdk_map_fetch_policy_tests)
     if(WIN32)
+        add_executable(dingosdk_https_download_timeout_tests Engine/Vfs/Test/https_download_timeout_tests.cpp)
+        target_include_directories(dingosdk_https_download_timeout_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_link_libraries(dingosdk_https_download_timeout_tests PRIVATE winhttp)
+        add_test(NAME https_download_timeout COMMAND dingosdk_https_download_timeout_tests
+            "${CMAKE_CURRENT_BINARY_DIR}/https-download-fixtures")
+        add_executable(dingosdk_map_download_timeout_tests Extension/Assets/Test/map_download_timeout_tests.cpp
+            Engine/Vfs/thunderstore_package.cpp)
+        target_include_directories(dingosdk_map_download_timeout_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+        target_link_libraries(dingosdk_map_download_timeout_tests PRIVATE dingosdk_json)
+        add_test(NAME map_download_timeout COMMAND dingosdk_map_download_timeout_tests
+            "${CMAKE_CURRENT_BINARY_DIR}/map-download-fixtures")
         add_executable(dingosdk_voice_tests Extension/Multiplayer/Test/voice_chat_tests.cpp Extension/Multiplayer/Net/protocol.cpp
             Extension/Multiplayer/Net/delta_codec.cpp Extension/Multiplayer/Net/wire_codec.cpp)
         target_link_libraries(dingosdk_voice_tests PRIVATE dingosdk_lz4 dingosdk_zstd)
