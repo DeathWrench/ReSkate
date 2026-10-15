@@ -1,4 +1,5 @@
 #include "session_internal.h"
+#include "Engine/Core/Hooks/hooks.h"
 #include "Extension/Skater/drone_beacon.h"
 #include "Engine/Core/Debug/trace.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
@@ -894,7 +895,11 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, std::string_vi
         ~VoicePlaybackTick() { voice.process_native(base); }
     } voice_playback_tick{s.voice, base};
     s.base = base;
-    initialize_native_throwdowns(base);
+    {
+        // (Its hooks, and the throwdown lab's, go in together: one pause of the game's threads.)
+        HookBatch batch;
+        initialize_native_throwdowns(base);
+    }
     profile_runtime::install_script_error_log(base);
     profile_runtime::install_board_wear_hold(base);
     s.gameplay_ready = ready;
@@ -980,13 +985,17 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready, std::string_vi
         if (ready && !map_name.empty() && !s.hooks_prepared) {
             s.hooks_prepared = true;
             const auto started = now_us();
-            prepare_native_indicators(base);
-            prepare_player_ui(base);
             std::string entity_detail;
-            if (!install_entity_hooks(base, entity_detail) && !entity_detail.empty())
-                logging::log(logging::Level::warning, logging::Channel::runtime, "Multiplayer: {}", entity_detail);
-            prepare_remote_audio(base);
-            prepare_effects(base);
+            {
+                // All of them in one pause of the game's threads, not one each.
+                HookBatch batch;
+                prepare_native_indicators(base);
+                prepare_player_ui(base);
+                if (!install_entity_hooks(base, entity_detail) && !entity_detail.empty())
+                    logging::log(logging::Level::warning, logging::Channel::runtime, "Multiplayer: {}", entity_detail);
+                prepare_remote_audio(base);
+                prepare_effects(base);
+            }
             logging::log(logging::Level::info, logging::Channel::runtime,
                          "Multiplayer: remote-player hooks installed in {} ms (once, before anyone joins).",
                          (now_us() - started) / 1000);

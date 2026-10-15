@@ -308,9 +308,13 @@ void* __fastcall construct_native_renderer(void* self, void* configuration) {
     // The patched constructor loads its initial vector pointer from +0x90,
     // constructs the native default record there, and advances +0x98 itself.
     store_field(self, vector_begin_offset, buffers.records);
-    store_field(self, metadata_begin_offset, buffers.metadata);
-    store_field(self, metadata_end_offset, metadata_end);
+    // The metadata fields, like the state vectors, are the state owner's alone: the other
+    // renderer is 0x2daa00 bytes (Skate.exe+0x30c64cc), and +0x11aae28 is 18 MB past its end.
+    // Written there for every launch until 2026-10-15, they went into whatever memory lay there
+    // (a crash in store_field when it was not mapped).
     if (states) {
+        store_field(self, metadata_begin_offset, buffers.metadata);
+        store_field(self, metadata_end_offset, metadata_end);
         store_field(self, resource_state_vector_offset, buffers.resource_states);
         store_field(self, relation_mask_vector_offset, relation_mask_begin);
     }
@@ -319,9 +323,11 @@ void* __fastcall construct_native_renderer(void* self, void* configuration) {
 
     // The side-array fields are initialized by later renderer setup on the
     // stock build. Keep the external values authoritative across construction.
-    store_field(self, metadata_begin_offset, buffers.metadata);
-    store_field(self, metadata_end_offset, metadata_end);
-    if (states) state_owner.store(reinterpret_cast<std::uintptr_t>(self), std::memory_order_release);
+    if (states) {
+        store_field(self, metadata_begin_offset, buffers.metadata);
+        store_field(self, metadata_end_offset, metadata_end);
+        state_owner.store(reinterpret_cast<std::uintptr_t>(self), std::memory_order_release);
+    }
     if (load_field<std::byte*>(self, vector_begin_offset) != buffers.records ||
         load_field<std::byte*>(self, vector_capacity_offset) != record_end ||
         load_field<std::byte*>(self, vector_end_offset) < buffers.records ||

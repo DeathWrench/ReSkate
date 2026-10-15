@@ -84,17 +84,17 @@ custom map and then join a server on another map, the screen can stay black
 ### Multiplayer map downloads
 
 Missing multiplayer custom maps can be downloaded from Thunderstore after confirmation.
-The confirmation expires after two minutes. Checking, downloading, installing, applying and
-joining share one 30-minute budget; HTTP transfers get at most 27 minutes and leave three minutes
-for completion (confirmation and metadata checks reduce the available transfer time).
-Dedicated servers and player-hosted lobbies enforce the same overall limit on their own
-monotonic clocks. Ordinary map loading still gets 180 seconds; loading after a live installation
-still gets 30 seconds, capped by the remaining budget.
+The confirmation expires after two minutes. A session waits 30 minutes in all for the map to be
+checked, downloaded, installed, applied and joined; dedicated servers and player-hosted lobbies
+enforce the same limit on their own monotonic clocks. Ordinary map loading still gets 180
+seconds; loading after a live installation still gets 30 seconds.
 
-Timeouts cancel HTTP transfers and remove incomplete temporary downloads. Installation stops
-before replacing an existing mod when cancellation is observed. A filesystem commit or live
-merge already in progress finishes safely rather than being forcibly interrupted; it cannot
-restart a timed-out join. Retry after that work has finished, without restarting ReSkate.
+A download that has begun is not cut short when the session stops waiting: a large map on a slow
+connection goes on downloading (up to four hours), installs and is applied, and you are told to
+join the server again. Declining, or cancelling the download, stops it and removes the
+incomplete file. Installation stops before replacing an existing mod when cancellation is
+observed; a filesystem commit or live merge already in progress finishes safely rather than
+being forcibly interrupted. Retry after that work has finished, without restarting ReSkate.
 
 ### Controls
 

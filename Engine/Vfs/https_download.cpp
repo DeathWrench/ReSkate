@@ -197,7 +197,7 @@ std::optional<std::string> get_text(std::wstring_view url, std::uint64_t max_byt
     const auto path = std::filesystem::path(length ? std::wstring(folder, length) : L".") /
         (L"reskate-get-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(++serial) + L".tmp");
     std::error_code error;
-std::filesystem::remove(path, error); // discard a stale file left by an earlier process
+    std::filesystem::remove(path, error); // discard a stale file left by an earlier process
     const auto download = get(url, path, max_bytes, timeout_seconds, agent, watch);
     if (result) *result = download;
     std::optional<std::string> text;

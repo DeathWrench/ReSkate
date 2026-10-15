@@ -194,6 +194,9 @@ struct Settings {
     bool crash_reports{true};
     // On: launches send how long their steps took (RESKATE_TRACING=1 for the launcher and the game).
     bool performance_timings{};
+    // On: update to the newest pre-release on GitHub when there is one newer than the latest
+    // release. Turned off, the next check goes back to the latest release.
+    bool prereleases{};
     std::string steam_username;   // never the password
     bool steam_remember{true};
     bool steam_prefer_code{};
@@ -318,6 +321,8 @@ struct Changelog {
     std::string error;                               // why the last fetch failed
     update::ReleaseNote note;
     thunderstore::Readme text;
+    // Whether pre-releases are wanted (the setting), and whether `note` was fetched with them.
+    bool prereleases{}, fetched_prereleases{};
 
     ~Changelog() {
         if (worker.joinable()) worker.join();

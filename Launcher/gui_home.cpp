@@ -531,7 +531,10 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     else if (qr_open) qr_window(launcher, fonts, size, state.qr);
     else if (ui.sign_in) sign_in_window(launcher, fonts, size, ui);
     else if (ui.settings) settings_window(launcher, fonts, size, ui, window);
-    else if (ui.changelog) changelog_window(fonts, size, ui);
+    else if (ui.changelog) {
+        ui.notes.prereleases = launcher.settings().prereleases;
+        changelog_window(fonts, size, ui);
+    }
     else if (ui.mods) mods_window(launcher, fonts, size, ui, mods_panel, window);
     else if (state.phase == Phase::mods_broken)
         mods_broken_window(launcher, fonts, size, ui, mods_panel, state.mod_problems);

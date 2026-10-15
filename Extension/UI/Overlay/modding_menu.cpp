@@ -10,13 +10,60 @@
 
 #include <Windows.h>
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace dingosdk::overlay {
+namespace {
+// What the Mods folder holds, read again on a thread of its own every `period` while a page asks
+// for it; the page draws the last that was read. These pages are drawn on the game's render
+// thread, and reading the folder there (every mod's files, a whole folder's fingerprint for an
+// excluded one) held each frame up for tens of milliseconds to seconds, every 1.5 s (2026-10-15).
+template<class T> class FolderRead {
+public:
+    template<class Read> std::shared_ptr<const T> get(Read read, ULONGLONG period) {
+        const auto now = GetTickCount64();
+        if (now >= next_.load() && !reading_.exchange(true)) {
+            next_ = now + period;
+            try {
+                std::thread([this, read] {
+                    std::shared_ptr<const T> fresh;
+                    try { fresh = std::make_shared<const T>(read()); } catch (...) {}
+                    if (fresh) {
+                        std::lock_guard lock(mutex_);
+                        value_ = std::move(fresh);
+                    }
+                    reading_ = false;
+                }).detach();
+            } catch (...) { reading_ = false; }
+        }
+        std::lock_guard lock(mutex_);
+        return value_;
+    }
+    // What the page itself has just changed, shown until the next read.
+    void set(T value) {
+        std::lock_guard lock(mutex_);
+        value_ = std::make_shared<const T>(std::move(value));
+    }
+    void again() { next_ = 0; }
+private:
+    std::mutex mutex_;
+    std::shared_ptr<const T> value_;
+    std::atomic<bool> reading_{};
+    std::atomic<ULONGLONG> next_{};
+};
+struct DeckScan {
+    std::vector<std::string> installed, titles; // each installed deck's name for people
+    std::string chosen;
+};
+}
 namespace menu {
 // Board Break's decks (Extension/BoardBreak/board_break.h). The game has one deck model and each
 // deck is a mod's copy of it, so picking one applies the mods with that deck first and loads the
@@ -24,17 +71,18 @@ namespace menu {
 // installed, and for any other deck that is; the Mods folder is read again every 1.5 s while the
 // card shows. A deck goes by the name its deck.ini gives it (label), else by its folder's.
 void board_break_deck_card(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
-    static std::vector<std::string> installed;
-    static std::vector<std::string> titles; // each installed deck's name for people
-    static std::string chosen;
-    static ULONGLONG next_scan{};
-    if (const auto now = GetTickCount64(); now >= next_scan) {
-        installed = mods::installed_board_break_decks();
-        chosen = mods::wanted_board_break_deck();
-        titles.clear();
-        for (const auto& deck : installed) titles.push_back(board_break::deck_label(deck));
-        next_scan = now + 1500;
-    }
+    static auto* scans = new FolderRead<DeckScan>; // process lifetime, as the threads that fill it
+    const auto scan = scans->get([] {
+        DeckScan read;
+        read.installed = mods::installed_board_break_decks();
+        read.chosen = mods::wanted_board_break_deck();
+        for (const auto& deck : read.installed) read.titles.push_back(board_break::deck_label(deck));
+        return read;
+    }, 1500);
+    if (!scan) return;
+    const auto& installed = scan->installed;
+    const auto& titles = scan->titles;
+    const auto& chosen = scan->chosen;
     if (!model.board_break.available || installed.empty()) return;
     const auto there = [&](const std::string& deck) { return std::find(installed.begin(), installed.end(), deck) != installed.end(); };
     // The known decks in their own order, then the others that are installed: the numbers are the
@@ -102,14 +150,14 @@ std::string mod_contents(const mods::Mod& mod) {
 // while the game runs (it takes effect at the next level load), including a
 // mod folder added since launch.
 void draw_installed_mods(SkateMenu& menu) {
-    static mods::ModList list;
-    static ULONGLONG next_scan{};
+    static auto* scans = new FolderRead<mods::ModList>; // process lifetime, as the threads that fill it
     static std::string action_error;
-    const auto now = GetTickCount64();
-    if (now >= next_scan) {
-        list = mods::scan_mods(mods::engine_data_root());
-        next_scan = now + 1500;
+    const auto scanned = scans->get([] { return mods::scan_mods(mods::engine_data_root()); }, 1500);
+    if (!scanned) {
+        menu::note("Reading the Mods folder...");
+        return;
     }
+    const auto& list = *scanned;
     const auto& launch = mods::catalog();
     const auto applied = live_mods::applied_mods();
     // A Board Break deck pack is in effect when one of the decks inside it is (mod_catalog.h).
@@ -260,7 +308,10 @@ void draw_installed_mods(SkateMenu& menu) {
             auto entries = list.entries;
             entries[*toggle].enabled = !entries[*toggle].enabled;
             mods::save_mod_order(list.root, entries);
-            next_scan = 0;
+            auto shown = list;
+            shown.entries = std::move(entries);
+            scans->set(std::move(shown));
+            scans->again();
             action_error.clear();
         } catch (const std::exception& error) { action_error = error.what(); }
     }

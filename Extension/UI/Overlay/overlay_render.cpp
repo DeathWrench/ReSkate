@@ -9,6 +9,8 @@
 #include "chat_emotes.h"
 #include "input_capture.h"
 #include "cursor.h"
+#include <algorithm>
+#include <chrono>
 #include <dxgi1_6.h>
 #include <imgui_internal.h>
 
@@ -364,9 +366,16 @@ bool setup_graphics() {
     // Thumbnails are read from the game's own data at startup; the read is
     // normally long finished by the time the first frame gets here.
     // Emotes and Hall of Meat's images reserve their room before the park previews build the atlas, and fill it after.
-    const auto emote_count = reserve_chat_emotes(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
-    reserve_hall_of_meat_images(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
-    const auto preview_count = load_park_previews(*ImGui::GetIO().Fonts, std::chrono::seconds(5));
+    // (Five seconds for the three together, not each: this is the game's render thread, and three
+    // reads still under way at the first frame held it up to fifteen.)
+    const auto waited_until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    const auto left = [&] {
+        return std::max(std::chrono::milliseconds(0),
+            std::chrono::duration_cast<std::chrono::milliseconds>(waited_until - std::chrono::steady_clock::now()));
+    };
+    const auto emote_count = reserve_chat_emotes(*ImGui::GetIO().Fonts, left());
+    reserve_hall_of_meat_images(*ImGui::GetIO().Fonts, left());
+    const auto preview_count = load_park_previews(*ImGui::GetIO().Fonts, left());
     fill_chat_emotes(*ImGui::GetIO().Fonts);
     fill_hall_of_meat_images(*ImGui::GetIO().Fonts);
     if (emote_count)
@@ -599,6 +608,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     auto& s = state();
     if (flags & DXGI_PRESENT_TEST) return;
     dingosdk::profiler::record_present();
+    DINGO_PROFILE_ZONE("present/overlay");
     std::lock_guard lock(s.render_mutex);
     // Said once: a log without this line is a game whose presentations never reach the overlay.
     if (static bool said{}; !std::exchange(said, true))

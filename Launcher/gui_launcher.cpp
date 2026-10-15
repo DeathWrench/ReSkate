@@ -66,6 +66,7 @@ Settings load_settings(const fs::path& path) {
         settings.updates = json.value("updates", settings.updates);
         settings.crash_reports = json.value("crash_reports", settings.crash_reports);
         settings.performance_timings = json.value("performance_timings", settings.performance_timings);
+        settings.prereleases = json.value("prereleases", settings.prereleases);
         settings.steam_username = json.value("steam_username", std::string());
         settings.steam_remember = json.value("steam_remember", settings.steam_remember);
         settings.steam_prefer_code = json.value("steam_prefer_code", settings.steam_prefer_code);
@@ -92,6 +93,7 @@ void save_settings(const fs::path& path, const Settings& settings) {
     json["updates"] = settings.updates;
     json["crash_reports"] = settings.crash_reports;
     json["performance_timings"] = settings.performance_timings;
+    json["prereleases"] = settings.prereleases;
     json["steam_username"] = settings.steam_username;
     json["steam_remember"] = settings.steam_remember;
     json["steam_prefer_code"] = settings.steam_prefer_code;
@@ -310,7 +312,7 @@ bool Launcher::runtime_outdated(const update::Config& config) const {
 void Launcher::run_check() {
     set(Phase::checking, "Checking for updates");
     update::remove_previous_launcher(session_.self);
-    auto config = update::fetch_config();
+    auto config = update::fetch_config(settings_.prereleases);
     {
         std::lock_guard lock(mutex_);
         state_.config = config;
@@ -318,7 +320,7 @@ void Launcher::run_check() {
     const bool newer = config && (launcher_outdated(*config) || runtime_outdated(*config));
     if (newer && update::binary_updates_enabled() && binaries_ && settings_.updates) {
         set(Phase::update_available, "A ReSkate update is ready",
-            std::format("Version {} will be downloaded and installed.",
+            std::format("{} {} will be downloaded and installed.", config->prerelease ? "Pre-release" : "Version",
                 config->runtime.version.empty() ? config->launcher.version : config->runtime.version));
         return;
     }
@@ -520,6 +522,9 @@ void Launcher::run_play() {
 namespace dingosdk::launcher_gui {
 bool updates_enabled(const launcher_app::Session& session) {
     return detail::load_settings(detail::settings_path(session)).updates;
+}
+bool prereleases_enabled(const launcher_app::Session& session) {
+    return detail::load_settings(detail::settings_path(session)).prereleases;
 }
 launcher::LaunchOptions saved_launch_options(const launcher_app::Session& session) {
     return detail::launch_options(detail::load_settings(detail::settings_path(session)));

@@ -253,7 +253,7 @@ int main(int argc, char** argv) {
             fake_http::state.stop_at = stage;
             fake_http::state.timeout = timeout;
             result = get();
-            check(!result.ok && result.error == (timeout ? ERROR_TIMEOUT : ERROR_CANCELLED),
+            check(!result.ok && result.error == static_cast<DWORD>(timeout ? ERROR_TIMEOUT : ERROR_CANCELLED),
                   "pending operation or final completion reports the authoritative stop reason");
             check(removed(), "stopped GET removes only its created output, including partial bytes");
             check(closed(), "stopped request completes handle-closing lifetime handshake");

@@ -47,7 +47,6 @@
 #include "Extension/World/level_loading.h"
 #include "Extension/World/loading_screen.h"
 #include <Windows.h>
-#include <TlHelp32.h>
 #include <dxgi.h>
 #include <Psapi.h>
 #include <algorithm>
@@ -57,6 +56,7 @@
 #include <iomanip>
 #include <optional>
 #include <sstream>
+#include <format>
 #include <thread>
 
 namespace dingosdk::runtime::detail {
@@ -1311,47 +1311,33 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
                     said_at = GetTickCount64();
                     said_private = counters.PrivateUsage; said_players = players; said_skaters = skaters;
                     const auto gigabytes = [](std::uint64_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0); };
-                    // Whose memory it is. The game allocates from its own pools; what ReSkate, the
-                    // Spotify library in it and Windows' own libraries allocate comes from the
-                    // process's heaps, so memory that grows there is not the game's (a leak looked
-                    // for in the music player, 2026-10-13). Threads and handles grow with a leak of
-                    // those. HeapSummary is asked for by name: older Windows SDKs do not declare it.
-                    struct Summary { DWORD size; SIZE_T allocated, committed, reserved, most; };
-                    static const auto heap_summary = reinterpret_cast<BOOL (WINAPI*)(HANDLE, DWORD, Summary*)>(
-                        GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "HeapSummary"));
-                    std::uint64_t heap_allocated{}, heap_committed{};
-                    std::array<HANDLE, 256> heaps{};
-                    const auto heap_count = GetProcessHeaps(static_cast<DWORD>(heaps.size()), heaps.data());
-                    for (DWORD i = 0; heap_summary && i < heap_count && i < heaps.size(); ++i) {
-                        Summary summary{sizeof(Summary)};
-                        if (heap_summary(heaps[i], 0, &summary)) {
-                            heap_allocated += summary.allocated;
-                            heap_committed += summary.committed;
-                        }
-                    }
+                    // Handles grow with a leak of them (a leak looked for in the music player,
+                    // 2026-10-13); counting them is cheap.
+                    //
+                    // The heaps' sizes and the threads were counted here as well, and that held the
+                    // game's frame up: HeapSummary walks a whole heap with its lock held, which took
+                    // the client thread from half a second to two seconds each time (a player's
+                    // profile, 2026-10-15), every two minutes and at each change above. They are not
+                    // counted any more. The GPU's share and the memory ledger (a DXGI factory, a lock)
+                    // are written from a thread of their own, so the line costs the frame nothing.
                     DWORD handles{};
                     GetProcessHandleCount(GetCurrentProcess(), &handles);
-                    unsigned threads{};
-                    if (const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); snapshot != INVALID_HANDLE_VALUE) {
-                        THREADENTRY32 entry{sizeof(entry)};
-                        const auto self = GetCurrentProcessId();
-                        for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry))
-                            if (entry.th32OwnerProcessID == self) ++threads;
-                        CloseHandle(snapshot);
-                    }
-                    // The GPU's share (its system memory is not in the committed figure), and while
-                    // the memory ledger is on, who holds the most (memory_ledger.h).
-                    std::string more;
-                    try {
-                        if (const auto gpu = dingosdk::memory_ledger::gpu_line(); !gpu.empty()) more += " " + gpu + ".";
-                        if (const auto owners = dingosdk::memory_ledger::owners_line(); !owners.empty()) more += " " + owners + ".";
-                    } catch (...) {}
-                    dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
-                        "Memory: %.2f GB committed, %.2f GB in RAM; %d player(s) in the session, %d built as skaters (player distance %.0f m); map %s. "
-                        "Outside the game's own pools: %.2f GB in use of %.2f GB in %lu heap(s); %u thread(s), %lu handle(s).%s",
+                    auto line = std::format(
+                        "Memory: {:.2f} GB committed, {:.2f} GB in RAM; {} player(s) in the session, {} built as skaters "
+                        "(player distance {:.0f} m); map {}. {} handle(s).",
                         gigabytes(counters.PrivateUsage), gigabytes(counters.WorkingSetSize), players, skaters, mp.player_distance,
-                        (session && !mp.map.empty() ? mp.map : r.multiplayer_map).c_str(),
-                        gigabytes(heap_allocated), gigabytes(heap_committed), heap_count, threads, handles, more.c_str());
+                        session && !mp.map.empty() ? mp.map : r.multiplayer_map, handles);
+                    try {
+                        std::thread([line = std::move(line)]() mutable {
+                            try {
+                                // The GPU's share (its system memory is not in the committed figure),
+                                // and while the memory ledger is on, who holds the most (memory_ledger.h).
+                                if (const auto gpu = dingosdk::memory_ledger::gpu_line(); !gpu.empty()) line += " " + gpu + ".";
+                                if (const auto owners = dingosdk::memory_ledger::owners_line(); !owners.empty()) line += " " + owners + ".";
+                                dingosdk::logging::write(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime, line);
+                            } catch (...) {}
+                        }).detach();
+                    } catch (...) {}
                 }
             }
         }

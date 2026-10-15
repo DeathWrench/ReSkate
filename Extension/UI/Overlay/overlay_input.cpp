@@ -508,9 +508,14 @@ extern "C" unsigned DingoSDKOverlayReadPromptKeys() {
     // (Not while a menu, the console or chat has the keyboard; the card itself having the pointer is no reason.)
     const bool typing = s.visible.load() || s.console_visible.load() || s.editor_visible.load() || s.chat_visible.load() || s.hub_typing.load();
     if (!window || s.stop.load() || s.failed.load() || typing || !game_window_foreground(window)) return 0;
-    OverlayInputAccess access;
     unsigned keys{};
     constexpr int wanted[]{VK_LEFT, VK_RIGHT, VK_RETURN, VK_ESCAPE};
+    if (std::array<std::uint64_t, 4> held{}; sampled_keys(window, held)) {
+        for (unsigned bit = 0; bit < 4; ++bit)
+            if (held[wanted[bit] / 64] >> (wanted[bit] % 64) & 1) keys |= 1u << bit;
+        return keys;
+    }
+    OverlayInputAccess access;
     for (unsigned bit = 0; bit < 4; ++bit)
         if (GetAsyncKeyState(wanted[bit]) & 0x8000) keys |= 1u << bit;
     return keys;
@@ -524,8 +529,13 @@ extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* ou
     const HWND window = s.window.load();
     if (!window || s.stop.load() || s.failed.load() || (!allow_menu && interactive_visible(s)) ||
         !game_window_foreground(window)) return;
-    // Read through the overlay's bypass: freecam capture hides keys from the game.
-    {
+    // Read through the overlay's bypass: freecam capture hides keys from the game. (As sampled
+    // off this thread when there is a recent sample, cursor.cpp.)
+    if (std::array<std::uint64_t, 4> held{}; sampled_keys(window, held)) {
+        for (unsigned key = 0; key < 256; ++key)
+            if (dingosdk::bindable_keyboard_key(key) && (held[key / 64] >> (key % 64) & 1))
+                output->keys[key / 64] |= std::uint64_t{1} << (key % 64);
+    } else {
         OverlayInputAccess access;
         for (unsigned key = 0; key < 256; ++key) {
             if (dingosdk::bindable_keyboard_key(key) && (GetAsyncKeyState(key) & 0x8000)) {
@@ -567,7 +577,13 @@ extern "C" void DingoSDKOverlayReadFlightInput(dingosdk::overlay::FlightInput* o
         return;
     }
     OverlayInputAccess editor_access;
-    const auto held = [](int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; };
+    // (The keys as sampled off this thread when there is a sample, cursor.cpp: this runs every
+    // client frame while flying.)
+    std::array<std::uint64_t, 4> sampled{};
+    const bool have_sample = sampled_keys(window, sampled);
+    const auto held = [&](int key) {
+        return have_sample ? ((sampled[key / 64] >> (key % 64)) & 1) != 0 : (GetAsyncKeyState(key) & 0x8000) != 0;
+    };
     // Physical right button: the logical one unless the buttons are swapped.
     const bool swapped = GetSystemMetrics(SM_SWAPBUTTON) != 0;
     const bool raw = raw_mouse_live(s);

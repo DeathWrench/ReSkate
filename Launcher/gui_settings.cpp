@@ -435,6 +435,11 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       "Turn off to keep the ReSkate.dll and launcher you have, such as a test build someone gave you. "
                       "Skate's own Steam updates are not affected.",
                       settings.updates);
+        setting_check("Test pre-releases",
+                      "Update to the newest pre-release on GitHub when there is one, to try what is coming before it "
+                      "is released. Pre-releases are less tested. Turn off to go back to the latest release; the "
+                      "launcher picks a change up when it next starts.",
+                      settings.prereleases);
         ImGui::Spacing();
         section_caption(fonts, "TROUBLESHOOTING");
         ImGui::AlignTextToFramePadding();

@@ -1,3 +1,4 @@
+#include "Engine/Core/Platform/memory.h"
 #include "Engine/Core/Log/logging.h"
 #include "local_customization_runtime.h"
 #include "Extension/Profile/runtime_internal.h"
@@ -5,6 +6,7 @@
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Build/20260929/local_customization.h"
+#include <array>
 #include <mutex>
 #include <set>
 
@@ -36,16 +38,19 @@ std::uint32_t cosmetic_hash(std::string_view value) {
     return hash;
 }
 
+// A name of up to 255 characters, read in place (memory::peek_cstring). It was read a character
+// at a time through ReadProcessMemory: a system call each, some 100 for a name, for every one of
+// up to 8192 items and their categories when the catalog is walked, which is done on the client
+// thread under native_mutex (2026-10-15).
 bool cosmetic_text(std::uintptr_t p, std::string& value) {
     value.clear();
-    for (std::size_t i = 0; i <= 255; ++i) {
-        unsigned char c{};
-        if (!read(p + i, c)) return false;
-        if (!c) return true;
-        if (c < 32 || c == 127) return false;
-        value += static_cast<char>(c);
-    }
-    return false;
+    std::array<char, 257> text{};
+    const auto length = dingosdk::memory::peek_cstring(p, text.data(), 256);
+    if (length < 0) return false;
+    for (std::ptrdiff_t i = 0; i < length; ++i)
+        if (static_cast<unsigned char>(text[i]) < 32 || text[i] == 127) return false;
+    value.assign(text.data(), static_cast<std::size_t>(length));
+    return true;
 }
 
 bool cosmetic_array(std::uintptr_t p, std::size_t stride, std::size_t limit, std::uint32_t& count) {
@@ -344,6 +349,12 @@ bool load_cosmetic_hook(const void* wrapper, void* destination) {
         std::vector<CosmeticBorrowedArray<CosmeticNativeItem>> item_arrays;
         words.reserve(16 * 257); item_arrays.reserve(16);
         std::vector<CosmeticRuntime::HeldSlot> held;
+        // (Looked up once: Json::value returns a copy, and this was asked for every slot, a copy
+        // of the whole inventory each time, in the game's own load call.)
+        static const auto no_inventory = dingosdk::Json::object();
+        const auto inventory_found = snapshot.customization.find("inventory");
+        const auto& inventory = inventory_found != snapshot.customization.end() && inventory_found->is_object()
+            ? *inventory_found : no_inventory;
         for (std::size_t i = 0; i < saved->recipes.size(); ++i) {
             const auto& recipe = saved->recipes[i]; const auto& expected = defaults.recipes[i];
             if (recipe.template_key != expected.template_key || recipe.template_version != expected.template_version ||
@@ -389,7 +400,6 @@ bool load_cosmetic_hook(const void* wrapper, void* destination) {
                         held.push_back({i, *slot, expected.items[j].asset});
                         slot = &expected.items[j];
                     } else {
-                        const auto& inventory = snapshot.customization.value("inventory", dingosdk::Json::object());
                         if (inventory.contains(slot->asset) && !inventory.at(slot->asset).get<bool>())
                             slot = &expected.items[j];
                     }

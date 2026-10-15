@@ -21,6 +21,8 @@
 #include <Windows.h>
 #include <shlobj.h>
 #include <algorithm>
+#include <thread>
+#include <sstream>
 #include <array>
 #include <atomic>
 #include <cctype>
@@ -455,13 +457,13 @@ void load_feel(Feel& f) {
         }
     } catch (...) {}
 }
+// Written on a thread of its own: this is called from the client tick every few seconds while
+// wear changes, and a write (a folder lookup, a file truncated and written, whatever the virus
+// scanner does on close) held the game's frame up (2026-10-15). The text is taken under the lock;
+// the writes are kept in order by their own.
 void save_feel(Feel& f) {
     try {
-        const auto path = settings_path();
-        if (path.empty()) return;
-        std::error_code error;
-        std::filesystem::create_directories(path.parent_path(), error);
-        std::ofstream out(path, std::ios::trunc);
+        std::ostringstream out;
         for (const auto& info : setting_info) out << info.name << "=" << setting_value(f.settings, info.name) << "\n";
         for (const auto& [deck, worn] : f.wear) out << "wear." << deck << "=" << std::format("{:.4f}", worn) << "\n";
         if (!f.metal.empty()) {
@@ -470,6 +472,18 @@ void save_feel(Feel& f) {
             out << "\n";
         }
         f.dirty = false;
+        std::thread([text = out.str()] {
+            static std::mutex writing;
+            std::lock_guard lock(writing);
+            try {
+                const auto path = settings_path();
+                if (path.empty()) return;
+                std::error_code error;
+                std::filesystem::create_directories(path.parent_path(), error);
+                std::ofstream file(path, std::ios::trunc);
+                file << text;
+            } catch (...) {}
+        }).detach();
     } catch (...) {}
 }
 // The settings into the atomics the physics thread reads.
@@ -520,7 +534,7 @@ DeckSetup read_deck_setup(std::string_view deck) {
     return out;
 }
 
-// The same, kept a few seconds per deck: the menus ask every frame.
+// The same, kept a minute per deck: the menus ask every frame.
 DeckSetup setup_of(std::string_view deck) {
     struct Kept {
         DeckSetup setup;
@@ -531,7 +545,9 @@ DeckSetup setup_of(std::string_view deck) {
     const auto now = GetTickCount64();
     {
         std::lock_guard lock(mutex);
-        if (const auto at = kept.find(deck); at != kept.end() && now - at->second.at < 3000) return at->second.setup;
+        // (A minute: each look lists every mod's folder, and the world model asked every few seconds
+        // on the client thread while a breakable deck was out.)
+        if (const auto at = kept.find(deck); at != kept.end() && now - at->second.at < 60000) return at->second.setup;
     }
     auto setup = read_deck_setup(deck);
     std::lock_guard lock(mutex);
