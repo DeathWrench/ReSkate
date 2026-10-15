@@ -42,6 +42,8 @@
 #include "Extension/Trainer/trainer.h"
 #include "Extension/World/level_loading.h"
 #include "Extension/World/loading_screen.h"
+#include <Windows.h>
+#include <TlHelp32.h>
 #include <dxgi.h>
 #include <Psapi.h>
 #include <algorithm>
@@ -1271,13 +1273,48 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
                 static std::uint64_t said_private{};
                 static int said_players = -1, said_skaters = -1;
                 const auto moved = counters.PrivateUsage > said_private ? counters.PrivateUsage - said_private : said_private - counters.PrivateUsage;
-                if (moved >= (256ull << 20) || std::abs(players - said_players) >= 5 || std::abs(skaters - said_skaters) >= 5) {
+                // (And every two minutes whatever it has done: a slow leak moves it by less than
+                // that quarter for a long while.)
+                static std::uint64_t said_at{};
+                if (moved >= (256ull << 20) || std::abs(players - said_players) >= 5 || std::abs(skaters - said_skaters) >= 5 ||
+                        GetTickCount64() - said_at >= 120000) {
+                    said_at = GetTickCount64();
                     said_private = counters.PrivateUsage; said_players = players; said_skaters = skaters;
                     const auto gigabytes = [](std::uint64_t bytes) { return static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0); };
+                    // Whose memory it is. The game allocates from its own pools; what ReSkate, the
+                    // Spotify library in it and Windows' own libraries allocate comes from the
+                    // process's heaps, so memory that grows there is not the game's (a leak looked
+                    // for in the music player, 2026-10-13). Threads and handles grow with a leak of
+                    // those. HeapSummary is asked for by name: older Windows SDKs do not declare it.
+                    struct Summary { DWORD size; SIZE_T allocated, committed, reserved, most; };
+                    static const auto heap_summary = reinterpret_cast<BOOL (WINAPI*)(HANDLE, DWORD, Summary*)>(
+                        GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "HeapSummary"));
+                    std::uint64_t heap_allocated{}, heap_committed{};
+                    std::array<HANDLE, 256> heaps{};
+                    const auto heap_count = GetProcessHeaps(static_cast<DWORD>(heaps.size()), heaps.data());
+                    for (DWORD i = 0; heap_summary && i < heap_count && i < heaps.size(); ++i) {
+                        Summary summary{sizeof(Summary)};
+                        if (heap_summary(heaps[i], 0, &summary)) {
+                            heap_allocated += summary.allocated;
+                            heap_committed += summary.committed;
+                        }
+                    }
+                    DWORD handles{};
+                    GetProcessHandleCount(GetCurrentProcess(), &handles);
+                    unsigned threads{};
+                    if (const auto snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0); snapshot != INVALID_HANDLE_VALUE) {
+                        THREADENTRY32 entry{sizeof(entry)};
+                        const auto self = GetCurrentProcessId();
+                        for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry))
+                            if (entry.th32OwnerProcessID == self) ++threads;
+                        CloseHandle(snapshot);
+                    }
                     dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
-                        "Memory: %.2f GB committed, %.2f GB in RAM; %d player(s) in the session, %d built as skaters (player distance %.0f m); map %s.",
+                        "Memory: %.2f GB committed, %.2f GB in RAM; %d player(s) in the session, %d built as skaters (player distance %.0f m); map %s. "
+                        "Outside the game's own pools: %.2f GB in use of %.2f GB in %lu heap(s); %u thread(s), %lu handle(s).",
                         gigabytes(counters.PrivateUsage), gigabytes(counters.WorkingSetSize), players, skaters, mp.player_distance,
-                        (session && !mp.map.empty() ? mp.map : r.multiplayer_map).c_str());
+                        (session && !mp.map.empty() ? mp.map : r.multiplayer_map).c_str(),
+                        gigabytes(heap_allocated), gigabytes(heap_committed), heap_count, threads, handles);
                 }
             }
         }
