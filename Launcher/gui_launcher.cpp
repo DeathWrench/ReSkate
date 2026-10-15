@@ -161,6 +161,19 @@ void Launcher::save() {
     SetEnvironmentVariableW(L"RESKATE_TRACING", settings_.performance_timings ? L"1" : L"0");
 }
 
+void Launcher::check_again_if_update_choices_changed() {
+    // "Install ReSkate updates" or "Test pre-releases" changed: the update check runs again now,
+    // so the release that applies (or keeping the files there are) is offered without a restart.
+    // Not while a download, an update or a launch is under way, the game runs, or a merge waits
+    // on an answer about mods: the next check or start picks it up then.
+    if (settings_.updates == checked_updates_.load() && settings_.prereleases == checked_prereleases_.load()) return;
+    if (busy_ || launched_) return;
+    const auto phase = snapshot().phase;
+    if (phase == Phase::ready || phase == Phase::update_available || phase == Phase::game_missing ||
+        phase == Phase::game_outdated || phase == Phase::failed)
+        check();
+}
+
 template<class Task> void Launcher::start(Task task) {
     if (busy_) return;
     if (worker_.joinable()) worker_.join();
@@ -310,6 +323,8 @@ bool Launcher::runtime_outdated(const update::Config& config) const {
 }
 
 void Launcher::run_check() {
+    checked_updates_ = settings_.updates;
+    checked_prereleases_ = settings_.prereleases;
     set(Phase::checking, "Checking for updates");
     update::remove_previous_launcher(session_.self);
     auto config = update::fetch_config(settings_.prereleases);

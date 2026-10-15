@@ -247,6 +247,8 @@ public:
     Settings& settings() { return settings_; }
     const launcher_app::Session& session() const { return session_; }
     void save();
+    // After settings are closed: the update check again, when an update choice changed.
+    void check_again_if_update_choices_changed();
 
     void check();
     // The merge the game would do at startup, run here so its failures can be
@@ -273,6 +275,9 @@ private:
     std::vector<std::wstring> arguments_;
     Settings settings_;
     bool relaunched_{};
+    // The update choices the last check was made with: one changed in settings is checked
+    // again straight away (save()).
+    std::atomic<bool> checked_updates_{true}, checked_prereleases_{};
     bool binaries_{true};
     std::mutex mutex_;
     std::condition_variable answered_;

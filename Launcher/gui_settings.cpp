@@ -437,8 +437,8 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
                       settings.updates);
         setting_check("Test pre-releases",
                       "Update to the newest pre-release on GitHub when there is one, to try what is coming before it "
-                      "is released. Pre-releases are less tested. Turn off to go back to the latest release; the "
-                      "launcher picks a change up when it next starts.",
+                      "is released. Pre-releases are less tested. Turn off to go back to the latest release. "
+                      "The launcher checks again as soon as these settings are closed.",
                       settings.prereleases);
         ImGui::Spacing();
         section_caption(fonts, "TROUBLESHOOTING");
@@ -481,6 +481,7 @@ void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui
     ImGui::End();
     if (!open) {
         launcher.save();
+        launcher.check_again_if_update_choices_changed();
         // Read again the next time: the game may have run in between.
         ui.game.loaded = false;
     }
