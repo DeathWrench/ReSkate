@@ -12,6 +12,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Console/commands.cpp
     Extension/Console/perf_commands.cpp
     Extension/Skater/console_commands.cpp
+    Extension/Skater/drone_outfit.cpp
     Extension/Multiplayer/console_commands.cpp
     Extension/Customization/console_commands.cpp
     Extension/Multiplayer/Session/session.cpp
@@ -85,6 +86,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Music/music_inject.cpp
     Extension/World/mesh_unload_guard.cpp
     Extension/World/shader_permutation_guard.cpp
+    Extension/World/light_table_guard.cpp
     Extension/World/stack_check_report.cpp
     Extension/World/texture_handle_limit.cpp
     Extension/Settings/replay_drafts.cpp
@@ -155,6 +157,7 @@ add_library(dingosdk_runtime SHARED
     Extension/RoadRash/road_rash_commands.cpp
     Extension/BoardBreak/board_break.cpp
     Extension/BoardBreak/board_break_commands.cpp
+    Extension/BoardBreak/board_break_audio.cpp
     Extension/Trainer/trainer.cpp
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp

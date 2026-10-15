@@ -1,5 +1,6 @@
 #include "session_internal.h"
 #include "Extension/Profile/local_profile_runtime.h"
+#include "Extension/Skater/drone_beacon.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Game/Build/supported_build.h"
@@ -282,6 +283,8 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     apply_object_limit(s, p.object_limit); // after server_admin, which exempts an admin
     s.object_scaling = !dedicated_host(s) || p.object_scaling;
     s.sync_effects = !dedicated_host(s) || p.sync_effects;
+    s.sync_drones = !dedicated_host(s) || p.sync_drones;
+    drone::beacon::server_allows().store(s.sync_drones);
     apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts);
     s.enforce_tuning = p.enforce_tuning;
     s.server_votes = dedicated_host(s) ? p.server_votes : 0;
@@ -372,6 +375,10 @@ bool accept_data(Peer &peer, const Packet &p, std::uint64_t now) {
             for (const auto &impact : p.impacts) peer.impacts.emplace_back(due, impact);
             while (peer.impacts.size() > 64) peer.impacts.pop_front();
         }
+    } else if (p.kind == PacketKind::drone) {
+        accepted = drone::beacon::server_allows().load(std::memory_order_relaxed) && peer.effect_budget.accept(now);
+        if (accepted)
+            drone::beacon::receive(peer.member.id, peer.member.name, p.drone_position, p.drone_rotation, p.drone_active);
     } else if (p.kind == PacketKind::pose)
         accepted = peer.poses.push_validated(p, now);
     if (accepted) {
