@@ -671,7 +671,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
             record("{\"event\":\"controller_binding_triggered\",\"action\":\"offboard_up_velocity\"}");
         }
     }
-    if (debug_request || r.debug_model.free_camera || r.debug_model.first_person || r.debug_model.noclip ||
+    if (debug_request || r.debug_model.free_camera || r.debug_model.first_person || r.debug_model.drone_follow || r.debug_model.noclip ||
         now >= r.next_debug) {
         ScheduledWorkScope work{r, debug_request.has_value()};
         r.next_debug = now + 100;

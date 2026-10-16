@@ -3,6 +3,7 @@
 // sticks. Flown in a world of one floor (y = 0) and one wall (x = 20).
 #include "Extension/Skater/drone_beacon.h"
 #include "Extension/Skater/drone_flight.h"
+#include "Extension/Skater/drone_follow.h"
 #include <cstdio>
 using namespace dingosdk::drone;
 using Vec3 = std::array<float, 3>;
@@ -253,6 +254,95 @@ int main() {
         heard = beacon::snapshot(at_time(n - 1));
         CHECK(heard.size() == 1 && heard[0].throttle > 0.5f && heard[0].speed > 5.0f, "a drone climbing hard sounds busier and faster");
         beacon::forget(7);
+    }
+    // Follow mode (drone_follow.h): the autopilot flies the real model behind a skater.
+    {
+        namespace follow = dingosdk::drone::follow;
+        using dingosdk::drone::detail::Vec3;
+        const follow::Tuning tuning;
+        const auto cfg = follow::flight_settings(settings(), tuning);
+        Vec3 skater{0, 1, 0};
+        Vec3 heading{0, 0, -1};
+        auto camera = follow::pose_facing(follow::spot(skater, {0, 0, 0}, heading, tuning, 0.0f), skater);
+        State drone;
+        follow::Pilot pilot;
+        float worst_frame = 0.0f;   // the skater furthest off the middle of the shot, degrees
+        float worst_up = 0.0f, worst_down = 0.0f; // the skater above / below the middle of the shot, degrees
+        float lowest = 1e9f, highest = -1e9f;     // the drone's height over the skater's ground
+        float nose_up = 0.0f, nose_down = 0.0f;   // the drone's steepest lean back / forward, degrees
+        float settle = 1.5f; // seconds of each run not measured (only the take-off)
+        const auto run = [&](float seconds, float speed, float turn_rate, bool ollies = false) {
+            for (float t = 0; t < seconds; t += tick) {
+                heading = dingosdk::drone::detail::rotate(heading, {0, 1, 0}, turn_rate * tick);
+                skater = dingosdk::drone::detail::add(skater, dingosdk::drone::detail::scale(heading, speed * tick));
+                // An ollie every 1.5 s: up 0.8 m and down again over 0.6 s.
+                const float phase = std::fmod(t, 1.5f);
+                skater[1] = 1.0f + (ollies && phase < 0.6f ? 0.8f * std::sin(phase / 0.6f * 3.14159f) : 0.0f);
+                const Vec3 at{camera[12], camera[13], camera[14]};
+                const auto cmd = follow::fly(pilot, drone, at, skater, heading, tick, cfg, tuning);
+                camera = step_drone_cmd(camera, drone, cmd, tick, 10.0f, cfg);
+                if (t > settle) {
+                    Vec3 look = dingosdk::drone::detail::scale(dingosdk::drone::detail::row(camera, 2), -1.0f);
+                    Vec3 to{skater[0] - camera[12], skater[1] - camera[13], skater[2] - camera[14]};
+                    look[1] = to[1] = 0.0f;
+                    const float c = dingosdk::drone::detail::dot(dingosdk::drone::detail::normalize(look), dingosdk::drone::detail::normalize(to));
+                    worst_frame = std::max(worst_frame, std::acos(std::clamp(c, -1.0f, 1.0f)) * 57.2958f);
+                    const Vec3 view = dingosdk::drone::detail::normalize(dingosdk::drone::detail::scale(dingosdk::drone::detail::row(camera, 2), -1.0f));
+                    const Vec3 body = dingosdk::drone::detail::normalize(Vec3{skater[0] - camera[12], skater[1] + 0.9f - camera[13], skater[2] - camera[14]});
+                    const float above = (std::asin(body[1]) - std::asin(view[1])) * 57.2958f;
+                    worst_up = std::max(worst_up, above);
+                    worst_down = std::max(worst_down, -above);
+                    const float nose = std::asin(std::clamp(-dingosdk::drone::detail::row(drone.body, 2)[1], -1.0f, 1.0f)) * 57.2958f;
+                    nose_up = std::max(nose_up, nose);
+                    nose_down = std::max(nose_down, -nose);
+                    lowest = std::min(lowest, camera[13] - 1.0f);
+                    highest = std::max(highest, camera[13] - 1.0f);
+                }
+            }
+        };
+        const auto behind = [&] {
+            const Vec3 d{camera[12] - skater[0], camera[13] - skater[1], camera[14] - skater[2]};
+            return std::array<float, 2>{-dingosdk::drone::detail::dot(d, heading), d[1]};
+        };
+        run(6.0f, 8.0f, 0.0f); // rolling straight at 8 m/s
+        settle = 0.0f;         // from here on every moment counts
+        std::printf("Follow: straight, worst framing %.1f deg [nose %.0f up %.0f down]\n", worst_frame, nose_up, nose_down);
+        worst_frame = 0.0f;
+        auto b = behind();
+        CHECK(b[0] > 2.0f && b[0] < 9.0f && b[1] > 0.5f && b[1] < 4.0f, "follow: behind and above a skater rolling straight");
+        CHECK(drone.velocity[2] < -5.0f, "follow: keeps up with the skater");
+        run(2.0f, 8.0f, 0.785f); // a 90 degree turn over two seconds
+        run(4.0f, 8.0f, 0.0f);
+        std::printf("Follow: turn, worst framing %.1f deg [nose %.0f up %.0f down]\n", worst_frame, nose_up, nose_down);
+        b = behind();
+        CHECK(b[0] > 2.0f && b[0] < 9.0f, "follow: swings round behind after a turn");
+        CHECK(worst_frame < 45.0f, "follow: keeps the skater in shot");
+        worst_frame = 0.0f;
+        std::printf("Follow: so far the skater sat up to %.1f deg above / %.1f below the middle [nose %.0f up %.0f down]\n", worst_up, worst_down, nose_up, nose_down);
+        worst_frame = worst_up = worst_down = nose_up = nose_down = 0.0f;
+        // Stops hard (a powerslide: 8 m/s to nothing in a second), then stands.
+        for (int i = 1; i <= 10; ++i) run(0.1f, 8.0f - 0.8f * static_cast<float>(i), 0.0f);
+        run(5.0f, 0.0f, 0.0f);
+        std::printf("Follow: stop, worst framing %.1f deg, %.1f up / %.1f down [nose %.0f up %.0f down]\n", worst_frame, worst_up, worst_down, nose_up, nose_down);
+        CHECK(worst_frame < 40.0f, "follow: keeps the skater in shot when they stop hard");
+        b = behind();
+        const float settled = std::abs(b[0] - tuning.distance) + std::abs(b[1] - tuning.height);
+        CHECK(settled < 1.5f && dingosdk::drone::detail::length(drone.velocity) < 1.0f, "follow: settles behind a skater who stops");
+        std::printf("Follow: settled %.2f m off [nose %.0f up %.0f down]\n", settled, nose_up, nose_down);
+        // Ollies while rolling: the drone should not hop with every one.
+        run(3.0f, 6.0f, 0.0f);
+        worst_frame = worst_up = worst_down = nose_up = nose_down = 0.0f;
+        lowest = 1e9f; highest = -1e9f;
+        run(6.0f, 6.0f, 0.0f, true);
+        std::printf("Follow: ollies, height %.2f..%.2f m, %.1f up / %.1f down [nose %.0f up %.0f down]\n", lowest, highest, worst_up, worst_down, nose_up, nose_down);
+        CHECK(highest - lowest < 0.6f, "follow: does not hop with every ollie");
+        // Falls behind (the skater pushes off hard), catches up and settles: no big nose-up brake.
+        worst_frame = worst_up = worst_down = nose_up = nose_down = 0.0f;
+        for (int i = 0; i < 10; ++i) run(0.15f, 2.0f + 1.0f * static_cast<float>(i), 0.0f);
+        run(6.0f, 12.0f, 0.0f);
+        run(2.0f, 6.0f, 0.0f); // and eases off
+        std::printf("Follow: catch-up, worst framing %.1f deg, %.1f up / %.1f down [nose %.0f up %.0f down]\n", worst_frame, worst_up, worst_down, nose_up, nose_down);
+        CHECK(worst_up < 25.0f && worst_down < 25.0f, "follow: keeps the skater in shot while catching up");
     }
     if (fails) return 1;
     std::puts("Drone flight tests passed.");

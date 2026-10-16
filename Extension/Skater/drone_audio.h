@@ -1,6 +1,8 @@
 #pragma once
-// Synthesised FPV motor sound. The maths (MotorSynth) is plain C++ and testable anywhere;
-// only the Windows output thread (winmm waveOut, already linked for the radio) is platform specific.
+// Synthesised FPV motor sound. The maths (MotorSynth) is plain C++ and testable anywhere.
+// In a level the pilot's motor plays through the game's own sound, with the other players' drones
+// (Multiplayer/Remote/drone_sound.cpp); the Windows output thread here (winmm waveOut, already
+// linked for the radio) only plays it where the game's sound is not there to take it.
 // Pitch follows the throttle, with a little lag like real motors, plus a rush of wind with speed.
 #include "drone_flight.h"
 #include <algorithm>
@@ -61,6 +63,14 @@ private:
     std::uint32_t seed_ = 12345u;
 };
 
+// The game's sound took the pilot's motor this recently (drone_sound.cpp marks it each frame it
+// does); while it does, the Windows output stays quiet.
+inline std::atomic<long long>& game_sound_ms() {
+    static std::atomic<long long> at{0};
+    return at;
+}
+inline bool played_by_game() { return now_ms() - game_sound_ms().load(std::memory_order_relaxed) < 300; }
+
 #ifdef _WIN32
 namespace detail {
 inline void run() {
@@ -72,7 +82,8 @@ inline void run() {
     bool open = false;
     long long idle_since = 0;
     for (;;) {
-        const bool active = flying() && telemetry().armed.load(std::memory_order_relaxed) && knobs().value[kVolume].load(std::memory_order_relaxed) > 0.001f;
+        const bool active = flying() && telemetry().armed.load(std::memory_order_relaxed) &&
+            knobs().value[kVolume].load(std::memory_order_relaxed) > 0.001f && !played_by_game();
         const long long now = now_ms();
         if (!active) {
             if (open && now - idle_since > 600) {

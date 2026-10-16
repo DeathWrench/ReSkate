@@ -30,6 +30,8 @@ void register_movement_commands(Commands &registry) {
          &overlay::DebugModel::free_camera, &overlay::DebugModel::camera_available},
         {"firstperson", "debug.first_person", "See through the skater's eyes", Debug::set_first_person,
          &overlay::DebugModel::first_person, &overlay::DebugModel::camera_available},
+        {"dronefollow", "drone.follow", "Skate while the FPV drone flies itself behind you, as if someone were flying it",
+         Debug::set_drone_follow, &overlay::DebugModel::drone_follow, &overlay::DebugModel::camera_available},
         {"hideui", "debug.game_ui_hidden", "Hide the game's interface", Debug::set_game_ui_hidden,
          &overlay::DebugModel::game_ui_hidden, &overlay::DebugModel::ui_available}};
     for (const auto &setting : settings) {

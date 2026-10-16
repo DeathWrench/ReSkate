@@ -66,6 +66,17 @@ void options(SkateMenu& menu, const CallbacksV3& callbacks, Knob k, const char* 
 }
 
 // ---- FLY
+// The game's interface is hidden for a flight or a follow (the `hideui` drone setting) and only
+// brought back if the drone was what hid it.
+bool hid_ui = false;
+void hide_ui_for_drone(const Model& model, const CallbacksV3& callbacks) {
+    if (get(Knob::kHideUi) >= 0.5f && !model.debug.game_ui_hidden) { run(callbacks, "hideui 1"); hid_ui = true; }
+}
+void bring_back_ui(const CallbacksV3& callbacks) {
+    if (hid_ui) run(callbacks, "hideui 0");
+    hid_ui = false;
+}
+
 void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
     const bool enabled = drone::is_enabled();
     const bool radio_on = drone::radio::config().enabled.load();
@@ -73,19 +84,15 @@ void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) 
     const bool flying = enabled && freecam;
 
     begin_card(menu, "drone-fly", "FLY");
-    // The game's interface is hidden for the flight (the `hideui` drone setting) and only
-    // brought back if the drone was what hid it.
-    static bool hid_ui = false;
     if (primary_button(menu, flying ? "STOP FLYING" : "START FLYING", model.debug.camera_available)) {
         if (flying) {
             run(callbacks, "dronemode 0");
             run(callbacks, "freecam 0"); // back to the skater
-            if (hid_ui) run(callbacks, "hideui 0");
-            hid_ui = false;
+            bring_back_ui(callbacks);
         } else {
             if (!freecam) run(callbacks, "freecam 1");
             if (!enabled) run(callbacks, "dronemode 1");
-            if (get(Knob::kHideUi) >= 0.5f && !model.debug.game_ui_hidden) { run(callbacks, "hideui 1"); hid_ui = true; }
+            hide_ui_for_drone(model, callbacks);
         }
     }
     const bool gamepad = drone::gamepad_mode();
@@ -107,7 +114,21 @@ void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) 
     }
     if (!radio_on && (drone::radio::poll().valid || overlay::read_gamepad().valid))
         warn("A controller is connected. Turn on Fly with a controller to use it, or the game keeps using it for your skater.");
-    toggle(menu, callbacks, Knob::kHideUi, "Hide the game's interface while flying");
+    toggle(menu, callbacks, Knob::kHideUi, "Hide the game's interface while flying or following");
+    end_card();
+
+    // Drone follow (Skater/drone_follow.h): the drone flies itself behind the skater.
+    begin_card(menu, "drone-follow", "FOLLOW ME", "skate while it films you");
+    const bool following = model.debug.drone_follow;
+    if (primary_button(menu, following ? "STOP FOLLOWING" : "FOLLOW ME", model.debug.camera_available)) {
+        run(callbacks, following ? "dronefollow 0" : "dronefollow 1");
+        if (following) bring_back_ui(callbacks);
+        else hide_ui_for_drone(model, callbacks);
+    }
+    if (!model.debug.camera_available) warn("Load into a level to use it.");
+    else note(following ? "Skate as normal: the drone flies itself behind you, as a pilot would."
+                        : "The drone takes off behind you and flies itself, keeping you in shot while you skate. "
+                          "It uses your drone's settings, flown self-levelling.");
     end_card();
 
     begin_card(menu, "drone-quad", "DRONE");

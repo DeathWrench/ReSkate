@@ -77,6 +77,7 @@ enum class DebugAction {
     set_first_person_camera_cycle,
     reset_first_person_arm,
     set_free_camera_fov,  // 0 = the game's own FOV
+    set_drone_follow,     // the drone flies itself behind the skater, and the view is its camera
     // Keep the last action in sync with the bound in request_scheduler.h.
 };
 
@@ -109,6 +110,7 @@ struct DebugModel {
     bool ui_available = false;
     bool free_camera = false;
     bool first_person = false;
+    bool drone_follow = false;  // the drone flies itself behind the skater (Skater/drone_follow.h)
     // Vertical degrees applied to the first-person view; 0 keeps the camera's own.
     float first_person_fov = 0;
     float free_camera_fov = 0;  // 0 = the game's own FOV

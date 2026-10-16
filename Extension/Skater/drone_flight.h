@@ -28,6 +28,7 @@
 #include <chrono>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <string_view>
 
 namespace dingosdk::drone {
@@ -188,7 +189,7 @@ inline constexpr KnobInfo knob_info[] = {
     {"throttlecentre", "Your throttle stick springs back to the middle (gamepads): the middle hovers, up climbs, down descends", 0.0f, 1.0f, 0.0f},
     {"deadzone", "How far a stick must move before the drone reacts (0-0.3). Raise it if the drone drifts on its own", 0.0f, 0.3f, 0.03f},
     {"goggles", "What your skater wears over their eyes while you fly: 0 = nothing, 1-8 = one of the eyewear choices on the DRONE page", 0.0f, 8.0f, 1.0f},
-    {"hideui", "Hide the game's own interface while you fly (Start flying hides it, Stop flying brings it back)", 0.0f, 1.0f, 1.0f},
+    {"hideui", "Hide the game's own interface while you fly or the drone follows you (Start flying or Follow me hides it, stopping brings it back)", 0.0f, 1.0f, 1.0f},
     {"gamepad", "Fly with a gamepad (Xbox or PlayStation) instead of an RC radio: left stick throttle and yaw, right stick pitch and roll, with gentler sticks. A arms, Menu / Options puts the drone back", 0.0f, 1.0f, 1.0f},
     {"padrate", "Gamepad: how much of your rates the sticks reach at full tilt (0.2-1). Lower is calmer. In angle mode it slows turning only: full stick still leans all the way", 0.2f, 1.0f, 0.6f},
     {"padexpo", "Gamepad: how much softer the middle of the sticks is, for small corrections (0 = none, 1 = most)", 0.0f, 1.0f, 0.45f},
@@ -378,6 +379,25 @@ inline std::array<float, 16> camera_from_body(const std::array<float, 16>& body,
     cam[12] = position[0]; cam[13] = position[1]; cam[14] = position[2]; cam[15] = body[15];
     return cam;
 }
+// A camera on a tilt gimbal (as on a DJI Avata): it faces the way the body faces and holds its own
+// pitch, `tilt_rad` (+ = look up), however the body leans, keeping only a share of the body's roll.
+inline std::array<float, 16> camera_on_gimbal(const std::array<float, 16>& body, const std::array<float, 3>& position,
+    float tilt_rad, float roll_share) {
+    Vec3 forward = scale(row(body, 2), -1.0f);
+    forward[1] = 0.0f;
+    if (dot(forward, forward) < 0.0025f) forward = cross(row(body, 0), Vec3{0, 1, 0});
+    forward = normalize(forward);
+    auto cam = body;
+    set_row(cam, 0, Vec3{-forward[2], 0.0f, forward[0]});
+    set_row(cam, 1, Vec3{0.0f, 1.0f, 0.0f});
+    set_row(cam, 2, scale(forward, -1.0f));
+    rotate_basis(cam, row(cam, 0), tilt_rad);
+    // The body's roll (+ = right wing down), about the camera's own view axis.
+    const float roll = -std::asin(std::clamp(row(body, 0)[1], -1.0f, 1.0f));
+    rotate_basis(cam, scale(row(cam, 2), -1.0f), roll * roll_share);
+    cam[12] = position[0]; cam[13] = position[1]; cam[14] = position[2]; cam[15] = body[15];
+    return cam;
+}
 }
 
 // Radio switches: an arm switch and a reset switch, each an axis (-6..6) or a button (1..32), if mapped.
@@ -439,9 +459,11 @@ struct Cmd {
     float climb = 0;          // -1..1 of the climb rate, while holding height
     bool boost = false;
     bool park = false;        // motors off: hold position
+    float gimbal_tilt_rad = std::numeric_limits<float>::quiet_NaN(); // set: the camera is on a tilt gimbal at this pitch (+ = up)
 };
 
 // The physical constants of the model (see the top of this file).
+inline constexpr float gimbal_roll_share = 0.3f;  // how much of the body's roll a tilt gimbal's picture keeps
 inline constexpr float rate_lag = 0.03f;          // s: the flight controller's catch-up to the asked turn rate
 inline constexpr float spool_up = 0.04f, spool_down = 0.07f; // s: motor output following the throttle
 inline constexpr float thrust_power = 1.5f;       // thrust grows with motor output to this power
@@ -573,7 +595,9 @@ inline std::array<float, 16> step_drone_cmd(const std::array<float, 16>& camera,
     // drone falls even when a disarmed one would hang.
     const bool motors = cfg.armed && !state.failsafe && !state.crashed;
     if (!motors) {
+        const float gimbal = cmd.gimbal_tilt_rad; // the gimbal keeps working without the motors
         cmd = Cmd{};
+        cmd.gimbal_tilt_rad = gimbal;
         cmd.throttle = 0.0f;
         cmd.park = cfg.disarm_freeze && !state.crashed;
     }
@@ -747,7 +771,8 @@ inline std::array<float, 16> step_drone_cmd(const std::array<float, 16>& camera,
     }
     state.glitch *= std::exp(-dt * 2.5f);
 
-    const auto out = camera_from_body(state.body, next_pos, uptilt);
+    const auto out = std::isfinite(cmd.gimbal_tilt_rad) ? camera_on_gimbal(state.body, next_pos, cmd.gimbal_tilt_rad, gimbal_roll_share)
+                                                        : camera_from_body(state.body, next_pos, uptilt);
     if (!valid_flight_transform(out)) { state.valid = false; return camera; }
     if (cfg.armed) state.flight_time += dt;
     auto& t = telemetry();
