@@ -157,6 +157,12 @@ const drone::World& drone_world() {
     }};
     return world;
 }
+// Drone follow: the pilot's tuning from the DRONE page's follow distance and aggression.
+drone::follow::Tuning follow_tuning() {
+    const auto& values = drone::knobs().value;
+    return drone::follow::tuning_for(values[drone::kFollowDistance].load(std::memory_order_relaxed),
+                                     values[drone::kFollowAggression].load(std::memory_order_relaxed));
+}
 // Drone follow: the skater's position and which way it faces, or nothing between lives.
 std::optional<std::pair<drone::detail::Vec3, drone::detail::Vec3>> follow_target(SourceTrial& trial, std::uintptr_t client) {
     try {
@@ -252,7 +258,7 @@ void debug_flight_tick(SourceTrial& trial, std::uintptr_t client, bool ready, bo
         // The autopilot flies the drone behind the skater through the flight model; between
         // lives (a bail, a respawn) it holds on to where the skater was last.
         drone::audio::ensure_started();
-        const drone::follow::Tuning tuning;
+        const auto tuning = follow_tuning();
         const auto cfg = drone::follow::flight_settings(drone::live_settings(), tuning);
         const auto& world = drone_world();
         const auto target = follow_target(trial, client);
@@ -837,7 +843,7 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
         debug.follow_pilot = {};
         drone::detail::Vec3 heading{target->second[0], 0.0f, target->second[2]};
         heading = drone::detail::length(heading) > 0.1f ? drone::detail::normalize(heading) : drone::detail::Vec3{0, 0, -1};
-        const drone::follow::Tuning tuning;
+        const auto tuning = follow_tuning();
         const auto spot = drone::follow::spot(target->first, {0, 0, 0}, heading, tuning, 0.0f);
         auto pose = drone::follow::pose_facing(spot, target->first);
         source_require(valid_flight_transform(pose), "Drone follow pose is invalid.");

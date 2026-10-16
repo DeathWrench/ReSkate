@@ -344,6 +344,139 @@ int main() {
         std::printf("Follow: catch-up, worst framing %.1f deg, %.1f up / %.1f down [nose %.0f up %.0f down]\n", worst_frame, worst_up, worst_down, nose_up, nose_down);
         CHECK(worst_up < 25.0f && worst_down < 25.0f, "follow: keeps the skater in shot while catching up");
     }
+    // Follow on a halfpipe: the skater rides wall to wall (across x, up to 4 m up each wall). The
+    // drone should stop chasing the turns and hold a spot off to the side to film it.
+    {
+        namespace follow = dingosdk::drone::follow;
+        namespace d = dingosdk::drone::detail;
+        const follow::Tuning tuning;
+        const auto cfg = follow::flight_settings(settings(), tuning);
+        Vec3 skater{0, 1, 0};
+        auto camera = follow::pose_facing(follow::spot(skater, {0, 0, 0}, {1, 0, 0}, tuning, 0.0f), skater);
+        State drone;
+        follow::Pilot pilot;
+        float worst_side = 0.0f, worst_up = 0.0f, travel = 0.0f, lowest = 1e9f;
+        Vec3 last{};
+        for (float t = 0; t < 20.0f; t += tick) {
+            const float phase = std::sin(t * 3.14159f / 2.0f); // wall to wall every two seconds
+            skater = {6.0f * phase, 1.0f + 4.0f * std::max(std::abs(phase) - 0.6f, 0.0f) / 0.4f, 0.0f};
+            const Vec3 at{camera[12], camera[13], camera[14]};
+            const auto cmd = follow::fly(pilot, drone, at, skater, {std::cos(t * 3.14159f / 2.0f) >= 0 ? 1.0f : -1.0f, 0, 0}, tick, cfg, tuning, &world);
+            camera = step_drone_cmd(camera, drone, cmd, tick, 10.0f, cfg, &world);
+            lowest = std::min(lowest, camera[13]);
+            if (t > 12.0f) {
+                const Vec3 now{camera[12], camera[13], camera[14]};
+                if (t > 12.0f + tick) travel += d::length(d::sub(now, last));
+                last = now;
+                Vec3 look = d::scale(d::row(camera, 2), -1.0f);
+                const Vec3 to = d::sub(Vec3{skater[0], skater[1] + 0.9f, skater[2]}, now);
+                Vec3 flat_look{look[0], 0, look[2]}, flat_to{to[0], 0, to[2]};
+                worst_side = std::max(worst_side, std::acos(std::clamp(d::dot(d::normalize(flat_look), d::normalize(flat_to)), -1.0f, 1.0f)) * 57.2958f);
+                worst_up = std::max(worst_up, std::abs(std::asin(d::normalize(to)[1]) - std::asin(d::normalize(look)[1])) * 57.2958f);
+            }
+        }
+        std::printf("Follow: halfpipe, session %d, moved %.1f m in 8 s, worst %.1f deg off to the side, %.1f up or down\n",
+            pilot.session ? 1 : 0, travel, worst_side, worst_up);
+        CHECK(pilot.session, "follow: a halfpipe session is filmed from a spot, not chased");
+        CHECK(travel < 8.0f, "follow: holds its spot through a halfpipe session");
+        CHECK(worst_side < 40.0f && worst_up < 30.0f, "follow: keeps a halfpipe session in shot");
+        CHECK(lowest > 0.5f, "follow: stays off the ground through a session");
+    }
+    // Follow into a wall: the skater rides at the wall (x = 20), stops short of it, turns round and
+    // rides back. The spot behind it is then inside the wall; the drone keeps off it.
+    {
+        namespace follow = dingosdk::drone::follow;
+        namespace d = dingosdk::drone::detail;
+        const follow::Tuning tuning;
+        const auto cfg = follow::flight_settings(settings(), tuning);
+        Vec3 skater{0, 1, 5};
+        Vec3 heading{1, 0, 0};
+        auto camera = follow::pose_facing(follow::spot(skater, {0, 0, 0}, heading, tuning, 0.0f), skater);
+        State drone;
+        follow::Pilot pilot;
+        float closest = 1e9f, worst_side = 0.0f;
+        const auto step = [&](float speed) {
+            skater = d::add(skater, d::scale(heading, speed * tick));
+            const Vec3 at{camera[12], camera[13], camera[14]};
+            const auto cmd = follow::fly(pilot, drone, at, skater, heading, tick, cfg, tuning, &world);
+            camera = step_drone_cmd(camera, drone, cmd, tick, 10.0f, cfg, &world);
+            closest = std::min(closest, 20.0f - camera[12]);
+            Vec3 look = d::scale(d::row(camera, 2), -1.0f);
+            Vec3 flat_look{look[0], 0, look[2]}, flat_to{skater[0] - camera[12], 0, skater[2] - camera[14]};
+            if (d::length(flat_to) > 1.0f)
+                worst_side = std::max(worst_side, std::acos(std::clamp(d::dot(d::normalize(flat_look), d::normalize(flat_to)), -1.0f, 1.0f)) * 57.2958f);
+        };
+        float t = 0;
+        for (; skater[0] < 16.0f; t += tick) step(6.0f);                  // toward the wall
+        for (float slow = 6.0f; slow > 0.0f; slow -= 6.0f * tick) step(slow); // stops a few metres short of it
+        heading = {-1, 0, 0};
+        for (float u = 0; u < 1.0f; u += tick) step(0.0f);                // turns round
+        for (float u = 0; u < 6.0f; u += tick) step(6.0f);                // and rides away from it
+        std::printf("Follow: wall, came within %.2f m of it, worst %.1f deg off to the side\n", closest, worst_side);
+        CHECK(closest > 0.5f, "follow: keeps off a wall the spot behind the skater is in");
+    }
+    // Follow settings: the DRONE page's distance and aggression; the middle is the tuning above.
+    {
+        namespace follow = dingosdk::drone::follow;
+        const follow::Tuning plain;
+        const auto middle = follow::tuning_for(4.5f, 0.5f);
+        CHECK(std::abs(middle.reaction - plain.reaction) < 1e-4f && std::abs(middle.speed_gain - plain.speed_gain) < 1e-4f &&
+              std::abs(middle.gap_gain - plain.gap_gain) < 1e-4f && std::abs(middle.height - plain.height) < 0.01f &&
+              std::abs(middle.session_distance - plain.session_distance) < 1e-4f, "follow: the middle settings are the usual tuning");
+        const auto calm = follow::tuning_for(8.0f, 0.0f), hard = follow::tuning_for(8.0f, 1.0f);
+        CHECK(calm.distance == 8.0f && calm.reaction > hard.reaction && calm.max_lean_deg < hard.max_lean_deg,
+              "follow: aggression makes the pilot quicker and lean harder");
+    }
+    // Follow down a steep slope: the skater rides off an 8 m high top, down a 1:1 slope and on. The
+    // spot behind the skater is then metres inside the slope; the drone keeps over the ground.
+    {
+        namespace follow = dingosdk::drone::follow;
+        namespace d = dingosdk::drone::detail;
+        const auto ground = [](float x) { return std::clamp(8.0f - x, 0.0f, 8.0f); };
+        const World bank{[&](const Vec3& from, const Vec3& to, Vec3& hit) {
+            for (int i = 0; i <= 64; ++i) {
+                const float k = static_cast<float>(i) / 64.0f;
+                const Vec3 at{from[0] + (to[0] - from[0]) * k, from[1] + (to[1] - from[1]) * k, from[2] + (to[2] - from[2]) * k};
+                if (at[1] <= ground(at[0])) { hit = at; return true; }
+            }
+            return false;
+        }};
+        const follow::Tuning tuning;
+        const auto cfg = follow::flight_settings(settings(), tuning);
+        Vec3 skater{-8.0f, 9.0f, 0};
+        const Vec3 heading{1, 0, 0};
+        auto camera = follow::pose_facing(follow::spot(skater, {0, 0, 0}, heading, tuning, 0.0f), skater);
+        State drone;
+        follow::Pilot pilot;
+        float lowest = 1e9f;
+        for (float t = 0; t < 6.0f; t += tick) {
+            skater[0] += 6.0f * tick;
+            skater[1] = ground(skater[0]) + 1.0f;
+            const Vec3 at{camera[12], camera[13], camera[14]};
+            const auto cmd = follow::fly(pilot, drone, at, skater, heading, tick, cfg, tuning, &bank);
+            camera = step_drone_cmd(camera, drone, cmd, tick, 10.0f, cfg, &bank);
+            if (t > 1.0f) lowest = std::min(lowest, camera[13] - ground(camera[12]));
+        }
+        std::printf("Follow: down a slope, lowest %.2f m over the ground\n", lowest);
+        CHECK(lowest > 0.6f, "follow: keeps over a slope its spot is inside");
+        // A spot under the ground (as a bad height would give): it keeps its clearance instead.
+        auto low = follow::tuning_for(4.5f, 0.5f);
+        low.height = -3.0f;
+        skater = {0, 1, 0};
+        camera = follow::pose_facing(Vec3{-4.5f, 2.0f, 0.0f}, skater);
+        drone = State{};
+        pilot = follow::Pilot{};
+        lowest = 1e9f;
+        for (float t = 0; t < 6.0f; t += tick) {
+            skater[0] += 4.0f * tick;
+            const Vec3 at{camera[12], camera[13], camera[14]};
+            const auto cmd = follow::fly(pilot, drone, at, skater, heading, tick, cfg, low, &world);
+            camera = step_drone_cmd(camera, drone, cmd, tick, 10.0f, cfg, &world);
+            lowest = std::min(lowest, camera[13]);
+        }
+        std::printf("Follow: spot underground, lowest %.2f m\n", lowest);
+        CHECK(lowest > 1.1f, "follow: keeps its clearance when its spot is under the ground");
+    }
     if (fails) return 1;
     std::puts("Drone flight tests passed.");
     return 0;

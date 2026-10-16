@@ -139,7 +139,8 @@ enum Knob : std::size_t { kGravity, kDrag, kHover, kRollCenter, kRollMax, kRollE
     kOsdScale, kOsdColor, kOsdFont, kOsdMargin, kCrosshair, kShowArmed, kShowBattery, kShowTimer, kShowThrottle, kShowAlt,
     kShowSpeed, kSticks, kStickSize, kArmAxis, kResetAxis, kDisarmFreeze, kBeacon, kShowBeacons, kArmButton, kResetButton,
     kAnalog, kAnalogNoise, kAnalogScan, kAnalogVignette, kAnalogGlitch, kRange, kMotorPitch, kThrottleCentre, kDeadzone, kGoggles, kHideUi,
-    kGamepad, kPadRate, kPadExpo, kAltHold, kClimbRate, kFlightMode, kMaxAngle, kCrash, kCrashSpeed, kPropwash, kPadInvert };
+    kGamepad, kPadRate, kPadExpo, kAltHold, kClimbRate, kFlightMode, kMaxAngle, kCrash, kCrashSpeed, kPropwash, kPadInvert,
+    kFollowDistance, kFollowAggression };
 inline constexpr KnobInfo knob_info[] = {
     {"gravity", "How hard the drone is pulled down. 9.8 is Earth; higher feels heavier and snappier", 0.0f, 50.0f, 9.81f},
     {"drag", "Air resistance. Higher slows the drone down sooner when you let off", 0.0f, 3.0f, 0.15f},
@@ -201,9 +202,11 @@ inline constexpr KnobInfo knob_info[] = {
     {"crashspeed", "Crashes: how hard a hit cuts the motors, in metres per second into the surface. 0 = never", 0.0f, 30.0f, 7.0f},
     {"propwash", "How much the drone shakes when it drops through its own prop wash (0-1)", 0.0f, 1.0f, 0.5f},
     {"padinvert", "Gamepad: push the right stick up to tip the nose up, like aiming a camera (1); or to tip it down and fly forward, like an RC radio (0)", 0.0f, 1.0f, 1.0f},
+    {"followdistance", "Follow me: how far behind you the drone flies, in metres (it flies a little higher the further back it is)", 3.0f, 12.0f, 4.5f},
+    {"followaggression", "Follow me: how hard the pilot flies (0-1). Low is a calm cinematic pilot who lags a little and leans gently; high reacts fast, leans hard and stays right on you", 0.0f, 1.0f, 0.5f},
 };
 inline constexpr std::size_t knob_count = std::size(knob_info);
-static_assert(knob_count == kPadInvert + 1, "knob enum and table must match");
+static_assert(knob_count == kFollowAggression + 1, "knob enum and table must match");
 struct KnobValues {
     std::atomic<float> value[knob_count];
     KnobValues() { for (std::size_t i = 0; i < knob_count; ++i) value[i] = knob_info[i].def; }

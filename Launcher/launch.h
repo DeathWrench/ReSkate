@@ -41,6 +41,9 @@ std::wstring steam_offline_reason();
 // Display name of the signed-in Steam account (UTF-8), or empty when Steam is
 // not running, signed out, or the name cannot be read.
 std::string steam_persona_name();
+// The signed-in account's profile picture in Steam's avatar cache, or empty
+// when Steam is not running, signed out, or has not cached it.
+std::filesystem::path steam_avatar_path();
 // Validates, starts, injects and resumes Skate; returns its process id.
 // `created` receives the id as soon as the process exists (ReSkate's startup
 // splash can open before this returns). Throws a user-facing message.

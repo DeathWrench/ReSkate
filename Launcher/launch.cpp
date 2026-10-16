@@ -635,6 +635,17 @@ std::string steam_persona_name() {
     return name;
 }
 
+std::filesystem::path steam_avatar_path() {
+    if (!steam_signed_in()) return {};
+    const auto user = active_steam_id();
+    const auto steam = steam_directory();
+    if (!user || steam.empty()) return {};
+    // Steam keeps each account's picture it has shown as config/avatarcache/<SteamID64>.png.
+    auto path = steam / L"config" / L"avatarcache" / (std::to_wstring(*user) + L".png");
+    std::error_code error;
+    return fs::is_regular_file(path, error) ? path : std::filesystem::path{};
+}
+
 // Skate.exe hard-imports MiniDumpWriteDump from the Windows API set
 // api-ms-win-core-debug-minidump-l1-1-0.dll. Windows resolves that set through
 // its API set schema, so no such file exists on disk; Wine/Proton does not map

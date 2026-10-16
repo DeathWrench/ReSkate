@@ -129,6 +129,9 @@ void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) 
     else note(following ? "Skate as normal: the drone flies itself behind you, as a pilot would."
                         : "The drone takes off behind you and flies itself, keeping you in shot while you skate. "
                           "It uses your drone's settings, flown self-levelling.");
+    // (Read every tick: a change shows while it follows.)
+    slider(menu, callbacks, Knob::kFollowDistance, "Follow distance", "%.1f m");
+    slider(menu, callbacks, Knob::kFollowAggression, "Aggressiveness");
     end_card();
 
     begin_card(menu, "drone-quad", "DRONE");

@@ -377,6 +377,11 @@ struct Ui {
     // Steam display name for the name plate, re-read every few seconds.
     std::string steam_name;
     double steam_checked{-100};
+    // The account's Steam picture on the plate in place of the drawn logo; reloaded
+    // when Steam caches a new one or another account signs in.
+    ImTextureID steam_avatar{};
+    fs::path steam_avatar_path;
+    fs::file_time_type steam_avatar_time{};
     // One-time notice that Skate will start offline because Steam is not
     // running or not signed in. Decided on the first Steam check.
     bool steam_offline{};

@@ -88,6 +88,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Music/app_audio_capture.cpp
     Extension/Music/music_inject.cpp
     Extension/World/mesh_unload_guard.cpp
+    Extension/World/mesh_settings_guard.cpp
     Extension/World/shader_permutation_guard.cpp
     Extension/World/light_table_guard.cpp
     Extension/World/stack_check_report.cpp
