@@ -234,6 +234,7 @@ void register_perf_commands(Commands& registry) {
 
     // How close the game is to its limit of streamed textures (texture_handle_limit).
     auto textures = action("textures", "Streamed textures in use, and the most the game can hold", Group::console);
+    textures.aliases = {"perf textures"}; // beside the other perf readings, where it is looked for
     textures.execution = Execution::local;
     textures.run = [](const Model&, const Values&, const Output& out) {
         const auto state = texture_handle_limit::use();
