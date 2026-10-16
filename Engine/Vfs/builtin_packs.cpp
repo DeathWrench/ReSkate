@@ -1,11 +1,18 @@
 #include "builtin_packs.h"
+#include "builtin_pack_format.h"
 #include <Windows.h>
 #include <miniz.h>
+#include <zstd.h>
 #include <algorithm>
+#include <cctype>
+#include <iterator>
 #include <format>
 #include <fstream>
+#include <cstring>
 #include <span>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace dingosdk::mods {
 namespace {
@@ -15,8 +22,14 @@ struct Embedded {
     const wchar_t* resource;
     const char* name;
 };
-constexpr Embedded embedded[]{{L"BUILTIN_PACK_FPV_DRONE", "fpv_drone"}};
-constexpr std::uint64_t max_pack_bytes = 512ull * 1024 * 1024;
+constexpr Embedded embedded[]{{L"BUILTIN_PACK_FPV_DRONE", "fpv_drone"},
+                              {L"BUILTIN_PACK_BOARD_BREAK", "board_break"},
+                              {L"BUILTIN_PACK_ROAD_RASH", "road_rash"}};
+// The mods those replace, by folder name in small letters: as Thunderstore installs them
+// (Team-Name), and the bare names a mod put in by hand would have.
+constexpr std::string_view superseded[]{"fourth_studio-board_break_pack", "fourth_studio-board_break",
+                                        "fourth_studio-road_rash", "board_break_pack", "road_rash"};
+constexpr std::uint64_t max_pack_bytes = builtin_pack::max_bytes;
 constexpr std::string_view version_file = ".builtin-version";
 
 struct Source {
@@ -30,7 +43,9 @@ struct Source {
     }
 };
 bool carries_packs(HMODULE module) {
-    return module && FindResourceW(module, embedded[0].resource, MAKEINTRESOURCEW(10) /* RT_RCDATA */);
+    return module && std::any_of(std::begin(embedded), std::end(embedded), [&](const Embedded& pack) {
+        return FindResourceW(module, pack.resource, MAKEINTRESOURCEW(10) /* RT_RCDATA */) != nullptr;
+    });
 }
 // ReSkate.dll: this module when it is the DLL (the game), else ReSkate.dll beside the program
 // (the launcher, which sits beside Skate.exe and the DLL), as data only.
@@ -71,25 +86,79 @@ std::string read_text(const fs::path& path) {
     std::ifstream input(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
-// A path inside the pack: relative, forward slashes, no "..", plain characters.
-bool safe_entry(std::string_view name) {
-    if (name.empty() || name.size() > 260 || name.front() == '/' || name.find(':') != std::string_view::npos ||
-        name.find('\\') != std::string_view::npos)
+bool safe_entry(std::string_view name) { return builtin_pack::safe_name(name); }
+// Writes `size` bytes to a new file at `path` (its folders made first).
+bool write_file(const fs::path& path, const unsigned char* data, std::uint64_t size) {
+    std::error_code error;
+    fs::create_directories(path.parent_path(), error);
+    struct File {
+        HANDLE value;
+        ~File() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+    } file{CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr)};
+    if (file.value == INVALID_HANDLE_VALUE) return false;
+    while (size) {
+        const auto chunk = static_cast<DWORD>(std::min<std::uint64_t>(size, 64ull * 1024 * 1024));
+        DWORD done{};
+        if (!WriteFile(file.value, data, chunk, &done, nullptr) || done != chunk) return false;
+        data += chunk;
+        size -= chunk;
+    }
+    return true;
+}
+// A pack in ReSkate's own format (builtin_pack_format.h): one zstd frame, unpacked whole.
+bool unpack_packed(std::span<const unsigned char> bytes, const fs::path& target, std::string& issue) {
+    const auto size = ZSTD_getFrameContentSize(bytes.data(), bytes.size());
+    if (size == ZSTD_CONTENTSIZE_ERROR || size == ZSTD_CONTENTSIZE_UNKNOWN || size > max_pack_bytes + 16ull * 1024 * 1024) {
+        issue = "the embedded pack is not one ReSkate made";
         return false;
-    std::size_t start = 0;
-    while (start <= name.size()) {
-        const auto end = std::min(name.find('/', start), name.size());
-        const auto part = name.substr(start, end - start);
-        if (part.empty() || part == "." || part == "..") return false;
-        if (!std::all_of(part.begin(), part.end(), [](char c) {
-                return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '_' || c == '-';
-            }))
+    }
+    std::vector<unsigned char> plain(static_cast<std::size_t>(size));
+    const auto unpacked = ZSTD_decompress(plain.data(), plain.size(), bytes.data(), bytes.size());
+    if (ZSTD_isError(unpacked) || unpacked != plain.size()) {
+        issue = std::string("the embedded pack could not be decompressed: ") + (ZSTD_isError(unpacked) ? ZSTD_getErrorName(unpacked) : "short");
+        return false;
+    }
+    std::size_t at = 0;
+    const auto take = [&](void* out, std::size_t count) {
+        if (count > plain.size() - at) return false;
+        std::memcpy(out, plain.data() + at, count);
+        at += count;
+        return true;
+    };
+    std::array<char, builtin_pack::magic.size()> magic{};
+    std::uint32_t count{};
+    if (!take(magic.data(), magic.size()) || magic != builtin_pack::magic || !take(&count, sizeof(count)) || count > 100000) {
+        issue = "the embedded pack is not one ReSkate made";
+        return false;
+    }
+    std::vector<std::pair<std::string, std::uint64_t>> files(count);
+    std::uint64_t total{};
+    for (auto& [name, length] : files) {
+        std::uint16_t name_length{};
+        if (!take(&name_length, sizeof(name_length))) { issue = "the embedded pack's list is cut short"; return false; }
+        name.resize(name_length);
+        if (!take(name.data(), name.size()) || !take(&length, sizeof(length))) { issue = "the embedded pack's list is cut short"; return false; }
+        total += length;
+        if (!safe_entry(name) || total > max_pack_bytes) {
+            issue = "the embedded pack has an entry it may not: " + name;
             return false;
-        start = end + 1;
+        }
+    }
+    for (const auto& [name, length] : files) {
+        if (length > plain.size() - at) { issue = "the embedded pack is cut short at " + name; return false; }
+        if (!write_file(target / fs::path(name), plain.data() + at, length)) { issue = "could not unpack " + name; return false; }
+        at += static_cast<std::size_t>(length);
+    }
+    if (at != plain.size()) {
+        issue = "the embedded pack has bytes past its last file";
+        return false;
     }
     return true;
 }
 bool unpack(std::span<const unsigned char> bytes, const fs::path& target, std::string& issue) {
+    // ReSkate's own format (a zstd frame); else a plain zip, as a build without the packer embeds.
+    if (bytes.size() >= 4 && bytes[0] == 0x28 && bytes[1] == 0xb5 && bytes[2] == 0x2f && bytes[3] == 0xfd)
+        return unpack_packed(bytes, target, issue);
     struct Zip {
         mz_zip_archive value{};
         ~Zip() { mz_zip_reader_end(&value); }
@@ -139,6 +208,21 @@ bool unpack(std::span<const unsigned char> bytes, const fs::path& target, std::s
     return true;
 }
 } // namespace
+
+bool unpack_builtin_pack(std::span<const unsigned char> bytes, const fs::path& target, std::string& issue) noexcept {
+    try {
+        return unpack(bytes, target, issue);
+    } catch (const std::exception& failure) {
+        issue = failure.what();
+        return false;
+    }
+}
+
+bool superseded_by_builtin(std::string_view folder) noexcept {
+    std::string name(folder);
+    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return std::find(std::begin(superseded), std::end(superseded), name) != std::end(superseded);
+}
 
 std::vector<BuiltinPack> unpack_builtin_packs(const fs::path& mods_root, std::vector<std::string>& notes) noexcept {
     std::vector<BuiltinPack> packs;

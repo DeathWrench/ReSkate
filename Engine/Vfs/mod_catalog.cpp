@@ -1,4 +1,5 @@
 #include "mod_catalog.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "builtin_packs.h"
 
 #include "mod_merge.h"
@@ -128,23 +129,35 @@ std::vector<std::pair<std::string, fs::path>> decks_inside(const fs::path& mod) 
     std::error_code error;
     for (fs::directory_iterator at(mod / L"decks", error), end; !error && at != end; at.increment(error)) {
         if (!at->is_directory(error) || !fs::is_regular_file(at->path() / L"layout.toc", error)) continue;
-        auto name = lower(at->path().filename().string());
+        auto name = lower(path_utf8(at->path().filename()));
         if (deck_name(name)) found.emplace_back(std::move(name), at->path());
     }
     std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return deck_before(a.first, b.first); });
+    return found;
+}
+// Every mod folder a deck can come from: those in the Mods folder (but one a built-in pack
+// replaces), then the built-in packs (builtin_packs.h), which the merge also puts after them.
+std::vector<fs::path> deck_mod_folders() {
+    std::vector<fs::path> found;
+    const auto mods = engine_data_root() / L"Mods";
+    std::error_code error;
+    for (fs::directory_iterator at(mods, error), end; !error && at != end; at.increment(error))
+        if (at->is_directory(error) && !superseded_by_builtin(path_utf8(at->path().filename()))) found.push_back(at->path());
+    error.clear();
+    for (fs::directory_iterator at(mods / std::string(builtin_folder), error), end; !error && at != end; at.increment(error))
+        if (at->is_directory(error) && at->path().filename().wstring().find(L".unpacking-") == std::wstring::npos)
+            found.push_back(at->path());
     return found;
 }
 // Every deck in the Mods folder with the folder of the mod that brings it, in the menus' order,
 // whatever mods.json says of that mod: the decks inside a pack, or else the one a folder is named for.
 std::vector<std::pair<std::string, fs::path>> installed_decks() {
     std::vector<std::pair<std::string, fs::path>> decks;
-    std::error_code error;
-    for (fs::directory_iterator at(engine_data_root() / L"Mods", error), end; !error && at != end; at.increment(error)) {
-        if (!at->is_directory(error)) continue;
-        auto inside = decks_inside(at->path());
-        for (auto& one : inside) decks.emplace_back(std::move(one.first), at->path());
+    for (const auto& folder : deck_mod_folders()) {
+        auto inside = decks_inside(folder);
+        for (auto& one : inside) decks.emplace_back(std::move(one.first), folder);
         if (!inside.empty()) continue;
-        if (auto deck = board_break_deck_of(at->path().filename().string()); !deck.empty()) decks.emplace_back(std::move(deck), at->path());
+        if (auto deck = board_break_deck_of(path_utf8(folder.filename())); !deck.empty()) decks.emplace_back(std::move(deck), folder);
     }
     std::stable_sort(decks.begin(), decks.end(), [](const auto& a, const auto& b) { return deck_before(a.first, b.first); });
     return decks;
@@ -224,13 +237,11 @@ std::vector<std::filesystem::path> board_break_folders() noexcept {
 std::filesystem::path board_break_deck_folder(std::string_view deck) noexcept {
     try {
         const auto wanted = lower(deck);
-        std::error_code error;
-        for (fs::directory_iterator at(engine_data_root() / L"Mods", error), end; !error && at != end; at.increment(error)) {
-            if (!at->is_directory(error)) continue;
-            const auto inside = decks_inside(at->path());
+        for (const auto& folder : deck_mod_folders()) {
+            const auto inside = decks_inside(folder);
             for (const auto& one : inside)
                 if (one.first == wanted) return one.second;
-            if (inside.empty() && board_break_deck_of(at->path().filename().string()) == wanted) return at->path();
+            if (inside.empty() && board_break_deck_of(path_utf8(folder.filename())) == wanted) return folder;
         }
     } catch (...) {}
     return {};
@@ -325,6 +336,13 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     try {
         for (const auto& name : list.missing)
             result.notes.push_back("mods.json names a folder that is not present: " + name);
+        // A mod a built-in pack replaces (builtin_packs.h) is left out, should the launcher not have
+        // taken it away yet: its content would load twice.
+        std::erase_if(list.entries, [&](const ModEntry& entry) {
+            if (!superseded_by_builtin(entry.mod.name)) return false;
+            result.notes.push_back(entry.mod.name + " is built into ReSkate now; the installed copy is left out");
+            return true;
+        });
         // After every installed mod, so none of theirs is ever shadowed by it; always on.
         for (const auto& pack : builtin)
             list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});

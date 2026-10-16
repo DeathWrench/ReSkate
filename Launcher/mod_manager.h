@@ -5,6 +5,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 // The launcher's side of the Mods folder: installing mods from a .zip or a
 // folder, and removing them. Order and enabled state live in mods.json
@@ -51,5 +52,11 @@ std::string install(const std::filesystem::path& mods_root, const std::filesyste
 
 // Moves Mods/<name> to the Recycle Bin. Throws a user-facing message.
 void remove(const std::filesystem::path& mods_root, const std::string& name);
+
+// The mods ReSkate now carries itself (Engine/Vfs/builtin_packs.h: Fourth Studio's Board Break and
+// Road Rash) go to the Recycle Bin and out of mods.json, so the built-in copy is the one that
+// loads. Returns the folders taken away; one that will not go stays (the merge leaves it out).
+// Never throws.
+std::vector<std::string> retire_superseded(const std::filesystem::path& mods_root) noexcept;
 
 } // namespace dingosdk::launcher_mods

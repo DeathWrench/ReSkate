@@ -1,4 +1,5 @@
 #include "session_internal.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "Extension/Multiplayer/Steam/steam_social.h"
 #include "Extension/Multiplayer/Hud/native_indicators.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
@@ -435,11 +436,11 @@ std::string start_pose_dump(Session &s, std::string_view argument) {
     s.pose_dump.close();
     s.pose_dump.clear();
     s.pose_dump.open(file, std::ios::binary | std::ios::trunc);
-    if (!s.pose_dump) return "Could not write " + file.string() + ".";
+    if (!s.pose_dump) return "Could not write " + path_utf8(file) + ".";
     s.pose_dump.write("RSPD1\n", 6);
     s.pose_dump_until = now_us() + static_cast<std::uint64_t>(seconds) * 1000000;
     s.pose_dump_count = 0;
-    return "Recording your poses for " + std::to_string(seconds) + " s to " + file.string() + ". Skate as you normally would.";
+    return "Recording your poses for " + std::to_string(seconds) + " s to " + path_utf8(file) + ". Skate as you normally would.";
 }
 std::string edit_direct_connections(Session &s, std::string_view argument) {
     const auto enabled = parse_switch(argument, s.prefer_direct);

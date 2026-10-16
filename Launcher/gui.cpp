@@ -2,6 +2,7 @@
 
 #include "gui_internal.h"
 #include "gui_renderer.h"
+#include "Engine/Core/Platform/path_text.h"
 
 #include "Engine/Core/Log/logging.h"
 
@@ -254,7 +255,7 @@ ImFont* system_font(const wchar_t* file, float size) {
     const auto path = fs::path(windows.data()) / L"Fonts" / file;
     std::error_code error;
     if (!fs::is_regular_file(path, error)) return nullptr;
-    return ImGui::GetIO().Fonts->AddFontFromFileTTF(path.string().c_str(), S(size));
+    return ImGui::GetIO().Fonts->AddFontFromFileTTF(path_utf8(path).c_str(), S(size)); // (ImGui reads UTF-8)
 }
 
 Fonts load_fonts() {

@@ -4,10 +4,13 @@
 #include "Engine/Core/Debug/protocol.h"
 #include "Engine/Core/Debug/upload.h"
 #include "Engine/Core/Debug/native_dump.h"
-#include "Engine/Core/Debug/multipart.h"
+#include "Engine/Core/Debug/report_envelope.h"
+#include "Engine/Core/Debug/report_details.h"
+#include "Engine/Vfs/mod_list.h"
 #include "Engine/Game/Build/supported_build.h"
 #include "crash_report_config.h"
 #include <cstdlib>
+#include <ctime>
 #include <fstream>
 #include <format>
 #include <thread>
@@ -34,7 +37,51 @@ std::string map_name(std::string destination) {
     if (const auto slash = destination.find_last_of('/'); slash != std::string::npos) destination.erase(0, slash + 1);
     return destination;
 }
-bool publish_dump(const std::filesystem::path& temporary, const SharedReport& report, const char* source) {
+// The folder the crashed game ran from (its Mods folder beside it), or empty.
+std::filesystem::path game_folder(HANDLE process) {
+    std::array<wchar_t, 32768> image{};
+    DWORD length = static_cast<DWORD>(image.size());
+    if (!QueryFullProcessImageNameW(process, 0, image.data(), &length)) return {};
+    return std::filesystem::path(std::wstring(image.data(), length)).parent_path();
+}
+// The event fields a report carries besides its tags (report_details.h): the log's last lines,
+// the mods the game ran with, an anonymous ID for this install and how long the game had run.
+Json event_details(HANDLE process, const SharedReport& report, const std::filesystem::path& dump, std::size_t& mod_count) {
+    Json details = Json::object();
+    if (auto crumbs = log_breadcrumbs(log_attachment_path(dump)); crumbs.is_object()) details["breadcrumbs"] = std::move(crumbs);
+    Json context = Json::object();
+    if (const auto root = game_folder(process); !root.empty()) {
+        const auto list = mods::scan_mods(root);
+        Json enabled = Json::array(), outdated = Json::array(), excluded = Json::array();
+        for (const auto& entry : list.entries) {
+            if (!entry.enabled) continue;
+            const auto name = entry.mod.version.empty() ? entry.mod.name : entry.mod.name + " " + entry.mod.version;
+            if (!entry.mod.outdated.empty()) outdated.push_back(name);
+            else if (list.excluded.contains(entry.mod.name)) excluded.push_back(name);
+            else enabled.push_back(name);
+        }
+        mod_count = enabled.size();
+        context["mods"] = std::move(enabled);
+        if (outdated.size()) context["mods_outdated"] = std::move(outdated);
+        if (excluded.size()) context["mods_excluded"] = std::move(excluded);
+        if (!list.issue.empty()) context["mods_issue"] = list.issue;
+    }
+    if (const auto started = process_creation_seconds(process); started) {
+        const auto now = static_cast<std::int64_t>(std::time(nullptr));
+        if (now >= started) context["uptime_seconds"] = now - static_cast<std::int64_t>(started);
+    }
+    context["type"] = "default";
+    Json contexts = Json::object();
+    contexts["reskate"] = std::move(context);
+    details["contexts"] = std::move(contexts);
+    if (const auto id = install_id(std::filesystem::path(report.directory.data())); !id.empty()) {
+        Json user = Json::object();
+        user["id"] = id;
+        details["user"] = std::move(user);
+    }
+    return details;
+}
+bool publish_dump(HANDLE process, const std::filesystem::path& temporary, const SharedReport& report, const char* source) {
     auto dump = temporary; dump.replace_extension(L".dmp");
     Json attributes = Json::object();
     attributes["application"] = "ReSkate";
@@ -58,6 +105,16 @@ bool publish_dump(const std::filesystem::path& temporary, const SharedReport& re
     if (const auto driver = field(report.gpu_driver); !driver.empty()) attributes["gpu.driver"] = driver;
     const auto log = snapshot_log(std::filesystem::path(report.directory.data()).parent_path() / L"ReSkate.log", dump);
     attributes["attachment.log"] = log == LogSnapshot::complete ? "complete" : log == LogSnapshot::tail ? "tail" : "unavailable";
+    // Where it crashed ("Skate.exe+0x3d9ed9d"): Sentry names game code by the nearest export, so a
+    // tag to search and sort by.
+    if (const auto site = crash_site(temporary); !site.empty()) attributes["crash.site"] = site;
+    // (Best effort: a report goes without its details rather than not at all.)
+    try {
+        std::size_t mod_count{};
+        const auto details = event_details(process, report, dump, mod_count);
+        attributes["mods.count"] = std::to_string(mod_count);
+        std::ofstream(event_details_path(dump), std::ios::binary) << details.dump();
+    } catch (...) { DeleteFileW(event_details_path(dump).c_str()); }
     std::ofstream metadata(dump.wstring() + L".json", std::ios::binary);
     metadata << attributes.dump();
     metadata.close();
@@ -65,6 +122,7 @@ bool publish_dump(const std::filesystem::path& temporary, const SharedReport& re
         DeleteFileW(temporary.c_str());
         DeleteFileW((dump.wstring() + L".json").c_str());
         DeleteFileW(log_attachment_path(dump).c_str());
+        DeleteFileW(event_details_path(dump).c_str());
         return false;
     }
     return true;
@@ -83,7 +141,7 @@ bool save_dump(HANDLE process, const SharedReport& report, const std::filesystem
     const auto durable = written && FlushFileBuffers(file.value);
     CloseHandle(file.release());
     if (!durable) { DeleteFileW(temporary.c_str()); return false; }
-    return publish_dump(temporary, report,
+    return publish_dump(process, temporary, report,
         report.source == CaptureSource::game_fatal_handler ? "game-fatal-handler" : "unhandled-exception");
 }
 bool collect_native_dump(HANDLE process, const SharedReport& report, const std::filesystem::path& directory) {
@@ -91,7 +149,7 @@ bool collect_native_dump(HANDLE process, const SharedReport& report, const std::
     if (!native) return false;
     const auto temporary = directory / std::format(L"native-{}-{}-{}.tmp", native->process_id, native->process_created, native->thread_id);
     if (!CopyFileW(native->path.c_str(), temporary.c_str(), TRUE)) return false;
-    return publish_dump(temporary, report, "game-native");
+    return publish_dump(process, temporary, report, "game-native");
 }
 int run(int argc, wchar_t** argv) {
     if (argc != handle_count + 2 || std::wstring_view(argv[1]) != L"--reskate-crash-helper") return 2;

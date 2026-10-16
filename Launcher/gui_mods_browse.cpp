@@ -1,5 +1,6 @@
 #include "gui_internal.h"
 #include "gui_renderer.h"
+#include "Engine/Vfs/builtin_packs.h"
 
 #include "mod_manager.h"
 #include "updater.h"
@@ -215,6 +216,8 @@ std::vector<const ts::Package*> visible_packages(const Store& store, const ts::I
         // or a category of that name. A deprecated one only shows once installed.
         if (nsfw(package)) continue;
         if (package.deprecated && !have) continue;
+        // ReSkate carries these itself now (Engine/Vfs/builtin_packs.h).
+        if (mods::superseded_by_builtin(ts::folder_for(package.full_name))) continue;
         if (!store.category.empty() && !package.in_category(store.category)) continue;
         if (!query.empty() && lower(package.title()).find(query) == std::string::npos &&
             lower(package.owner).find(query) == std::string::npos &&
@@ -321,7 +324,8 @@ const thunderstore::Package* package_for(const Store& store, std::string_view fo
 std::vector<const thunderstore::Package*> updates(const Store& store, const thunderstore::Installed& installed) {
     std::vector<const ts::Package*> result;
     for (const auto& package : store.packages)
-        if (ts::update_available(package, installed)) result.push_back(&package);
+        if (ts::update_available(package, installed) && !mods::superseded_by_builtin(ts::folder_for(package.full_name)))
+            result.push_back(&package);
     return result;
 }
 
@@ -333,7 +337,9 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
         std::vector<thunderstore::Package> expanded;
         for (const auto& package : packages)
             for (auto& needed : thunderstore::with_dependencies(package, panel.store.packages, have))
-                if (std::none_of(expanded.begin(), expanded.end(),
+                // (A mod that needs Board Break or Road Rash has them built in: they are not installed.)
+                if (!mods::superseded_by_builtin(thunderstore::folder_for(needed.full_name)) &&
+                    std::none_of(expanded.begin(), expanded.end(),
                         [&](const auto& queued) { return queued.full_name == needed.full_name; }))
                     expanded.push_back(std::move(needed));
         packages = std::move(expanded);

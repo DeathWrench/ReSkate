@@ -18,6 +18,7 @@
 #include "Extension/HallOfMeat/hall_of_meat.h"
 #include "Extension/RoadRash/road_rash.h"
 #include "Extension/BoardBreak/board_break.h"
+#include "Extension/BoardBreak/board_break_audio.h"
 #include "Extension/Skater/grind_exit_control.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
@@ -1295,6 +1296,8 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             // And heard where they fly (every frame, so their sounds stop on leaving a level).
             dingosdk::multiplayer::tick_drone_sounds(r.base, client, multiplayer_ready,
                 dingosdk::drone::knobs().value[dingosdk::drone::kShowBeacons].load(std::memory_order_relaxed) >= 0.5f);
+            // Board Break's cracks and hits, through the game's sound at the skater while in a level.
+            dingosdk::board_break::audio::tick_game_sound(r.base, client, multiplayer_ready);
             if (auto notice = dingosdk::multiplayer::take_leave_notice(); !notice.empty())
                 dingosdk::overlay::notify(dingosdk::overlay::NoticeLevel::warning, "Map not installed", std::move(notice));
             // Kicked, banned or otherwise put out by the host or server: said in the middle of

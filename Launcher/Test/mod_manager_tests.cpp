@@ -1,6 +1,9 @@
 // Launcher mod manager: install from .zip and folders, the Mods list and mods.json.
 #include "Launcher/mod_manager.h"
 
+#include "Engine/Vfs/builtin_pack_format.h"
+#include "Engine/Vfs/builtin_packs.h"
+#include <zstd.h>
 #include "Engine/Vfs/mod_list.h"
 
 #include <Windows.h>
@@ -342,6 +345,85 @@ int main() {
                   !fs::exists(store / L"Team-Empty"),
               "Thunderstore installs refuse a package with nothing to load");
         check(install(store, sources / L"empty.zip") == "empty", "A plain install still takes a description-only mod");
+    }
+
+    // A built-in pack in ReSkate's own format unpacks to exactly its files (a name with spaces
+    // included), and one with a path that leaves its folder unpacks nothing.
+    {
+        const auto pack = [](const std::vector<std::pair<std::string, std::string>>& files) {
+            std::string plain(mods::builtin_pack::magic.begin(), mods::builtin_pack::magic.end());
+            const auto put = [&](auto value) { plain.append(reinterpret_cast<const char*>(&value), sizeof(value)); };
+            put(static_cast<std::uint32_t>(files.size()));
+            for (const auto& [name, bytes] : files) {
+                put(static_cast<std::uint16_t>(name.size()));
+                plain += name;
+                put(static_cast<std::uint64_t>(bytes.size()));
+            }
+            for (const auto& file : files) plain += file.second;
+            std::vector<unsigned char> packed(ZSTD_compressBound(plain.size()));
+            packed.resize(ZSTD_compress(packed.data(), packed.size(), plain.data(), plain.size(), 19));
+            return packed;
+        };
+        const auto target = root / L"builtin" / L"good";
+        std::string issue;
+        const auto good = pack({{"layout.toc", "toc"}, {"sounds/body/Body Impact 1.wav", "RIFF"}, {"decks/wide/layout.toc", "deck"}});
+        check(mods::unpack_builtin_pack(good, target, issue) && issue.empty() && read(target / L"layout.toc") == "toc" &&
+                  read(target / L"sounds" / L"body" / L"Body Impact 1.wav") == "RIFF" && read(target / L"decks" / L"wide" / L"layout.toc") == "deck",
+              "A built-in pack unpacks to its files");
+        const auto bad_target = root / L"builtin" / L"bad";
+        check(!mods::unpack_builtin_pack(pack({{"../escape.txt", "x"}}), bad_target, issue) && !issue.empty() &&
+                  !fs::exists(root / L"builtin" / L"escape.txt"),
+              "A built-in pack may not write outside its folder");
+        auto cut = good;
+        cut.resize(cut.size() / 2);
+        check(!mods::unpack_builtin_pack(cut, root / L"builtin" / L"cut", issue), "A cut-short built-in pack is refused");
+        // The packs this build made (RESKATE_BUILTIN_PACKS: their folder), each unpacked whole.
+        std::wstring built(32768, L'\0');
+        built.resize(GetEnvironmentVariableW(L"RESKATE_BUILTIN_PACKS", built.data(), static_cast<DWORD>(built.size())));
+        if (!built.empty()) {
+            for (const auto& file : fs::directory_iterator(fs::path(built))) {
+                if (file.path().extension() != L".rskpack") continue;
+                std::ifstream in(file.path(), std::ios::binary);
+                const std::vector<unsigned char> bytes{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+                const auto out = root / L"builtin" / file.path().stem();
+                std::size_t count{};
+                std::uintmax_t size{};
+                const bool ok = mods::unpack_builtin_pack(bytes, out, issue);
+                for (const auto& entry : fs::recursive_directory_iterator(out))
+                    if (entry.is_regular_file()) { ++count; size += entry.file_size(); }
+                std::cout << "  " << file.path().filename().string() << ": " << (ok ? "unpacked " : "FAILED ") << count << " files, "
+                          << size << " bytes" << (ok ? "" : " (" + issue + ")") << '\n';
+                check(ok, "A built-in pack this build made unpacks");
+            }
+        }
+    }
+
+    // Mods ReSkate now carries itself (Board Break, Road Rash) go, and mods.json forgets them;
+    // every other mod stays as it was.
+    {
+        check(mods::superseded_by_builtin("Fourth_Studio-Road_Rash") && mods::superseded_by_builtin("fourth_studio-board_break_pack") &&
+                  mods::superseded_by_builtin("Fourth_Studio-Board_Break") && mods::superseded_by_builtin("Road_Rash") &&
+                  !mods::superseded_by_builtin("Fourth_Studio-Gothic_Tights") && !mods::superseded_by_builtin("Someone-Road_Rash_Remix"),
+              "Only the mods built in now are taken for them");
+        const auto store = root / L"retire" / L"Mods";
+        fs::create_directories(store / L"Fourth_Studio-Board_Break_Pack" / L"decks");
+        fs::create_directories(store / L"Fourth_Studio-Road_Rash");
+        fs::create_directories(store / L"Someone-Other_Mod");
+        std::ofstream(store / L"Fourth_Studio-Road_Rash" / L"layout.toc") << "toc";
+        std::ofstream(store / L"Someone-Other_Mod" / L"layout.toc") << "toc";
+        std::ofstream(store / L"mods.json")
+            << R"({"schema":1,"mods":[{"name":"Fourth_Studio-Road_Rash","enabled":true},{"name":"Someone-Other_Mod","enabled":false}]})";
+        auto retired = launcher_mods::retire_superseded(store);
+        std::sort(retired.begin(), retired.end());
+        check(retired == std::vector<std::string>{"Fourth_Studio-Board_Break_Pack", "Fourth_Studio-Road_Rash"} &&
+                  !fs::exists(store / L"Fourth_Studio-Road_Rash") && !fs::exists(store / L"Fourth_Studio-Board_Break_Pack") &&
+                  fs::exists(store / L"Someone-Other_Mod" / L"layout.toc"),
+              "The mods built in now are taken away, the others left");
+        const auto remaining = mods::scan_mods(store.parent_path());
+        check(remaining.issue.empty() && remaining.missing.empty() && remaining.entries.size() == 1 &&
+                  remaining.entries[0].mod.name == "Someone-Other_Mod" && !remaining.entries[0].enabled,
+              "mods.json forgets them and keeps the rest as it was");
+        check(launcher_mods::retire_superseded(store).empty(), "Nothing is taken away twice");
     }
 
     std::error_code ignored;

@@ -1,4 +1,5 @@
 #include "item_browser.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "local_customization_runtime.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
@@ -507,7 +508,7 @@ void log_roots(State& s, const md::Context& context) {
 void log_status(const State& s) {
     logging::log(Level::info, Channel::customization, "Item browser: {} grid(s), search \"{}\", filter {}, {} favorite(s), file {}.",
         s.grids.size(), s.search, filter_names[static_cast<std::size_t>(s.filter)], s.favorites.keys.size(),
-        s.favorites.file.string());
+        path_utf8(s.favorites.file));
     for (const auto& grid : s.grids) {
         std::string focus = "-";
         if (grid.focused >= 0 && static_cast<std::size_t>(grid.focused) < grid.shown.size())
