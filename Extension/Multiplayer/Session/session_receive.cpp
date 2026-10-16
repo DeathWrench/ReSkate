@@ -148,7 +148,9 @@ std::vector<Packet> unpack_poses(Session &s, std::span<const std::uint8_t> bytes
     bool complete = true;
     out.reserve(batch->entries.size());
     for (const auto &entry : batch->entries) {
-        auto rebuilt = pose_batch::rebuild(s.pose_streams, entry);
+        // A stream is opened only for a player in this session (a server sends no others; one
+        // whose player is not known yet is not acked, so it comes again).
+        auto rebuilt = entry.whole && !find_peer(s, entry.source) ? std::nullopt : pose_batch::rebuild(s.pose_streams, entry);
         if (!rebuilt) {
             complete = false;
             continue;
@@ -182,7 +184,8 @@ std::vector<Packet> unpack_sound(Session &s, std::span<const std::uint8_t> bytes
     std::vector<Packet> out;
     if (s.sound_streams.size() > 2 * max_players)
         std::erase_if(s.sound_streams, [&](const auto &stream) { return !find_peer(s, stream.second.source); });
-    auto heard = sound_codec::read(s.sound_streams, bytes, s.world, s.map);
+    // (A stream only for a player in this session; it is sent whole again every couple of seconds.)
+    auto heard = sound_codec::read(s.sound_streams, bytes, s.world, s.map, [&](std::uint64_t source) { return find_peer(s, source) != nullptr; });
     if (!heard) return out;
     out.reserve(heard->size());
     for (auto &one : *heard) {

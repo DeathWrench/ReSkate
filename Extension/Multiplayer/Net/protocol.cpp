@@ -1,4 +1,5 @@
 #include "protocol.h"
+#include "skater_bone_parents.h"
 #include <algorithm>
 #include <bit>
 #include <charconv>
@@ -353,6 +354,25 @@ void limit_bone_scale(Pose &pose, float limit) noexcept {
     hold(pose.root, limit);
     for (auto &t : pose.skater) hold(t, limit);
     for (auto &t : pose.board) hold(t, std::min(limit, board_scale_limit));
+    // A bone shows at its own size times its parents' (and the whole skater's): each held to the
+    // limit, a chain of them grew past it (four neck bones at 2x made a neck 16 times as long,
+    // seen 2026-10-15). So each bone is held to what is left of the limit after its parents: the
+    // size it shows stays within 1/limit to limit, on its largest axis and its smallest.
+    const auto largest = [](const Transform &t) { return std::max({t.scale[0], t.scale[1], t.scale[2]}); };
+    const auto smallest = [](const Transform &t) { return std::min({t.scale[0], t.scale[1], t.scale[2]}); };
+    const float root_grow = largest(pose.root), root_shrink = smallest(pose.root);
+    std::array<float, skater_bone_parents.size()> grown{}, shrunk{};
+    for (std::size_t i = 0; i < pose.skater.size(); ++i) {
+        const auto parent = i < skater_bone_parents.size() ? skater_bone_parents[i] : std::int16_t{-1};
+        const float up = parent >= 0 ? grown[static_cast<std::size_t>(parent)] : root_grow;
+        const float down = parent >= 0 ? shrunk[static_cast<std::size_t>(parent)] : root_shrink;
+        auto &t = pose.skater[i];
+        for (float &axis : t.scale) axis = std::clamp(axis, 1.f / (limit * down), limit / up);
+        if (i < grown.size()) {
+            grown[i] = up * largest(t);
+            shrunk[i] = down * smallest(t);
+        }
+    }
 }
 void limit_bone_reach(Pose &pose, float limit) noexcept {
     if (!(limit > 0.f)) return;

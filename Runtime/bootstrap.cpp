@@ -9,6 +9,7 @@
 #include "Extension/Boot/ea_app_block.h"
 #include "Extension/Boot/ea_service_block.h"
 #include "Extension/Boot/descriptor_heap_size.h"
+#include "Extension/Boot/game_fatal_dump.h"
 #include "Extension/Boot/eadp_errors_arena.h"
 #include "Extension/Assets/native_patch_support.h"
 #include "Extension/Assets/mod_layers.h"
@@ -22,6 +23,7 @@
 #include "Extension/World/native_entity_pages.h"
 #include "Extension/World/world_pool_usage.h"
 #include "Extension/World/physics_world_size.h"
+#include "Extension/World/spatial_cull_ids.h"
 #include <string>
 
 namespace dingosdk::runtime {
@@ -47,6 +49,9 @@ bool initialize_bootstrap(std::uintptr_t base) {
     // The memory ledger, when RESKATE_MEMORY_TRACE asks for it: here, while the game is still
     // suspended and before the pools below are enlarged, so it sees who makes all of them.
     console::start_memory_trace_from_environment();
+    // (Not needed for the game to run: a mismatch leaves crash reports at what the game writes.)
+    error.clear(); ready = start_game_fatal_dump(base, error);
+    (void)stage(Channel::runtime, "Crash dumps from the game's own fatal handlers", ready, error);
     error.clear(); ready = start_native_patch_support(base, error);
     if (!stage(Channel::assets, "Native InitFS/package support", ready, error)) return false;
     error.clear(); ready = start_mod_layers(base, error);
@@ -64,6 +69,8 @@ bool initialize_bootstrap(std::uintptr_t base) {
     if (!stage(Channel::assets, "Native render-resource pools", ready, error)) return false;
     error.clear(); ready = start_native_entity_pages(base, error);
     if (!stage(Channel::world, "Native entity pages (524288 entity/update slots, 1048576 render slots, 16384 spatial blocks/bucket, 128 MiB arena minimum)", ready, error)) return false;
+    error.clear(); ready = start_spatial_cull_ids(base, error);
+    if (!stage(Channel::world, "Spatial cull IDs (262144 a queue)", ready, error)) return false;
     // (Diagnostics only: how full those pools get. A mismatch leaves the game as it is.)
     error.clear(); ready = start_world_pool_usage(base, error);
     (void)stage(Channel::world, "World pool usage watch", ready, error);

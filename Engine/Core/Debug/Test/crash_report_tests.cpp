@@ -8,6 +8,7 @@
 #include "Engine/Core/Debug/trace.h"
 #include "crash_report_config.h"
 #include "Engine/Core/Log/logging.h"
+#include <array>
 #include <fstream>
 #include <format>
 #include <iostream>
@@ -30,6 +31,19 @@ LONG WINAPI native_child_handler(EXCEPTION_POINTERS* pointers) {
     CopyFileW(path.c_str(), (native_fixture_directory / L"duplicate.dmp").c_str(), TRUE);
     ExitProcess(42);
 }
+// A heap block only the faulting stack points at: present in a dump only with the memory the
+// stacks reference. Made at run time, so its bytes are nowhere else in the process.
+// (Filled in place: a copy left on a stack would be in every dump.)
+__declspec(noinline) void fill_marker(std::array<char, 64>& bytes) {
+    for (std::size_t i = 0; i < bytes.size(); ++i) bytes[i] = static_cast<char>((i * 37 + 11) ^ 0xa5);
+}
+// The game's own fatal handler: ReSkate's import hook asks for its dump first, then the game
+// writes its own (game_fatal_dump.cpp).
+LONG WINAPI fatal_child_handler(EXCEPTION_POINTERS* pointers) {
+    capture_game_fatal(GetCurrentThreadId(), pointers);
+    return native_child_handler(pointers);
+}
+enum class Mode { direct, native, fatal };
 std::string read(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
@@ -190,7 +204,8 @@ void queue_checks(const std::filesystem::path& root) {
     upload_pending(L"test", queue, failure);
     check(!std::filesystem::exists(expired) && !std::filesystem::exists(log_attachment_path(expired)), "Expired report or attachment retained");
 }
-void crash_check(const std::filesystem::path& root, bool native) {
+void crash_check(const std::filesystem::path& root, Mode mode) {
+    const bool native = mode != Mode::direct;
     std::filesystem::create_directories(root);
     std::array<wchar_t, 32768> executable{};
     GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
@@ -200,7 +215,8 @@ void crash_check(const std::filesystem::path& root, bool native) {
         std::filesystem::copy_file(executable.data(), child_path);
         std::filesystem::copy_file(std::filesystem::path(executable.data()).parent_path() / L"ReSkateLauncher.exe", root / L"ReSkateLauncher.exe");
     }
-    auto command = std::format(L"\"{}\" {} \"{}\"", child_path.wstring(), native ? L"--native-crash" : L"--crash", root.wstring());
+    auto command = std::format(L"\"{}\" {} \"{}\"", child_path.wstring(),
+        mode == Mode::fatal ? L"--fatal-crash" : native ? L"--native-crash" : L"--crash", root.wstring());
     STARTUPINFOW startup{sizeof(startup)};
     PROCESS_INFORMATION process{};
     check(CreateProcessW(child_path.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process) != FALSE, "Cannot start crash fixture");
@@ -226,7 +242,13 @@ void crash_check(const std::filesystem::path& root, bool native) {
     check(MiniDumpReadDumpStream(bytes.data(), ModuleListStream, &stream, &data, &size) != FALSE, "Minidump module list missing");
     check(Json::parse(read(dump.wstring() + L".json")).at("application").string() == "ReSkate", "Crash attributes missing");
     check(Json::parse(read(dump.wstring() + L".json")).at("capture.source").string() ==
-        (native ? "game-native" : "unhandled-exception"), "Wrong capture source");
+        (mode == Mode::fatal ? "game-fatal-handler" : native ? "game-native" : "unhandled-exception"), "Wrong capture source");
+    if (mode != Mode::native) {
+        std::array<char, 64> marker{};
+        fill_marker(marker);
+        check(bytes.find(std::string_view(marker.data(), marker.size())) != std::string::npos,
+            "Dump lacks the heap memory the faulting stack points at");
+    }
     check(Json::parse(read(dump.wstring() + L".json")).at("attachment.log").string() == "complete" &&
         read(log_attachment_path(dump)) == log, "Crash did not snapshot its session log");
     const auto tags = Json::parse(read(dump.wstring() + L".json"));
@@ -234,7 +256,7 @@ void crash_check(const std::filesystem::path& root, bool native) {
         tags.at("game.destination").string() == "Levels/Game/DingoLevel_Root/DingoLevel_Root + levels/game/dingolevel_reskate_lsc_b2/dingolevel_reskate_lsc_b2 @ DefaultStartPoint" &&
         tags.at("gpu.name").string() == "Fixture GPU" && tags.at("gpu.driver").string() == "32.0.21025.1",
         "Crash was not tagged with its level and graphics card");
-    if (native) {
+    if (mode == Mode::native) {
         const auto source = root / L"local" / L"ReSkate" / L"Game" / L"Skate" / L"CrashDumps";
         const auto pid = GetProcessId(child.value), created = process_creation_seconds(child.value);
         const auto selected = find_native_dump(source, pid, created);
@@ -289,8 +311,10 @@ int wmain(int argc, wchar_t** argv) {
             check(result.accepted, "Sentry did not confirm test report");
             return 0;
         }
-        if (argc == 3 && (std::wstring_view(argv[1]) == L"--crash" || std::wstring_view(argv[1]) == L"--native-crash")) {
-            const bool native = std::wstring_view(argv[1]) == L"--native-crash";
+        if (argc == 3 && (std::wstring_view(argv[1]) == L"--crash" || std::wstring_view(argv[1]) == L"--native-crash" ||
+                std::wstring_view(argv[1]) == L"--fatal-crash")) {
+            const bool fatal = std::wstring_view(argv[1]) == L"--fatal-crash";
+            const bool native = fatal || std::wstring_view(argv[1]) == L"--native-crash";
             if (native) {
                 const auto local = std::filesystem::path(argv[2]) / L"local";
                 SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
@@ -302,10 +326,13 @@ int wmain(int argc, wchar_t** argv) {
             SetUnhandledExceptionFilter(finish_child);
             logging::Options options; options.directory = argv[2]; options.truncate_file = true;
             check(logging::initialize(options), "Fixture logging failed");
-            if (native) SetUnhandledExceptionFilter(native_child_handler); // Reproduce the game's later handler registration.
+            if (native) SetUnhandledExceptionFilter(fatal ? fatal_child_handler : native_child_handler); // Reproduce the game's later handler registration.
             set_destination(L"Levels/Game/DingoLevel_Root/DingoLevel_Root + levels/game/dingolevel_reskate_lsc_b2/dingolevel_reskate_lsc_b2 @ DefaultStartPoint");
             set_gpu(L"Fixture GPU", L"32.0.21025.1");
-            RaiseException(test_exception, EXCEPTION_NONCONTINUABLE, 0, nullptr);
+            auto* const volatile marker = new std::array<char, 64>;
+            fill_marker(*marker);
+            const ULONG_PTR arguments[]{reinterpret_cast<ULONG_PTR>(marker)};
+            RaiseException(test_exception, EXCEPTION_NONCONTINUABLE, 1, arguments);
             return 3;
         }
         check(argc == 2, "Pass a fixture root");
@@ -320,8 +347,9 @@ int wmain(int argc, wchar_t** argv) {
         endpoint_checks();
         attachment_checks(root);
         queue_checks(root);
-        crash_check(root / L"direct", false);
-        crash_check(root / L"native", true);
-        std::cout << "Timing envelopes, endpoint, receipts, multipart attachments, log snapshots, retries, retention, opt-out, exception chaining, direct capture and native-handler fallback checks passed.\n";
+        crash_check(root / L"direct", Mode::direct);
+        crash_check(root / L"native", Mode::native);
+        crash_check(root / L"fatal", Mode::fatal);
+        std::cout << "Timing envelopes, endpoint, receipts, multipart attachments, log snapshots, retries, retention, opt-out, exception chaining, direct capture, native-handler fallback and game fatal-handler capture checks passed.\n";
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

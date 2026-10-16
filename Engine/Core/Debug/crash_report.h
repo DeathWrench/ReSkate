@@ -10,6 +10,9 @@ StartResult start(const std::filesystem::path& log_directory) noexcept;
 void stop() noexcept;
 // Last-chance path: only signals the prestarted helper and waits at most 15 seconds.
 void capture(EXCEPTION_POINTERS* exception) noexcept;
+// The same, from the game's own fatal handler just before it writes its dump: thread_id is the
+// thread that faulted, which need not be the calling one. The first capture of either kind wins.
+void capture_game_fatal(DWORD thread_id, EXCEPTION_POINTERS* exception) noexcept;
 // The level being loaded ("root + sublevel @ start point") and the graphics card the game renders
 // on, for a report's tags: game.map, game.destination, gpu.name and gpu.driver. Nothing while
 // reporting is off; too long a value is cut short.

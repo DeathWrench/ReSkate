@@ -75,12 +75,16 @@ bool save_dump(HANDLE process, const SharedReport& report, const std::filesystem
     Handle file(CreateFileW(temporary.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr));
     if (file.value == INVALID_HANDLE_VALUE) return false;
     MINIDUMP_EXCEPTION_INFORMATION exception{report.thread_id, report.exception, TRUE};
-    constexpr auto flags = static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules);
+    // With the memory the stacks point at, so a crash on a freed or overwritten object shows that
+    // object and the list it was found in, not just the registers (a few MB more a dump).
+    constexpr auto flags = static_cast<MINIDUMP_TYPE>(MiniDumpNormal | MiniDumpWithThreadInfo |
+        MiniDumpWithUnloadedModules | MiniDumpWithIndirectlyReferencedMemory);
     const auto written = MiniDumpWriteDump(process, GetProcessId(process), file.value, flags, &exception, nullptr, nullptr);
     const auto durable = written && FlushFileBuffers(file.value);
     CloseHandle(file.release());
     if (!durable) { DeleteFileW(temporary.c_str()); return false; }
-    return publish_dump(temporary, report, "unhandled-exception");
+    return publish_dump(temporary, report,
+        report.source == CaptureSource::game_fatal_handler ? "game-fatal-handler" : "unhandled-exception");
 }
 bool collect_native_dump(HANDLE process, const SharedReport& report, const std::filesystem::path& directory) {
     const auto native = find_native_dump(report.native_directory.data(), GetProcessId(process), process_creation_seconds(process));

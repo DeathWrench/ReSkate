@@ -443,9 +443,11 @@ std::vector<std::uint8_t> encode(const Packet &, bool compact_pose = false);
 // zero and pack away. One step is about 0.0025 degrees times 2^bits: 4 bits is 0.04 degrees,
 // 7 bits a third of a degree.
 void coarsen_rotations(Pose &pose, unsigned bits) noexcept;
-// Keeps every bone's scale within 1/limit to limit on each axis (1: no scaling at all). A mod
-// that resizes part of a skater (a head four times the size) does it with a bone's scale,
-// which travels in the pose and so shows to everyone, mod or not.
+// Keeps every bone's scale within 1/limit to limit on each axis (1: no scaling at all), and the
+// size each skater bone shows at (its own times its parents' and the whole skater's, after
+// skater_bone_parents.h) within the same. A mod that resizes part of a skater (a head four times
+// the size) does it with a bone's scale, which travels in the pose and so shows to everyone, mod
+// or not; one that resized each bone of a chain to the limit grew past it.
 // The skateboard is held closer, to board_scale_limit: nothing in the game resizes one, and a
 // hacked client that does shows everyone a board the size of a car.
 inline constexpr float board_scale_limit = 1.1f;

@@ -4,7 +4,10 @@
 #include <string>
 
 namespace dingosdk::crash_report {
-inline constexpr DWORD protocol_version = 3;
+inline constexpr DWORD protocol_version = 4;
+// Who asked for the dump: ReSkate's last-chance filter, or the game's own fatal handler about to
+// write its dump (which it does without ever reaching that filter).
+enum class CaptureSource : DWORD { unhandled_exception, game_fatal_handler };
 inline constexpr DWORD capture_timeout_ms = 15000;
 struct SharedReport {
     DWORD version{protocol_version};
@@ -20,6 +23,7 @@ struct SharedReport {
     std::array<wchar_t, 512> destination{};
     std::array<wchar_t, 128> gpu_name{};
     std::array<wchar_t, 32> gpu_driver{};
+    CaptureSource source{};
 };
 // Explicitly inherited unnamed handles; no token or paths on the command line.
 enum HandleIndex : std::size_t { mapping, requested, captured, stopping, ready, parent, handle_count };

@@ -160,6 +160,35 @@ void apply_performance_settings() {
         }
     } catch (...) {}
 }
+// The game's own connection is a loopback to the world it hosts in the same process (ReSkate's
+// multiplayer runs beside it), so its in-game timeouts (Game.cfg 15 s, Branch.cfg 5 s) can only
+// fire when the game itself stalls that long; a long replay export does (the encoder sets the
+// pace of every frame), and the game then dropped the player to the splash screen with
+// SecureReason_TimedOut while the export went on. -1 turns them off, as the game's own
+// development config does. Kept apart from the settings above so an unknown name here cannot
+// hold those back; tried for a minute.
+void apply_local_connection_timeouts() {
+    static int attempts = 0;
+    static ULONGLONG next_attempt = 0;
+    if (attempts >= 120) return;
+    const auto now = GetTickCount64();
+    if (now < next_attempt) return;
+    next_attempt = now + 500;
+    try {
+        bool pending = false;
+        std::string results;
+        for (const auto* name : {"Client.IngameTimeout", "Server.IngameTimeout"}) {
+            const auto result = dingosdk::change_named_setting(name, "-1", false);
+            pending = pending || result.starts_with("error: ");
+            results += (results.empty() ? "" : " | ") + result;
+        }
+        if (!pending || ++attempts == 120) {
+            attempts = 120;
+            dingosdk::logging::log(pending ? dingosdk::logging::Level::warning : dingosdk::logging::Level::info,
+                dingosdk::logging::Channel::runtime, "Local connection timeouts: {}", results);
+        }
+    } catch (...) {}
+}
 // The mesh streaming pool holds every render mesh the world has loaded, in video memory.
 // GraphicsPC.lua fixes it at 532960 KB (520 MB) on every PC quality level, sized for San Van's
 // streamed cells; a big custom map's meshes do not fit, so its level either never finishes
@@ -313,6 +342,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     dingosdk::refresh_named_settings(settings_wanted);
     apply_throwdown_modes();
     apply_performance_settings();
+    apply_local_connection_timeouts();
     dingosdk::job_spin::apply_default();
     apply_mesh_streaming_pool();
     dingosdk::multiplayer::apply_throwdown_strings(r.base);

@@ -104,15 +104,24 @@ StartResult start(const std::filesystem::path& log_directory) noexcept {
         return StartResult::ready;
     } catch (...) { return StartResult::failed; }
 }
-void capture(EXCEPTION_POINTERS* exception) noexcept {
-    if (!exception || InterlockedCompareExchange(&capturing, 1, 0) != 0) return;
-    report->thread_id = GetCurrentThreadId();
+namespace {
+void capture_on(DWORD thread_id, EXCEPTION_POINTERS* exception, CaptureSource source) noexcept {
+    if (!exception || !thread_id || InterlockedCompareExchange(&capturing, 1, 0) != 0) return;
+    report->thread_id = thread_id;
     report->exception = exception;
+    report->source = source;
     MemoryBarrier();
     if (SetEvent(handles[requested])) {
         const HANDLE wait_for[]{handles[captured], helper};
         WaitForMultipleObjects(2, wait_for, FALSE, capture_timeout_ms);
     }
+}
+}
+void capture(EXCEPTION_POINTERS* exception) noexcept {
+    capture_on(GetCurrentThreadId(), exception, CaptureSource::unhandled_exception);
+}
+void capture_game_fatal(DWORD thread_id, EXCEPTION_POINTERS* exception) noexcept {
+    capture_on(thread_id, exception, CaptureSource::game_fatal_handler);
 }
 void set_destination(std::wstring_view destination) noexcept {
     if (auto* const shared = report) copy_cut(shared->destination, destination);
