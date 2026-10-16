@@ -323,6 +323,28 @@ bool valid_mod_name(std::string_view name) {
     });
 }
 
+Mod describe_mod(const std::filesystem::path& directory, std::string name, std::vector<std::string>& notes) {
+    std::error_code error;
+    Mod mod;
+    mod.name = std::move(name);
+    mod.title = mod.name;
+    mod.directory = directory;
+    mod.provides_layout = fs::is_regular_file(mod.directory / layout_name, error);
+    mod.provides_levels = fs::is_regular_file(mod.directory / levels_name, error);
+    for (fs::directory_iterator it(mod.directory / "parks", error), end; !error && it != end; it.increment(error)) {
+        auto file = ascii_path(it->path().filename());
+        if (!file.ends_with(".park.json") || mod.park_maps.size() >= 16) continue;
+        file.resize(file.size() - 10);
+        mod.park_maps.push_back(std::move(file));
+    }
+    std::sort(mod.park_maps.begin(), mod.park_maps.end());
+    read_build_info(mod, notes);
+    read_mod_info(mod, notes);
+    read_levels(mod);
+    read_studio_marker(mod);
+    return mod;
+}
+
 ModList scan_mods(const std::filesystem::path& data_root) noexcept {
     ModList result;
     try {
@@ -364,24 +386,7 @@ ModList scan_mods(const std::filesystem::path& data_root) noexcept {
             }
             ModEntry entry;
             entry.enabled = enabled;
-            auto& mod = entry.mod;
-            mod.name = found->second;
-            mod.title = mod.name;
-            mod.directory = result.root / mod.name;
-            mod.provides_layout = fs::is_regular_file(mod.directory / layout_name, error);
-            mod.provides_levels = fs::is_regular_file(mod.directory / levels_name, error);
-            for (fs::directory_iterator it(mod.directory / "parks", error), end; !error && it != end; it.increment(error)) {
-                auto file = ascii_path(it->path().filename());
-                if (!file.ends_with(".park.json") || mod.park_maps.size() >= 16) continue;
-                file.resize(file.size() - 10);
-                mod.park_maps.push_back(std::move(file));
-            }
-            error.clear();
-            std::sort(mod.park_maps.begin(), mod.park_maps.end());
-            read_build_info(mod, result.notes);
-            read_mod_info(mod, result.notes);
-            read_levels(mod);
-            read_studio_marker(mod);
+            entry.mod = describe_mod(result.root / found->second, found->second, result.notes);
             result.entries.push_back(std::move(entry));
         }
         // Only mods named in the exclusions file are fingerprinted.

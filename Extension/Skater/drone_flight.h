@@ -10,7 +10,16 @@
 //   input.up       -> throttle (0 = hover, + = climb, - = descend)
 //   input.look_x   -> yaw     (mouse look delta, right = turn right)
 //   input.look_y   -> extra pitch (mouse look delta)
-//   input.boost    -> doubles the speed cap
+//   input.boost    -> half as much thrust again
+//
+// The model: the throttle sets motor output, which spools up and down over some tens of
+// milliseconds, and thrust grows with output to the power 1.5, so the hover throttle fixes the
+// thrust-to-weight ratio (a 22% hover is about 10:1, a 5-inch's). Thrust falls off as the drone
+// climbs into its own inflow and comes back near the ground. The flight controller turns the
+// drone at the rate the sticks ask, catching up in about 30 ms, or in angle mode leans it to the
+// angle they ask. Drag is quadratic and larger across the props than edge on; the top speed
+// setting sets how much, so full throttle flat out settles near it. Hits bounce off the surface
+// they meet, knock the drone about, and a hard one cuts the motors until it is armed again.
 #include "free_flight.h"
 #include "drone_radio.h"
 #include "drone_beacon.h"
@@ -34,11 +43,15 @@ struct Settings {
     float hover_throttle = 0.35f;   // throttle at which thrust equals gravity
     float gravity = 9.81f;
     float lin_drag = 0.15f;         // 1/s
-    float quad_drag = 0.02f;        // 1/unit
-    float camera_uptilt_deg = 25.0f;
+    float camera_uptilt_deg = 0.0f;
     bool angle_mode = false;        // true = self-levelling (easier), false = acro (full flips)
     float max_angle_deg = 55.0f;
-    float angle_response = 8.0f;
+    float angle_response = 8.0f;    // 1/s: how quickly angle mode leans to the asked angle
+    bool alt_hold = false;          // a throttle that springs back holds the height in its middle
+    float climb_rate = 20.0f;       // m/s at full stick while holding height
+    bool crash = true;              // hits bounce and tumble; a hard one cuts the motors
+    float crash_speed = 7.0f;       // m/s into a surface that cuts the motors; 0 = never
+    float propwash = 0.5f;          // shake when dropping through its own prop wash, 0-1
     bool collide = true;            // collide with the world (needs the game's collision query)
     float body_radius = 0.3f;       // how close it gets to a surface before stopping
     float floor_depth = 1.5f;       // invisible floor this far below the start height (only without collisions); 0 = none
@@ -58,6 +71,14 @@ struct State {
     std::array<float, 16> start_body{};
     bool failsafe = false;          // flew out of range: motors cut until the drone is reset
     float signal_lost = 0;          // seconds in a row without a picture (range)
+    std::array<float, 3> rate{};    // turn rates, rad/s: about right (+ nose up), up (+ left), forward (+ roll right)
+    float motor = 0;                // motor output 0..1, following the throttle with the spool-up lag
+    bool crashed = false;           // a hard hit cut the motors: arming again (off, then on) puts it right
+    bool armed_last = true;         // armed last tick, to see an arm after a crash
+    bool grounded = false;          // touched something underneath last tick
+    float glitch = 0;               // video break-up after a hit, 0..1, fading
+    std::array<float, 3> wash{};    // prop-wash wobble now, rad/s
+    std::uint32_t noise = 0x2545f491u;
 };
 
 // What the OSD and the motor sound read (written by the flight tick, read from other threads).
@@ -69,6 +90,9 @@ struct Telemetry {
     std::atomic<float> home_distance{0.0f}; // metres from the takeoff point
     std::atomic<float> signal_lost{0.0f};   // seconds in a row without a picture
     std::atomic<float> stick_roll{0}, stick_pitch{0}, stick_yaw{0};   // -1..1, + = right / forward / right
+    std::atomic<float> stick_throttle{-2};  // -1..1 when the throttle stick springs back, else below -1 (shown from the throttle)
+    std::atomic<bool> crashed{false};       // a hard hit cut the motors
+    std::atomic<float> glitch{0};           // video break-up after a hit, 0..1
     std::atomic<long long> last_ms{0};   // steady-clock milliseconds of the last flight tick
 };
 inline Telemetry& telemetry() { static Telemetry value; return value; }
@@ -113,11 +137,12 @@ enum Knob : std::size_t { kGravity, kDrag, kHover, kRollCenter, kRollMax, kRollE
     kYawCenter, kYawMax, kYawExpo, kUptilt, kFloor, kCollide, kRadius, kOsd, kVolume,
     kOsdScale, kOsdColor, kOsdFont, kOsdMargin, kCrosshair, kShowArmed, kShowBattery, kShowTimer, kShowThrottle, kShowAlt,
     kShowSpeed, kSticks, kStickSize, kArmAxis, kResetAxis, kDisarmFreeze, kBeacon, kShowBeacons, kArmButton, kResetButton,
-    kAnalog, kAnalogNoise, kAnalogScan, kAnalogVignette, kAnalogGlitch, kRange, kMotorPitch, kThrottleCentre, kDeadzone, kGoggles, kHideUi };
+    kAnalog, kAnalogNoise, kAnalogScan, kAnalogVignette, kAnalogGlitch, kRange, kMotorPitch, kThrottleCentre, kDeadzone, kGoggles, kHideUi,
+    kGamepad, kPadRate, kPadExpo, kAltHold, kClimbRate, kFlightMode, kMaxAngle, kCrash, kCrashSpeed, kPropwash, kPadInvert };
 inline constexpr KnobInfo knob_info[] = {
-    {"gravity", "How hard the drone is pulled down. 9.8 is Earth; higher feels heavier and snappier", 0.0f, 50.0f, 20.0f},
+    {"gravity", "How hard the drone is pulled down. 9.8 is Earth; higher feels heavier and snappier", 0.0f, 50.0f, 9.81f},
     {"drag", "Air resistance. Higher slows the drone down sooner when you let off", 0.0f, 3.0f, 0.15f},
-    {"hover", "The throttle that keeps the drone level in the air (0.1-0.9). Lower means more power to spare", 0.1f, 0.9f, 0.35f},
+    {"hover", "The throttle that keeps the drone in the air (0.1-0.9). Lower means more power to spare: 0.22 is about ten times its weight in thrust, a 5-inch's", 0.1f, 0.9f, 0.35f},
     {"rollcenter", "Roll speed near the middle of the stick, in degrees per second (Betaflight \"Actual\" rates)", 1.0f, 1000.0f, 80.0f},
     {"rollmax", "Roll speed with the stick fully over, in degrees per second", 30.0f, 2000.0f, 700.0f},
     {"rollexpo", "How much softer roll is near the middle of the stick (0 = none, 1 = most)", 0.0f, 1.0f, 0.15f},
@@ -127,7 +152,7 @@ inline constexpr KnobInfo knob_info[] = {
     {"yawcenter", "Yaw (turning) speed near the middle of the stick, in degrees per second", 1.0f, 1000.0f, 130.0f},
     {"yawmax", "Yaw speed with the stick fully over, in degrees per second", 30.0f, 2000.0f, 780.0f},
     {"yawexpo", "How much softer yaw is near the middle of the stick (0 = none, 1 = most)", 0.0f, 1.0f, 0.30f},
-    {"uptilt", "How far the camera points up, in degrees. Real FPV cameras sit at about 25-40; faster flying needs more", -30.0f, 70.0f, 25.0f},
+    {"uptilt", "How far the camera points up, in degrees. Real FPV cameras sit at about 25-40; faster flying needs more", -30.0f, 70.0f, 0.0f},
     {"floor", "With collisions off: an invisible floor this many metres below where you took off (0 = none)", 0.0f, 1000.0f, 1.5f},
     {"collide", "Hit the ground, walls and ramps (1), or fly through everything (0)", 0.0f, 1.0f, 1.0f},
     {"radius", "How big the drone is for collisions, in metres: how close it gets to things", 0.05f, 3.0f, 0.3f},
@@ -164,9 +189,20 @@ inline constexpr KnobInfo knob_info[] = {
     {"deadzone", "How far a stick must move before the drone reacts (0-0.3). Raise it if the drone drifts on its own", 0.0f, 0.3f, 0.03f},
     {"goggles", "What your skater wears over their eyes while you fly: 0 = nothing, 1-8 = one of the eyewear choices on the DRONE page", 0.0f, 8.0f, 1.0f},
     {"hideui", "Hide the game's own interface while you fly (Start flying hides it, Stop flying brings it back)", 0.0f, 1.0f, 1.0f},
+    {"gamepad", "Fly with a gamepad (Xbox or PlayStation) instead of an RC radio: left stick throttle and yaw, right stick pitch and roll, with gentler sticks. A arms, Menu / Options puts the drone back", 0.0f, 1.0f, 1.0f},
+    {"padrate", "Gamepad: how much of your rates the sticks reach at full tilt (0.2-1). Lower is calmer. In angle mode it slows turning only: full stick still leans all the way", 0.2f, 1.0f, 0.6f},
+    {"padexpo", "Gamepad: how much softer the middle of the sticks is, for small corrections (0 = none, 1 = most)", 0.0f, 1.0f, 0.45f},
+    {"althold", "With a throttle that springs back to the middle (a gamepad, or the keyboard): hold your height (1), adding throttle as you lean to keep it; up climbs, down descends. Off (0): the middle is hover power and the throttle is yours alone, so a hard lean loses height until you add some", 0.0f, 1.0f, 0.0f},
+    {"climbrate", "Height hold: how fast full throttle stick climbs or descends, in metres per second", 1.0f, 40.0f, 20.0f},
+    {"mode", "Flight mode: 0 = acro (the stick sets how fast it turns, full flips), 1 = angle (self-levelling: the stick sets how far it leans, and letting go levels it)", 0.0f, 1.0f, 0.0f},
+    {"maxangle", "Angle mode: how far the drone leans at full stick, in degrees", 10.0f, 80.0f, 55.0f},
+    {"crash", "Crashes: hits bounce and tumble the drone, and a hard one cuts the motors until you arm again (1). Off: it just stops against things (0)", 0.0f, 1.0f, 1.0f},
+    {"crashspeed", "Crashes: how hard a hit cuts the motors, in metres per second into the surface. 0 = never", 0.0f, 30.0f, 7.0f},
+    {"propwash", "How much the drone shakes when it drops through its own prop wash (0-1)", 0.0f, 1.0f, 0.5f},
+    {"padinvert", "Gamepad: push the right stick up to tip the nose up, like aiming a camera (1); or to tip it down and fly forward, like an RC radio (0)", 0.0f, 1.0f, 1.0f},
 };
 inline constexpr std::size_t knob_count = std::size(knob_info);
-static_assert(knob_count == kHideUi + 1, "knob enum and table must match");
+static_assert(knob_count == kPadInvert + 1, "knob enum and table must match");
 struct KnobValues {
     std::atomic<float> value[knob_count];
     KnobValues() { for (std::size_t i = 0; i < knob_count; ++i) value[i] = knob_info[i].def; }
@@ -181,6 +217,46 @@ inline radio::Command read_sticks(const std::array<float, 6>& axes) {
     const auto get = [](Knob k) { return knobs().value[k].load(std::memory_order_relaxed); };
     return radio::map_axes(axes, radio::mapping_snapshot(), get(kDeadzone), get(kThrottleCentre) >= 0.5f, get(kHover));
 }
+inline bool gamepad_mode() { return knobs().value[kGamepad].load(std::memory_order_relaxed) >= 0.5f; }
+// A gamepad's sticks, Mode 2: left stick throttle (springing back) and yaw, right stick pitch and
+// roll. Each stick has a round dead zone (a pad's drifts more than a radio's gimbals); then the
+// middle is softened (`expo`) and the whole travel scaled down (`scale`), since a pad's short
+// sticks at a radio's rates make every touch a flip. `invert`: up on the right stick tips the nose
+// up (as a camera is aimed) rather than down (as on a radio). In angle mode the right stick sets
+// how far the drone leans, not how fast it turns, so `scale` leaves it alone there: full stick is
+// the full lean.
+inline radio::Command gamepad_sticks(const overlay::Gamepad& pad, float dz, float scale, float expo, float hover, bool invert = false,
+                                     bool angle = false) {
+    radio::Command out;
+    if (!pad.valid) return out;
+    out.valid = true;
+    const float zone = std::clamp(std::isfinite(dz) ? dz : 0.0f, 0.08f, 0.5f);
+    const auto stick = [zone](float x, float y) -> std::array<float, 2> {
+        x = std::isfinite(x) ? std::clamp(x, -1.0f, 1.0f) : 0.0f;
+        y = std::isfinite(y) ? std::clamp(y, -1.0f, 1.0f) : 0.0f;
+        const float length = std::sqrt(x * x + y * y);
+        if (!(length > zone)) return {0.0f, 0.0f};
+        const float k = std::min(1.0f, (length - zone) / (1.0f - zone)) / length;
+        return {x * k, y * k};
+    };
+    const float e = std::clamp(std::isfinite(expo) ? expo : 0.0f, 0.0f, 1.0f);
+    const float s = std::clamp(std::isfinite(scale) ? scale : 1.0f, 0.05f, 1.0f);
+    const auto shape = [e](float v, float most) { const float a = std::abs(v); return std::copysign((e * a * a * a + (1.0f - e) * a) * most, v); };
+    const float tilt = angle ? 1.0f : s;
+    const auto left = stick(pad.left_x, pad.left_y), right = stick(pad.right_x, pad.right_y);
+    out.yaw = shape(left[0], s);
+    out.roll = shape(right[0], tilt);
+    out.pitch = shape(invert ? -right[1] : right[1], tilt);   // + = forward = nose down
+    out.centred = true;
+    out.climb = left[1];
+    out.throttle = radio::spring_throttle(left[1], hover);
+    return out;
+}
+inline radio::Command read_gamepad(const overlay::Gamepad& pad) {
+    const auto get = [](Knob k) { return knobs().value[k].load(std::memory_order_relaxed); };
+    return gamepad_sticks(pad, get(kDeadzone), get(kPadRate), get(kPadExpo), get(kHover), get(kPadInvert) >= 0.5f,
+                          get(kFlightMode) >= 0.5f);
+}
 inline Settings live_settings() {
     Settings s;
     auto get = [](Knob k) { return knobs().value[k].load(std::memory_order_relaxed); };
@@ -191,6 +267,9 @@ inline Settings live_settings() {
     s.camera_uptilt_deg = get(kUptilt); s.floor_depth = get(kFloor);
     s.collide = get(kCollide) >= 0.5f; s.body_radius = get(kRadius); s.range = get(kRange);
     s.armed = armed(); s.disarm_freeze = get(kDisarmFreeze) >= 0.5f; s.beacon = get(kBeacon) >= 0.5f;
+    s.angle_mode = get(kFlightMode) >= 0.5f; s.max_angle_deg = get(kMaxAngle);
+    s.alt_hold = get(kAltHold) >= 0.5f; s.climb_rate = get(kClimbRate);
+    s.crash = get(kCrash) >= 0.5f; s.crash_speed = get(kCrashSpeed); s.propwash = get(kPropwash);
     return s;
 }
 
@@ -329,6 +408,20 @@ inline void apply_switches(const std::array<float, 6>& axes, std::uint32_t butto
     }
 }
 
+// A gamepad's buttons (XInput's bits; a PlayStation pad's are given the same): A (cross) arms or
+// disarms, Menu (Options) puts the drone back where it took off. Each on the press, not the hold;
+// with `act` false (the ReSkate menu has the pad) they are only watched, so a button still held
+// when the menu closes does nothing.
+inline constexpr unsigned pad_start = 0x0010, pad_a = 0x1000;
+inline void apply_gamepad_buttons(unsigned buttons, bool act = true) {
+    static unsigned before = ~0u; // nothing counts as pressed until it has been seen up
+    const unsigned pressed = buttons & ~before;
+    before = buttons;
+    if (!act) return;
+    if (pressed & pad_a) set_armed(!armed());
+    if (pressed & pad_start) request_reset();
+}
+
 // The world the drone can bump into. `cast(from, to, hit)` returns true and the hit point when
 // something solid lies on the line. Without it (or with collide off) the drone flies through everything.
 struct World {
@@ -342,9 +435,76 @@ struct Cmd {
     float yaw_rad = 0;        // radians this step; negative = turn right
     float look_pitch_rad = 0; // extra pitch from the mouse (radians, + = look down)
     float throttle = 0.35f;   // 0..1 absolute
+    bool hold = false;        // hold the height: `climb` asks for a climb or a descent instead of `throttle`
+    float climb = 0;          // -1..1 of the climb rate, while holding height
     bool boost = false;
     bool park = false;        // motors off: hold position
 };
+
+// The physical constants of the model (see the top of this file).
+inline constexpr float rate_lag = 0.03f;          // s: the flight controller's catch-up to the asked turn rate
+inline constexpr float spool_up = 0.04f, spool_down = 0.07f; // s: motor output following the throttle
+inline constexpr float thrust_power = 1.5f;       // thrust grows with motor output to this power
+inline constexpr float boost_thrust = 1.5f;       // boost: this much more thrust
+inline constexpr float hard_hit = 2.0f;           // m/s into a surface: a bump rather than a touch
+inline constexpr float bounce = 0.35f;            // how much of a hard hit's speed it bounces back with
+inline constexpr float hold_gain = 4.0f;          // 1/s: height hold's pull toward the asked climb
+
+namespace detail {
+inline Vec3 sub(const Vec3& a, const Vec3& b) { return {a[0] - b[0], a[1] - b[1], a[2] - b[2]}; }
+inline float length(const Vec3& a) { return std::sqrt(dot(a, a)); }
+inline float noise(std::uint32_t& s) {
+    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
+    return static_cast<float>(s & 0xffffff) / 8388608.0f - 1.0f; // -1..1
+}
+inline float hover_of(const Settings& c) { return std::clamp(std::isfinite(c.hover_throttle) ? c.hover_throttle : 0.35f, 0.05f, 0.95f); }
+// Thrust (m/s² along the drone's up) at full output, and at `output`.
+inline float max_thrust(const Settings& c) { return std::max(0.0f, c.gravity) / std::pow(hover_of(c), thrust_power); }
+inline float thrust_at(float output, const Settings& c) {
+    return max_thrust(c) * std::pow(std::clamp(output, 0.0f, 1.0f), thrust_power);
+}
+// The output that gives `accel` m/s² of thrust.
+inline float output_for(float accel, const Settings& c) {
+    const float most = max_thrust(c);
+    if (!(most > 0.0f) || !std::isfinite(accel)) return hover_of(c);
+    return std::pow(std::clamp(accel / most, 0.0f, 1.0f), 1.0f / thrust_power);
+}
+// The top speed (m/s) the speed setting asks for, and the quadratic drag that gives it: flat out,
+// the thrust left over from holding the drone up is spent on drag at that speed. (Scaled for the
+// drag across the props and the inflow below, so that leaning anywhere from 45 to 85 degrees
+// settles within a few percent of it.)
+inline float top_speed(float speed) { return std::clamp(std::isfinite(speed) ? speed : 10.0f, 0.6f, 1500.0f) * 4.0f; }
+inline float drag_for(const Settings& c, float speed) {
+    const float most = max_thrust(c), g = std::max(0.0f, c.gravity);
+    const float spare = std::sqrt(std::max(most * most - g * g, 0.01f));
+    const float top = top_speed(speed);
+    return 0.36f * spare / (top * top);
+}
+// The surface at a hit: two more rays beside the first find two more points of it. Without them
+// (an edge, or a thin thing) the surface is taken to face straight back along the move.
+inline Vec3 surface_normal(const World& world, const Vec3& from, const Vec3& dir, float reach, const Vec3& hit, float spread) {
+    const Vec3 side = normalize(cross(dir, std::abs(dir[1]) < 0.9f ? Vec3{0, 1, 0} : Vec3{1, 0, 0}));
+    const Vec3 other = cross(dir, side);
+    std::array<Vec3, 2> points{};
+    int found = 0;
+    for (const auto& offset : {side, other, scale(side, -1.0f), scale(other, -1.0f)}) {
+        if (found == 2) break;
+        const Vec3 start = add(from, scale(offset, spread));
+        Vec3 at{};
+        if (world.cast(start, add(start, scale(dir, reach)), at)) points[static_cast<std::size_t>(found++)] = at;
+    }
+    if (found == 2) {
+        Vec3 n = normalize(cross(sub(points[0], hit), sub(points[1], hit)));
+        if (dot(n, dir) > 0.0f) n = scale(n, -1.0f);
+        if (length(n) > 0.5f && dot(n, dir) < -0.05f) return n;
+    }
+    return scale(dir, -1.0f);
+}
+// Body turn rates (about right, up, forward) from a world-space spin vector, and back.
+inline std::array<float, 3> body_rates(const std::array<float, 16>& body, const Vec3& spin) {
+    return {dot(spin, row(body, 0)), dot(spin, row(body, 1)), -dot(spin, row(body, 2))};
+}
+}
 
 // One step of the flight model. `camera` is the pose published last tick (its translation is
 // the drone position).
@@ -357,9 +517,15 @@ inline std::array<float, 16> step_drone_cmd(const std::array<float, 16>& camera,
     Vec3 position{camera[12], camera[13], camera[14]};
 
     if (!state.valid) {
-        // Start from the current view with the FPV tilt removed, at rest.
+        // Start level, facing the way the view faces, at rest and hovering, as a drone sits at takeoff.
+        Vec3 heading = scale(row(camera, 2), -1.0f);
+        heading[1] = 0.0f;
+        if (length(heading) < 0.05f) heading = cross(row(camera, 0), Vec3{0, 1, 0});
+        heading = normalize(heading);
         state.body = camera;
-        rotate_basis(state.body, row(camera, 0), -uptilt);
+        set_row(state.body, 0, Vec3{-heading[2], 0.0f, heading[0]});
+        set_row(state.body, 1, Vec3{0.0f, 1.0f, 0.0f});
+        set_row(state.body, 2, scale(heading, -1.0f));
         state.velocity = {0, 0, 0};
         state.start_y = position[1];
         state.flight_time = 0;
@@ -367,6 +533,11 @@ inline std::array<float, 16> step_drone_cmd(const std::array<float, 16>& camera,
         state.start_body = state.body;
         state.valid = true;
         state.failsafe = false;
+        state.rate = {0, 0, 0};
+        state.motor = cfg.armed ? hover_of(cfg) : 0.0f;
+        state.crashed = false;
+        state.armed_last = cfg.armed;
+        state.glitch = 0;
         reset_flag().store(false, std::memory_order_relaxed);
     }
     if (reset_flag().exchange(false, std::memory_order_acq_rel)) {
@@ -376,12 +547,18 @@ inline std::array<float, 16> step_drone_cmd(const std::array<float, 16>& camera,
         position = state.start_pos;
         state.failsafe = false;
         state.signal_lost = 0;
+        state.rate = {0, 0, 0};
+        state.motor = cfg.armed ? hover_of(cfg) : 0.0f;
+        state.crashed = false;
+        state.glitch = 0;
     }
-    // Disarmed: the pilot's inputs and the motors are off.
+    // After a crash the motors stay off until the drone is armed again: off, then on.
+    if (cfg.armed && !state.armed_last) state.crashed = false;
+    state.armed_last = cfg.armed;
     Cmd cmd = cmd_in;
     // Range: the link weakens with distance from the takeoff point, and past the failsafe
     // distance the motors cut until the drone is reset (signal_strength above).
-    const float home = std::sqrt(dot(add(position, scale(state.start_pos, -1.0f)), add(position, scale(state.start_pos, -1.0f))));
+    const float home = length(sub(position, state.start_pos));
     const float quality = signal_strength(home, cfg.range);
     state.signal_lost = quality <= 0.0f ? state.signal_lost + dt : 0.0f;
     if (failsafe_due(home, cfg.range, state.signal_lost)) state.failsafe = true;
@@ -392,90 +569,156 @@ inline std::array<float, 16> step_drone_cmd(const std::array<float, 16>& camera,
         link.failsafe.store(state.failsafe, std::memory_order_relaxed);
         link.home_distance.store(home, std::memory_order_relaxed);
     }
-    if (!cfg.armed || state.failsafe) {
+    // Disarmed, crashed or out of range: the pilot's inputs and the motors are off. A crashed
+    // drone falls even when a disarmed one would hang.
+    const bool motors = cfg.armed && !state.failsafe && !state.crashed;
+    if (!motors) {
         cmd = Cmd{};
         cmd.throttle = 0.0f;
-        cmd.park = cfg.disarm_freeze;
+        cmd.park = cfg.disarm_freeze && !state.crashed;
     }
 
     const float pitch_in = clamp1(cmd.pitch);
     const float roll_in = clamp1(cmd.roll);
-    const float yaw_delta = std::isfinite(cmd.yaw_rad) ? cmd.yaw_rad : 0.0f;
+    const float yaw_rate = dt > 0.0f && std::isfinite(cmd.yaw_rad) ? std::clamp(cmd.yaw_rad / dt, -40.0f, 40.0f) : 0.0f;
     const float look_pitch = std::isfinite(cmd.look_pitch_rad) ? cmd.look_pitch_rad : 0.0f;
 
-    // Attitude
-    if (!cfg.angle_mode) {
-        const float dp = (actual_rate(pitch_in, cfg.pitch) * kDegToRad) * dt - look_pitch;
-        const float dr = (actual_rate(roll_in, cfg.roll) * kDegToRad) * dt;
-        rotate_basis(state.body, row(state.body, 1), yaw_delta);        // yaw about body up
-        rotate_basis(state.body, row(state.body, 0), dp);               // pitch about body right
-        rotate_basis(state.body, scale(row(state.body, 2), -1.0f), dr); // roll about body forward
+    // Attitude: the flight controller asks for a turn rate on each axis and the drone catches up
+    // with it; with the motors off nothing drives it and only the air slows a spin.
+    if (motors) {
+        std::array<float, 3> want{};
+        if (!cfg.angle_mode) {
+            want = {actual_rate(pitch_in, cfg.pitch) * kDegToRad, yaw_rate, actual_rate(roll_in, cfg.roll) * kDegToRad};
+        } else {
+            // Lean toward the angle the sticks ask, about the heading the drone faces.
+            const Vec3 fwd = scale(row(state.body, 2), -1.0f);
+            Vec3 level{fwd[0], 0.0f, fwd[2]};
+            if (length(level) < 0.05f) level = cross(row(state.body, 0), Vec3{0, 1, 0});
+            level = normalize(level);
+            const Vec3 level_right{-level[2], 0.0f, level[0]};
+            const float most = std::clamp(cfg.max_angle_deg, 1.0f, 89.0f) * kDegToRad;
+            Vec3 desired = rotate(Vec3{0, 1, 0}, level_right, pitch_in * most);
+            desired = rotate(desired, rotate(level, level_right, pitch_in * most), roll_in * most);
+            const Vec3 up = row(state.body, 1);
+            const Vec3 axis = cross(up, desired);
+            const float angle = std::atan2(length(axis), dot(up, desired));
+            const Vec3 spin = scale(normalize(axis), angle * std::max(cfg.angle_response, 0.5f));
+            const auto r = body_rates(state.body, spin);
+            const float limit_pitch = std::max(cfg.pitch.max, 30.0f) * kDegToRad, limit_roll = std::max(cfg.roll.max, 30.0f) * kDegToRad;
+            want = {std::clamp(r[0], -limit_pitch, limit_pitch), yaw_rate, std::clamp(r[2], -limit_roll, limit_roll)};
+        }
+        const float k = 1.0f - std::exp(-dt / rate_lag);
+        for (std::size_t i = 0; i < 3; ++i) state.rate[i] += (want[i] - state.rate[i]) * k;
     } else {
-        // Heading from yaw input; tilt eases toward the commanded angle.
-        const Vec3 fwd = scale(row(state.body, 2), -1.0f);
-        const float heading = std::atan2(fwd[0], -fwd[2]);
-        const float new_heading = heading - yaw_delta;
-        const float max_a = cfg.max_angle_deg * kDegToRad;
-        const float k = 1 - std::exp(-cfg.angle_response * dt);
-        const float cur_pitch = std::asin(std::clamp(fwd[1], -1.0f, 1.0f));
-        const float cur_roll = std::asin(std::clamp(row(state.body, 0)[1], -1.0f, 1.0f)) * -1.0f;
-        const float want_pitch = pitch_in * max_a, want_roll = roll_in * max_a;
-        const float p = cur_pitch + (want_pitch - cur_pitch) * k - look_pitch;
-        const float r = cur_roll + (want_roll - cur_roll) * k;
-        Vec3 f{std::sin(new_heading), 0, -std::cos(new_heading)};
-        Vec3 right{-f[2], 0, f[0]};
-        Vec3 up{0, 1, 0};
-        std::array<float, 16> m = state.body;
-        set_row(m, 0, right); set_row(m, 1, up); set_row(m, 2, scale(f, -1.0f));
-        rotate_basis(m, right, p);
-        rotate_basis(m, scale(row(m, 2), -1.0f), r);
-        state.body = m;
+        const float damp = std::exp(-dt * (state.grounded ? 8.0f : 0.6f));
+        for (auto& r : state.rate) r *= damp;
     }
+    // Prop wash: dropping straight down through its own wash shakes it.
+    {
+        const Vec3 up = row(state.body, 1);
+        const float axial = dot(state.velocity, up);
+        const float across = length(sub(state.velocity, scale(up, axial)));
+        const float sink = std::clamp((-axial - 1.5f) / 6.0f, 0.0f, 1.0f) * std::clamp(1.0f - across / 8.0f, 0.0f, 1.0f);
+        const float amount = motors ? std::clamp(cfg.propwash, 0.0f, 1.0f) * sink * 3.0f : 0.0f;
+        const float k = 1.0f - std::exp(-dt * 20.0f);
+        for (std::size_t i : {0u, 2u}) state.wash[i] += (noise(state.noise) * amount - state.wash[i]) * k;
+        state.wash[1] = 0.0f;
+    }
+    for (auto& r : state.rate) if (!std::isfinite(r)) r = 0.0f;
+    rotate_basis(state.body, row(state.body, 1), state.rate[1] * dt);                                // yaw about body up
+    rotate_basis(state.body, row(state.body, 0), (state.rate[0] + state.wash[0]) * dt - look_pitch);  // pitch about body right
+    rotate_basis(state.body, scale(row(state.body, 2), -1.0f), (state.rate[2] + state.wash[2]) * dt); // roll about body forward
 
     // Translation
     Vec3 next_pos = position;
+    float hardest = 0.0f;
     if (cmd.park) {
         state.velocity = {0, 0, 0};
+        state.motor = 0.0f;
     } else {
-        const Vec3 up = row(state.body, 1);
-        const float thrust = std::clamp(cmd.throttle, 0.0f, 1.0f) * (cfg.gravity / cfg.hover_throttle);
-        const float spd = std::sqrt(dot(state.velocity, state.velocity));
-        const float drag = cfg.lin_drag + cfg.quad_drag * spd;
-        Vec3 accel{up[0] * thrust - state.velocity[0] * drag,
-                   up[1] * thrust - cfg.gravity - state.velocity[1] * drag,
-                   up[2] * thrust - state.velocity[2] * drag};
-        for (int i = 0; i < 3; ++i) state.velocity[i] += accel[i] * dt;
-        const float cap = std::clamp(speed, 0.6f, 1500.0f) * 4.0f * (cmd.boost ? 2.0f : 1.0f);
-        const float now = std::sqrt(dot(state.velocity, state.velocity));
-        if (now > cap) for (auto& v : state.velocity) v *= cap / now;
-        next_pos = {position[0] + state.velocity[0] * dt, position[1] + state.velocity[1] * dt,
-                    position[2] + state.velocity[2] * dt};
+        const Vec3 right = row(state.body, 0), up = row(state.body, 1), back = row(state.body, 2);
+        // The throttle, or with height hold the output that keeps the asked climb, leaning or not.
+        // Height hold never holds the stick back: the stick's own throttle wins whenever it asks
+        // for more (up) or less (down), so full stick is always full or no throttle.
+        float want = std::clamp(cmd.throttle, 0.0f, 1.0f);
+        if (cmd.hold && motors) {
+            const float stick = clamp1(cmd.climb);
+            const float direct = radio::spring_throttle(stick, hover_of(cfg));
+            const float lift = std::max(0.0f, cfg.gravity + hold_gain * (stick * std::max(cfg.climb_rate, 0.0f) - state.velocity[1]));
+            const float held = up[1] > 0.25f ? output_for(lift / up[1], cfg) : direct;
+            want = stick > 0.0f ? std::max(held, direct) : stick < 0.0f ? std::min(held, direct) : held;
+        }
+        if (!motors) want = 0.0f;
+        state.motor += (want - state.motor) * (1.0f - std::exp(-dt / (want > state.motor ? spool_up : spool_down)));
+        float thrust = thrust_at(state.motor, cfg) * (cmd.boost && motors ? boost_thrust : 1.0f);
+        // Inflow: climbing into its own air it pushes less, sinking a little more.
+        const float axial = dot(state.velocity, up);
+        thrust *= std::clamp(1.0f - axial / std::max(top_speed(speed) * 2.5f, 5.0f), 0.3f, 1.25f);
+        // Ground effect: within a couple of prop sizes of the ground it pushes more.
+        const float r = std::max(cfg.body_radius, 0.01f);
+        if (thrust > 0.0f && world && world->cast && cfg.collide) {
+            Vec3 below{};
+            const float reach = 4.0f * r;
+            if (world->cast(position, add(position, Vec3{0, -reach, 0}), below))
+                thrust *= 1.0f + 0.25f * std::clamp(1.0f - (position[1] - below[1]) / reach, 0.0f, 1.0f);
+        }
+        // Drag: quadratic, larger across the props than edge on, plus the plain drag setting.
+        const float k = drag_for(cfg, speed) * length(state.velocity);
+        const Vec3 drag = add(add(scale(right, -dot(state.velocity, right) * k), scale(up, -dot(state.velocity, up) * 1.5f * k)),
+                              scale(back, -dot(state.velocity, back) * k));
+        const Vec3 accel = add(add(scale(up, thrust), drag), Vec3{-state.velocity[0] * cfg.lin_drag,
+            -cfg.gravity - state.velocity[1] * cfg.lin_drag, -state.velocity[2] * cfg.lin_drag});
+        for (std::size_t i = 0; i < 3; ++i) state.velocity[i] += accel[i] * dt;
+        // (Only a guard against runaway numbers: drag sets the real top speed.)
+        const float cap = std::max(top_speed(speed) * 3.0f, 30.0f);
+        if (const float now = length(state.velocity); now > cap) state.velocity = scale(state.velocity, cap / now);
+        next_pos = add(position, scale(state.velocity, dt));
+        state.grounded = false;
         if (world && world->cast && cfg.collide) {
-            // Swept move, one axis at a time (up/down first so landing works), so it slides along
-            // walls and rests on the ground. The game's query gives hit points, not surface normals.
+            // Swept move: up to the first surface on the way, then what is left of the move slides
+            // along it. A hit takes away the speed into the surface; a hard one bounces back some
+            // of it and knocks the drone about.
             Vec3 p = position;
-            const Vec3 d{next_pos[0] - position[0], next_pos[1] - position[1], next_pos[2] - position[2]};
-            const float r = std::max(cfg.body_radius, 0.01f);
-            for (const int axis : {1, 0, 2}) {
-                const float move = d[static_cast<std::size_t>(axis)];
-                if (move == 0.0f) continue;
-                const auto a = static_cast<std::size_t>(axis);
-                const float sign = move > 0 ? 1.0f : -1.0f;
-                Vec3 to = p;
-                to[a] += move + sign * r;
+            Vec3 move = sub(next_pos, position);
+            const float spread = std::max(r, 0.05f);
+            for (int pass = 0; pass < 3; ++pass) {
+                const float len = length(move);
+                if (!(len > 1e-6f)) break;
+                const Vec3 dir = scale(move, 1.0f / len);
                 Vec3 hit{};
-                if (world->cast(p, to, hit)) {
-                    const float allowed = (hit[a] - p[a]) - sign * r;
-                    p[a] += sign > 0 ? std::clamp(allowed, 0.0f, move) : std::clamp(allowed, move, 0.0f);
-                    state.velocity[a] = 0;
-                    if (axis == 1 && sign < 0) {   // landed: skid to a stop
-                        const float grip = std::exp(-6.0f * dt);
-                        state.velocity[0] *= grip;
-                        state.velocity[2] *= grip;
+                if (!world->cast(p, add(p, scale(dir, len + r)), hit)) { p = add(p, move); break; }
+                const float gap = length(sub(hit, p)) - r;
+                const float allowed = std::clamp(gap, 0.0f, len);
+                p = add(p, scale(dir, allowed));
+                const Vec3 n = surface_normal(*world, p, dir, len + r + 2.0f * spread, hit, spread);
+                if (gap < 0.0f) p = add(p, scale(n, std::min(-gap, r)));   // started too close: step out
+                if (n[1] > 0.6f) state.grounded = true;
+                const float into = dot(state.velocity, n);
+                if (into < 0.0f) {
+                    const float impact = -into;
+                    const Vec3 along = sub(state.velocity, scale(n, into));
+                    if (cfg.crash && impact > hard_hit) {
+                        state.velocity = add(scale(along, 0.75f), scale(n, impact * bounce));
+                        // Knocked about: spun away from the surface by the speed along it, plus some
+                        // of the hit at random.
+                        const float slide = std::min(length(along), 15.0f);
+                        Vec3 spin = scale(normalize(cross(n, along)), slide * 0.6f);
+                        spin = add(spin, scale(Vec3{noise(state.noise), noise(state.noise), noise(state.noise)}, impact * 0.4f));
+                        const auto kick = body_rates(state.body, spin);
+                        for (std::size_t i = 0; i < 3; ++i) state.rate[i] = std::clamp(state.rate[i] + kick[i], -30.0f, 30.0f);
+                    } else {
+                        state.velocity = along;
                     }
-                } else {
-                    p[a] += move;
+                    hardest = std::max(hardest, impact);
                 }
+                if (n[1] > 0.6f) {   // on the ground: skid to a stop
+                    const float grip = std::exp(-6.0f * dt);
+                    const float normal = dot(state.velocity, n);
+                    state.velocity = add(scale(sub(state.velocity, scale(n, normal)), grip), scale(n, normal));
+                }
+                Vec3 rest = scale(dir, len - allowed);
+                if (const float push = dot(rest, n); push < 0.0f) rest = sub(rest, scale(n, push));
+                move = rest;
             }
             next_pos = p;
             // Safety net if the collision world is not streamed in yet: do not fall forever.
@@ -490,25 +733,39 @@ inline std::array<float, 16> step_drone_cmd(const std::array<float, 16>& camera,
                 const float grip = std::exp(-6.0f * dt);
                 state.velocity[0] *= grip;
                 state.velocity[2] *= grip;
+                state.grounded = true;
             }
         }
     }
+    // A hit hard enough cuts the motors (the drone falls and tumbles); any real one breaks up the picture.
+    if (cfg.crash && hardest > hard_hit) {
+        state.glitch = std::max(state.glitch, std::clamp(hardest / std::max(cfg.crash_speed * 1.5f, 4.0f), 0.2f, 1.0f));
+        if (motors && cfg.crash_speed > 0.0f && hardest >= cfg.crash_speed) {
+            state.crashed = true;
+            set_armed(false);
+        }
+    }
+    state.glitch *= std::exp(-dt * 2.5f);
 
     const auto out = camera_from_body(state.body, next_pos, uptilt);
     if (!valid_flight_transform(out)) { state.valid = false; return camera; }
     if (cfg.armed) state.flight_time += dt;
     auto& t = telemetry();
-    t.throttle.store(cmd.park ? 0.0f : std::clamp(cmd.throttle, 0.0f, 1.0f), std::memory_order_relaxed);
-    t.speed.store(std::sqrt(dot(state.velocity, state.velocity)), std::memory_order_relaxed);
+    t.throttle.store(cmd.park ? 0.0f : std::clamp(state.motor, 0.0f, 1.0f), std::memory_order_relaxed);
+    t.speed.store(length(state.velocity), std::memory_order_relaxed);
     t.altitude.store(next_pos[1] - state.start_y, std::memory_order_relaxed);
     t.seconds.store(state.flight_time, std::memory_order_relaxed);
-    t.armed.store(cfg.armed, std::memory_order_relaxed);
+    t.armed.store(cfg.armed && !state.crashed, std::memory_order_relaxed);
+    t.crashed.store(state.crashed, std::memory_order_relaxed);
+    t.glitch.store(state.glitch, std::memory_order_relaxed);
     beacon::publish_local(next_pos, beacon::rotation_from_basis(state.body), cfg.beacon);
     t.last_ms.store(now_ms(), std::memory_order_relaxed);
     return out;
 }
 
-// Keyboard / mouse / game-controller input (the Freecam's own FlightInput).
+// Keyboard / mouse / game-controller input (the Freecam's own FlightInput). The keyboard has no
+// throttle that stays put: with height hold the middle holds the height and Q / E climb and
+// descend; without it the middle is hover power.
 inline std::array<float, 16> step_drone_flight(const std::array<float, 16>& camera, State& state,
     const overlay::FlightInput& input, float seconds, float speed, const Settings& cfg = {},
     const World* world = nullptr) {
@@ -519,22 +776,24 @@ inline std::array<float, 16> step_drone_flight(const std::array<float, 16>& came
     cmd.roll = clamp1(input.right);
     cmd.yaw_rad = -std::clamp(input.look_x, -250.0f, 250.0f) * cfg.yaw_look_scale;  // right = negative about up
     cmd.look_pitch_rad = std::clamp(input.look_y, -250.0f, 250.0f) * cfg.yaw_look_scale;
-    // Keyboard has no absolute throttle: neutral hovers, Q/E climb or descend.
     const float up_in = clamp1(input.up);
-    cmd.throttle = up_in >= 0 ? cfg.hover_throttle + up_in * (1.0f - cfg.hover_throttle)
-                              : cfg.hover_throttle + up_in * cfg.hover_throttle;
+    cmd.throttle = radio::spring_throttle(up_in, cfg.hover_throttle);
+    cmd.hold = cfg.alt_hold;
+    cmd.climb = up_in;
     cmd.boost = input.boost;
     {
         auto& t = telemetry();
         t.stick_roll.store(clamp1(input.right), std::memory_order_relaxed);
         t.stick_pitch.store(clamp1(input.forward), std::memory_order_relaxed);
         t.stick_yaw.store(clamp1(input.look_x / 40.0f), std::memory_order_relaxed);
+        t.stick_throttle.store(up_in, std::memory_order_relaxed);
     }
     return step_drone_cmd(camera, state, cmd, seconds, speed, cfg, world);
 }
 
-// Radio controller: sticks drive rates directly and the throttle stick is absolute thrust. A throttle
-// at the bottom lets the drone fall, as a real one would.
+// A controller: an RC radio, or a gamepad read as one (gamepad_sticks). The sticks drive the rates;
+// a throttle stick that stays put is absolute thrust, and at the bottom lets the drone fall, as a
+// real one would. One that springs back holds the height (height hold) or hovers in its middle.
 inline std::array<float, 16> step_drone_radio(const std::array<float, 16>& camera, State& state,
     const radio::Command& sticks, float seconds, float speed, const Settings& cfg = {}, const World* world = nullptr) {
     using namespace detail;
@@ -545,11 +804,14 @@ inline std::array<float, 16> step_drone_radio(const std::array<float, 16>& camer
     cmd.roll = clamp1(sticks.roll);
     cmd.yaw_rad = -actual_rate(clamp1(sticks.yaw), cfg.yaw) * kDegToRad * dt;
     cmd.throttle = std::clamp(sticks.throttle, 0.0f, 1.0f);
+    cmd.hold = sticks.centred && cfg.alt_hold;
+    cmd.climb = clamp1(sticks.climb);
     {
         auto& t = telemetry();
         t.stick_roll.store(clamp1(sticks.roll), std::memory_order_relaxed);
         t.stick_pitch.store(clamp1(sticks.pitch), std::memory_order_relaxed);
         t.stick_yaw.store(clamp1(sticks.yaw), std::memory_order_relaxed);
+        t.stick_throttle.store(sticks.centred ? clamp1(sticks.climb) : -2.0f, std::memory_order_relaxed);
     }
     return step_drone_cmd(camera, state, cmd, seconds, speed, cfg, world);
 }

@@ -32,6 +32,8 @@ add_library(dingosdk_runtime SHARED
     Extension/UI/NativeMenu/native_menu_data.cpp
     Extension/Multiplayer/Remote/native_skater.cpp
     Extension/Multiplayer/Remote/native_skater_spawn.cpp
+    Extension/Multiplayer/Remote/native_prop.cpp
+    Extension/Multiplayer/Remote/drone_sound.cpp
     Extension/Multiplayer/Remote/puppet_cost.cpp
     Extension/Multiplayer/Remote/native_cosmetics.cpp
     Extension/Multiplayer/Remote/native_audio.cpp
@@ -314,6 +316,17 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
         "EMOTES_JSON RCDATA \"${dingosdk_emotes_native}\\\\emotes.json\"\n"
         "EMOTES_PNG RCDATA \"${dingosdk_emotes_native}\\\\emotes.png\"\n")
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/emotes.rc")
+endif()
+# Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h): the FPV drone's model, built
+# by tools/models/build_drone_pack.py. Without the zip, other players' drones use a stand-in prop.
+set(dingosdk_drone_pack "${PROJECT_SOURCE_DIR}/assets/builtin/fpv_drone.zip")
+if(EXISTS "${dingosdk_drone_pack}")
+    file(TO_NATIVE_PATH "${dingosdk_drone_pack}" dingosdk_drone_pack_native)
+    string(REPLACE "\\" "\\\\" dingosdk_drone_pack_native "${dingosdk_drone_pack_native}")
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin_packs.rc"
+        "BUILTIN_PACK_FPV_DRONE RCDATA \"${dingosdk_drone_pack_native}\"\n")
+    target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin_packs.rc")
+    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/builtin_packs.rc" APPEND PROPERTY OBJECT_DEPENDS "${dingosdk_drone_pack}")
 endif()
 # The music sources' setup page (Extension/Music/spotify_dashboard.h).
 file(TO_NATIVE_PATH "${PROJECT_SOURCE_DIR}/Extension/Music/setup_page.html" dingosdk_music_page_native)

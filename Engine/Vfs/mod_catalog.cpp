@@ -1,4 +1,5 @@
 #include "mod_catalog.h"
+#include "builtin_packs.h"
 
 #include "mod_merge.h"
 #include "native_db.h"
@@ -305,7 +306,12 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
         result.issue = "The engine data root could not be resolved";
         return result;
     }
+    // Content ReSkate carries itself (builtin_packs.h), unpacked first: it makes the Mods folder
+    // when there is none, so the content loads without any mod installed.
+    std::vector<std::string> builtin_notes;
+    const auto builtin = unpack_builtin_packs(data_root / mods_folder, builtin_notes);
     auto list = scan_mods(data_root);
+    for (auto& note : builtin_notes) list.notes.push_back(std::move(note));
     result.root = std::move(list.root);
     result.present = list.present;
     if (!result.present) return result;
@@ -319,6 +325,9 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     try {
         for (const auto& name : list.missing)
             result.notes.push_back("mods.json names a folder that is not present: " + name);
+        // After every installed mod, so none of theirs is ever shadowed by it; always on.
+        for (const auto& pack : builtin)
+            list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
         // Board Break: a deck pack holds several decks in one mod folder (mod_catalog.h). Each deck
         // inside becomes a mod of its own for the run, listed after the pack as <folder>#<deck>, so
         // that a pack's decks are chosen, set aside and switched like decks in folders of their own.

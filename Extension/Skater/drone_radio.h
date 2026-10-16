@@ -25,7 +25,7 @@ namespace dingosdk::drone::radio {
 // Mode 2 on an EdgeTX radio sends AETR: channel 1 aileron (roll), 2 elevator (pitch),
 // 3 throttle, 4 rudder (yaw). Those are the defaults below: roll=1, pitch=2, throttle=3, yaw=4.
 struct Config {
-    std::atomic<bool> enabled{false};
+    std::atomic<bool> enabled{true}; // with nothing plugged in, the drone flies with the keyboard
     std::atomic<int> map[4];   // roll, pitch, throttle, yaw -> signed axis number (1..6)
     std::atomic<int> device{-1}; // -1 = pick automatically
     Config() { for (int i = 0; i < 4; ++i) map[i] = i + 1; }
@@ -43,6 +43,8 @@ struct Command {
     float pitch = 0;     // + = stick forward (nose down)
     float yaw = 0;       // + = right
     float throttle = 0;  // 0..1 (absolute; the throttle stick does not self-centre)
+    bool centred = false; // the throttle stick springs back to the middle (a gamepad's)
+    float climb = 0;     // that stick, -1..1 past its dead zone: what height hold reads
 };
 
 inline float normalize_axis(std::uint32_t value, std::uint32_t lo, std::uint32_t hi) {
@@ -73,7 +75,9 @@ inline Command map_axes(const std::array<float, 6>& axes, const std::array<int, 
     out.valid = true;
     out.roll = deadzone(pick_axis(axes, map[0]), dz);
     out.pitch = deadzone(pick_axis(axes, map[1]), dz);
-    out.throttle = centred_throttle ? spring_throttle(deadzone(pick_axis(axes, map[2]), dz), hover)
+    out.centred = centred_throttle;
+    if (centred_throttle) out.climb = deadzone(pick_axis(axes, map[2]), dz);
+    out.throttle = centred_throttle ? spring_throttle(out.climb, hover)
                                     : std::clamp((pick_axis(axes, map[2]) + 1.0f) * 0.5f, 0.0f, 1.0f);
     out.yaw = deadzone(pick_axis(axes, map[3]), dz);
     return out;

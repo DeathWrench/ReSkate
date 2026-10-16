@@ -85,12 +85,15 @@ inline Layout build() {
     add(osd && knob(kShowThrottle) >= 0.5f, m, 1.0f - m, Align::left, true, std::format("THR {:.0f}%", throttle * 100.0f));
     add(osd && knob(kShowAlt) >= 0.5f, 0.5f, 1.0f - m, Align::centre, true, std::format("ALT {:.1f}M", altitude));
     add(osd && knob(kShowSpeed) >= 0.5f, 1.0f - m, 1.0f - m, Align::right, true, std::format("{:.0f}KM/H", speed * 3.6f));
+    // A crash cut the motors: say how to fly on. (Shown with or without the goggle display.)
+    const bool crashed = t.crashed.load(std::memory_order_relaxed);
+    if (crashed) add(true, 0.5f, 0.42f, Align::centre, false, "CRASHED - ARM TO FLY AGAIN", true);
     // Range: link quality and the way home, and what happens at the edge.
     if (knob(kRange) > 0.0f) {
         const float signal = t.signal.load(std::memory_order_relaxed);
         add(osd, 1.0f - m, m + 0.05f, Align::right, false,
             std::format("RSSI {:.0f}%  {:.0f}M", signal * 100.0f, t.home_distance.load(std::memory_order_relaxed)), signal < 0.35f && blink);
-        if (t.failsafe.load(std::memory_order_relaxed)) add(true, 0.5f, 0.42f, Align::centre, false, "FAILSAFE - RESET TO FLY AGAIN", true);
+        if (t.failsafe.load(std::memory_order_relaxed)) add(true, 0.5f, crashed ? 0.47f : 0.42f, Align::centre, false, "FAILSAFE - RESET TO FLY AGAIN", true);
         else if (signal <= 0.0f) {
             const float left = std::max(0.0f, failsafe_after_seconds - t.signal_lost.load(std::memory_order_relaxed));
             add(true, 0.5f, 0.42f, Align::centre, false, std::format("NO SIGNAL - TURN BACK ({:.0f})", std::ceil(left)), true);
@@ -101,7 +104,9 @@ inline Layout build() {
     out.sticks.yaw = t.stick_yaw.load(std::memory_order_relaxed);
     out.sticks.roll = t.stick_roll.load(std::memory_order_relaxed);
     out.sticks.pitch = t.stick_pitch.load(std::memory_order_relaxed);
-    out.sticks.throttle = std::clamp(throttle, 0.0f, 1.0f) * 2.0f - 1.0f;
+    // A throttle stick that springs back is shown where it is; one that stays put, by the throttle.
+    const float stick = t.stick_throttle.load(std::memory_order_relaxed);
+    out.sticks.throttle = stick >= -1.0f ? std::clamp(stick, -1.0f, 1.0f) : std::clamp(throttle, 0.0f, 1.0f) * 2.0f - 1.0f;
     return out;
 }
 } // namespace dingosdk::drone::osd

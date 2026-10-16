@@ -87,7 +87,8 @@ void draw_analog(ImDrawList* draw, const ImVec2& display) {
     // Range breaks the picture up near its limit (drone_flight.h: signal_strength), with or without
     // the analogue look; past the limit only static is left.
     const float signal = std::clamp(telemetry().signal.load(std::memory_order_relaxed), 0.0f, 1.0f);
-    const float breakup = 1.0f - signal;
+    // A hit breaks the picture up for a moment too (drone_flight.h: the glitch after a crash).
+    const float breakup = std::max(1.0f - signal, std::clamp(telemetry().glitch.load(std::memory_order_relaxed), 0.0f, 1.0f));
     const bool look = analog_knob(kAnalog) >= 0.5f;
     if (!look && breakup <= 0.0f) return;
     const float noise = std::max(look ? std::clamp(analog_knob(kAnalogNoise), 0.0f, 1.0f) : 0.0f, breakup);

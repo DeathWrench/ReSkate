@@ -3,6 +3,8 @@
 #include "ai_skaters.h"
 #include "drone_flight.h"
 #include "drone_outfit.h"
+#include "Extension/Multiplayer/Remote/native_prop.h"
+#include "Extension/Multiplayer/Remote/drone_sound.h"
 #include <algorithm>
 #include <cstdlib>
 #include <format>
@@ -171,10 +173,39 @@ void register_movement_commands(Commands &registry) {
                : "Controller off. The drone uses the keyboard and mouse.");
     };
     radio_mode.reset = [](const Model &, const Output &) {
-        drone::radio::config().enabled = false;
-        profile_runtime::set_local_values({{"Drone.Radio", 0.0}});
+        drone::radio::config().enabled = true;
+        profile_runtime::set_local_values({{"Drone.Radio", 1.0}});
     };
     registry.add(std::move(radio_mode));
+    // A test toward the drone's 3D model (Multiplayer/Remote/native_prop.h): can a spawned prop
+    // be moved every frame?
+    auto model_name = argument("blueprint", Type::text, true);
+    auto model_mode = argument("mode", Type::integer, true);
+    auto model_test = action("dronemodeltest",
+        "Test for the drone model: spawns the drone (dronemodeltest drone), the traffic cone (cone) or a named blueprint in front of you and moves it "
+        "round a circle. Mode 0, 1 or 2 tries a different way of moving it. 'dronemodeltest stop' removes it; on its own it reports",
+        Group::movement, {model_name, model_mode});
+    model_test.inspect = [](const Model &) { return State{true, {}, {}, {}, false}; };
+    model_test.run = [](const Model &, const Values &args, const Output &out) {
+        const auto name = args.empty() ? std::string() : std::get<std::string>(args[0]);
+        const int mode = args.size() > 1 ? static_cast<int>(std::get<std::int64_t>(args[1])) : 1;
+        if (name.empty() || name == "status") {
+            out(multiplayer::prop_test_status());
+            out("Other players' drones: " + multiplayer::drone_models_status());
+            out("Their sound: " + multiplayer::drone_sounds_status());
+            return;
+        }
+        if (name == "stop") {
+            multiplayer::request_prop_test({}, 0);
+            out("Removing the test prop.");
+            return;
+        }
+        const std::string blueprint = name == "drone" ? std::string(multiplayer::drone_model_blueprint)
+                                    : name == "cone" || name == "start" ? std::string(multiplayer::prop_test_default) : name;
+        multiplayer::request_prop_test(blueprint, mode);
+        out(std::format("Spawning {} with mode {}. Run dronemodeltest again in a moment for what happened.", blueprint, mode));
+    };
+    registry.add(std::move(model_test));
     auto radio_check = action("droneradiocheck", "Show what your controller is sending right now, and how the drone reads it", Group::movement);
     radio_check.inspect = [](const Model &) { return State{true, {}, {}, {}, false}; };
     radio_check.run = [](const Model &, const Values &, const Output &out) {

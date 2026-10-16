@@ -23,6 +23,8 @@
 #include "Extension/UI/NativeMenu/native_menu.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
 #include "Extension/Multiplayer/Session/session.h"
+#include "Extension/Multiplayer/Remote/native_prop.h"
+#include "Extension/Multiplayer/Remote/drone_sound.h"
 #include "Extension/Boot/discord_presence.h"
 #include "Engine/Game/World/world_names.h"
 #include "Extension/Multiplayer/Hud/custom_nametags.h"
@@ -1284,6 +1286,15 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
         {
             DINGO_PROFILE_ZONE("tick/multiplayer");
             dingosdk::multiplayer::tick(r.base,client,multiplayer_ready,r.multiplayer_map,load_multiplayer_map);
+            if (multiplayer_ready) {
+                dingosdk::multiplayer::tick_prop_test(r.base, client);
+                // Other players' drones as models in the world (DRONE page, LOBBY tab: show other players' drones).
+                dingosdk::multiplayer::tick_drone_models(r.base, client,
+                    dingosdk::drone::knobs().value[dingosdk::drone::kShowBeacons].load(std::memory_order_relaxed) >= 0.5f);
+            }
+            // And heard where they fly (every frame, so their sounds stop on leaving a level).
+            dingosdk::multiplayer::tick_drone_sounds(r.base, client, multiplayer_ready,
+                dingosdk::drone::knobs().value[dingosdk::drone::kShowBeacons].load(std::memory_order_relaxed) >= 0.5f);
             if (auto notice = dingosdk::multiplayer::take_leave_notice(); !notice.empty())
                 dingosdk::overlay::notify(dingosdk::overlay::NoticeLevel::warning, "Map not installed", std::move(notice));
             // Kicked, banned or otherwise put out by the host or server: said in the middle of

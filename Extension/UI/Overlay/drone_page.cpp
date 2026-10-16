@@ -88,14 +88,24 @@ void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) 
             if (get(Knob::kHideUi) >= 0.5f && !model.debug.game_ui_hidden) { run(callbacks, "hideui 1"); hid_ui = true; }
         }
     }
+    const bool gamepad = drone::gamepad_mode();
     if (!model.debug.camera_available) warn("Load into a level to fly.");
-    else if (flying) note(radio_on ? "Flying with the controller. Close the menu to fly." : "Flying with the keyboard and mouse. Close the menu to fly.");
+    else if (flying) note(!radio_on ? "Flying with the keyboard and mouse. Close the menu to fly."
+                          : gamepad ? (overlay::read_gamepad().valid ? "Flying with the gamepad. Close the menu to fly."
+                                                                     : "No gamepad found: flying with the keyboard and mouse. Close the menu to fly.")
+                                    : "Flying with the controller. Close the menu to fly.");
     else if (enabled) note("Drone mode is on, but freecam is off: press Start flying.");
     else note("Keyboard: W/S tilt forward/back, A/D roll, E/Q throttle up/down, mouse turns, Shift boosts.");
     bool radio = radio_on;
     if (toggle_row(menu, "Fly with a controller", "An RC radio in USB Joystick mode, or a gamepad. Set it up on the CONTROLLER tab.", radio))
         run(callbacks, radio ? "droneradio 1" : "droneradio 0");
-    if (!radio_on && drone::radio::poll().valid)
+    if (radio_on) {
+        options(menu, callbacks, Knob::kGamepad, "Controller", {"RC radio", "Gamepad"});
+        if (gamepad)
+            note("Left stick: throttle (the middle hovers) and turning. Right stick: tilt forward, back and sideways. "
+                 "A (cross) arms and disarms, Menu (Options) puts the drone back.");
+    }
+    if (!radio_on && (drone::radio::poll().valid || overlay::read_gamepad().valid))
         warn("A controller is connected. Turn on Fly with a controller to use it, or the game keeps using it for your skater.");
     toggle(menu, callbacks, Knob::kHideUi, "Hide the game's interface while flying");
     end_card();
@@ -140,8 +150,8 @@ void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) 
         field(menu, "Top speed", "The same setting as freecam's flight speed.\n\nConsole: flyspeed");
         if (ImGui::SliderFloat("##top-speed", &top, 0.6f, 300.0f, "%.1f", ImGuiSliderFlags_Logarithmic)) pending = top;
         if (ImGui::IsItemDeactivatedAfterEdit()) { run(callbacks, std::format("flyspeed {}", top)); sent_at = ImGui::GetTime(); }
-        // The flight model caps speed at four times the fly speed (m/s), twice that with boost.
-        const auto speed = std::format("Up to about {:.0f} km/h (twice that with boost).", top * 4.0f * 3.6f);
+        // The flight model's drag is set so full throttle flat out settles near four times the fly speed (m/s).
+        const auto speed = std::format("Flat out at about {:.0f} km/h (a little faster with boost).", top * 4.0f * 3.6f);
         note(speed.c_str());
     }
     end_card();
@@ -171,6 +181,21 @@ void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) 
 
 // ---- HANDLING
 void handling_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
+    begin_card(menu, "drone-mode", "FLIGHT MODE");
+    options(menu, callbacks, Knob::kFlightMode, "Mode", {"Acro", "Angle (self-levelling)"});
+    if (get(Knob::kFlightMode) >= 0.5f) {
+        slider(menu, callbacks, Knob::kMaxAngle, "Most lean", "%.0f degrees");
+        note("The sticks set how far the drone leans; let go and it levels out. Easier to learn on, but no flips.");
+    } else {
+        note("The sticks set how fast the drone turns, and it stays at whatever angle you leave it: how real FPV pilots fly.");
+    }
+    toggle(menu, callbacks, Knob::kAltHold, "Hold height with a springing throttle");
+    slider(menu, callbacks, Knob::kClimbRate, "Climb speed", "%.1f m/s");
+    note("For gamepads and the keyboard, whose throttle springs back. Off: the middle of the stick is hover power, and the "
+         "throttle never changes by itself. On: the middle holds your height, adding throttle as you lean to keep it. "
+         "An RC radio's throttle stays where you put it and is not affected.");
+    end_card();
+
     begin_card(menu, "drone-flight", "FLIGHT");
     slider(menu, callbacks, Knob::kGravity, "Gravity", "%.1f");
     slider(menu, callbacks, Knob::kHover, "Hover throttle");
@@ -183,6 +208,21 @@ void handling_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
     slider(menu, callbacks, Knob::kRadius, "Collision size", "%.2f m");
     slider(menu, callbacks, Knob::kFloor, "Invisible floor", "%.1f m");
     toggle(menu, callbacks, Knob::kDisarmFreeze, "Hang in the air when disarmed");
+    end_card();
+
+    begin_card(menu, "drone-crashes", "CRASHES");
+    toggle(menu, callbacks, Knob::kCrash, "Crashes");
+    if (get(Knob::kCrash) >= 0.5f) {
+        slider(menu, callbacks, Knob::kCrashSpeed, "Hit that cuts the motors", "%.1f m/s");
+        const auto cut = get(Knob::kCrashSpeed) > 0.0f
+            ? std::format("Bumps bounce the drone off and knock it about. Hitting something at {:.0f} km/h or more cuts the motors: "
+                          "it tumbles down, and you arm again to fly on.", get(Knob::kCrashSpeed) * 3.6f)
+            : std::string("Bumps bounce the drone off and knock it about, but never cut the motors.");
+        note(cut.c_str());
+    } else {
+        note("Off: the drone just stops against whatever it meets.");
+    }
+    slider(menu, callbacks, Knob::kPropwash, "Prop wash shake");
     end_card();
 
     begin_card(menu, "drone-range", "RANGE");
@@ -376,13 +416,54 @@ void setup_wizard(SkateMenu& menu, const CallbacksV3& callbacks, const drone::ra
     if (ImGui::Button("Cancel", ImVec2(third, 0))) c.cancel();
     end_card();
 }
+// A gamepad (drone_flight.h: gamepad_sticks): a fixed Mode 2 layout, so nothing to set up but feel.
+void gamepad_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
+    const auto pad = overlay::read_gamepad();
+    begin_card(menu, "drone-gamepad", "GAMEPAD");
+    if (!pad.valid) {
+        warn("No gamepad found. Plug in an Xbox or PlayStation controller.");
+    } else {
+        info(menu, "Connected", pad.playstation ? "PlayStation controller" : "Xbox controller");
+        const auto sticks = drone::read_gamepad(pad);
+        const auto bar = [](const char* label, float v) {
+            char value[16];
+            std::snprintf(value, sizeof value, "%+.2f", static_cast<double>(v));
+            ImGui::ProgressBar((v + 1.0f) * 0.5f, ImVec2(ImGui::GetContentRegionAvail().x * 0.75f, 0), value);
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label);
+        };
+        bar("Throttle", sticks.climb);
+        bar("Yaw", sticks.yaw);
+        bar("Pitch", sticks.pitch);
+        bar("Roll", sticks.roll);
+        note("What the drone gets from each stick, after the dead zone and sensitivity below.");
+    }
+    note("Left stick: throttle up and down, turning left and right. Right stick: tilt (pitch, see Invert below) and roll. "
+         "A (cross) arms and disarms, Menu (Options) puts the drone back where it took off.");
+    end_card();
+
+    begin_card(menu, "drone-gamepad-feel", "STICKS");
+    slider(menu, callbacks, Knob::kPadRate, "Sensitivity");
+    slider(menu, callbacks, Knob::kPadExpo, "Softer middle");
+    slider(menu, callbacks, Knob::kDeadzone, "Stick dead zone");
+    toggle(menu, callbacks, Knob::kPadInvert, "Invert the right stick (up tips the nose up)");
+    note("Sensitivity scales how fast the drone can turn at full stick (your RATES still shape it). A softer middle "
+         "makes small corrections gentler without slowing full-stick flips. Gamepads use a dead zone of at least 0.08.");
+    end_card();
+}
 void controller_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
+    if (drone::gamepad_mode()) {
+        options(menu, callbacks, Knob::kGamepad, "Controller", {"RC radio", "Gamepad"});
+        gamepad_tab(menu, callbacks);
+        return;
+    }
     const auto sample = drone::radio::poll();
     auto& c = drone::radio::calibration();
     if (c.step() != drone::radio::Calibration::Step::idle) {
         setup_wizard(menu, callbacks, sample);
         return;
     }
+    options(menu, callbacks, Knob::kGamepad, "Controller", {"RC radio", "Gamepad"});
     begin_card(menu, "drone-controller", "CONTROLLER");
     if (!sample.valid) {
         warn("No controller found. Plug in a gamepad, or an RC radio with its USB mode set to Joystick (on EdgeTX radios, pick "
@@ -441,6 +522,7 @@ void lobby_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
     toggle(menu, callbacks, Knob::kBeacon, "Let other players see my drone");
     toggle(menu, callbacks, Knob::kShowBeacons, "Show other players' drones");
     note("Other players only see drones if they are on a version of ReSkate with the drone.");
+    note("Drone model: FPV Drone by PinaPipe (CC BY 4.0), reduced and rescaled for the game.");
     end_card();
 }
 } // namespace

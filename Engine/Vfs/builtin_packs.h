@@ -1,0 +1,22 @@
+#pragma once
+#include <filesystem>
+#include <string>
+#include <vector>
+
+// Game content ReSkate carries itself: packs of game assets built by ReSkate Studio (the FPV
+// drone's model, tools/models/build_drone_pack.py), zipped into ReSkate.dll. Nobody installs or
+// sees them. Before a merge each is unpacked under Mods/.reskate-builtin/<name> (a dot folder,
+// which no mod list shows) when the one embedded differs from what is there, and the catalogue
+// merges it after every installed mod, always on (mod_catalog.cpp).
+namespace dingosdk::mods {
+inline constexpr std::string_view builtin_folder = ".reskate-builtin";
+struct BuiltinPack {
+    std::string name;                 // as the merge knows it: reskate-builtin-<pack>
+    std::filesystem::path directory;  // Mods/.reskate-builtin/<pack>
+};
+// The packs ReSkate.dll carries, unpacked and current under `mods_root`. ReSkate.dll is the
+// module running this when it is loaded (the game); otherwise the copy beside this program (the
+// launcher) is opened as data. Never throws; `notes` says what was unpacked or went wrong.
+std::vector<BuiltinPack> unpack_builtin_packs(const std::filesystem::path& mods_root,
+                                              std::vector<std::string>& notes) noexcept;
+} // namespace dingosdk::mods

@@ -140,7 +140,23 @@ struct Remote {
     Clock::duration glide{};      // how long the glide takes
     Rotation rotation = no_rotation;                     // in a snapshot: which way it faces now
     Rotation from_rotation = no_rotation, to_rotation = no_rotation;
+    // For its motor sound (Multiplayer/Remote/drone_sound.h): how fast it goes and the throttle it
+    // seems to be on, worked out from how it moves (estimate_throttle), as packets carry no stick.
+    Position velocity{};
+    float speed = 0.0f;
+    float throttle = 0.0f;
 };
+// The throttle a drone is on, from how it accelerates and which way its props point: thrust is the
+// acceleration it has besides gravity, along its up axis. Thrust goes with output^1.5 and hovering
+// takes `hover` (drone_flight.h), so output = hover * (thrust / g)^(2/3). Drag is left out: a fast
+// drone sounds a little less busy than it is.
+inline constexpr float assumed_hover = 0.35f, assumed_gravity = 9.81f;
+inline float estimate_throttle(const Position& acceleration, const Rotation& facing) {
+    const auto up = basis_from_rotation(facing)[1];
+    const float thrust = acceleration[0] * up[0] + (acceleration[1] + assumed_gravity) * up[1] + acceleration[2] * up[2];
+    if (!std::isfinite(thrust) || thrust <= 0.0f) return 0.0f;
+    return std::clamp(assumed_hover * std::pow(thrust / assumed_gravity, 2.0f / 3.0f), 0.0f, 1.0f);
+}
 inline float glide_fraction(const Remote& r, Clock::time_point now) {
     if (r.glide <= Clock::duration::zero()) return 1.0f;
     return std::clamp(std::chrono::duration<float>(now - r.seen) / std::chrono::duration<float>(r.glide), 0.0f, 1.0f);
@@ -176,6 +192,26 @@ inline void receive(std::uint64_t id, std::string name, const Position& position
             const auto gap = std::clamp<Clock::duration>(now - it->seen, std::chrono::milliseconds(20),
                                                          std::chrono::milliseconds(250));
             const bool snap = jump > snap_distance * snap_distance;
+            // Velocity and acceleration between the last two positions as they arrived; smoothed,
+            // as arrival times jitter. A long gap or a jump starts over.
+            const float dt = std::chrono::duration<float>(now - it->seen).count();
+            if (!snap && dt >= 0.02f && dt <= 0.5f) {
+                Position velocity{}, acceleration{};
+                float speed = 0.0f;
+                for (std::size_t i = 0; i < 3; ++i) {
+                    velocity[i] = (position[i] - it->to[i]) / dt;
+                    acceleration[i] = (velocity[i] - it->velocity[i]) / dt;
+                    speed += velocity[i] * velocity[i];
+                }
+                const float throttle = estimate_throttle(acceleration, facing);
+                it->throttle += (throttle - it->throttle) * 0.35f;
+                it->speed += (std::sqrt(speed) - it->speed) * 0.5f;
+                it->velocity = velocity;
+            } else {
+                it->velocity = {};
+                it->speed = 0.0f;
+                it->throttle = assumed_hover;
+            }
             it->from_rotation = snap ? facing : blend_rotation(it->from_rotation, it->to_rotation, glide_fraction(*it, now));
             it->to_rotation = facing;
             it->from = snap ? position : shown;
@@ -186,7 +222,9 @@ inline void receive(std::uint64_t id, std::string name, const Position& position
             return;
         }
     if (!active || r.list.size() >= max_remote) return;
-    r.list.push_back({id, std::move(name), position, now, position, position, {}, facing, facing, facing});
+    Remote added{id, std::move(name), position, now, position, position, {}, facing, facing, facing};
+    added.throttle = assumed_hover;
+    r.list.push_back(std::move(added));
 }
 // Someone left the session.
 inline void forget(std::uint64_t id) {

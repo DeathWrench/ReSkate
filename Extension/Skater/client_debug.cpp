@@ -242,6 +242,25 @@ void debug_flight_tick(SourceTrial& trial, std::uintptr_t client, bool ready, bo
                 // The controller setup is moving the sticks and switches: hold the drone where it is.
                 next = debug.flight_matrix;
                 flown_by_radio = true;
+            } else if (drone::radio::config().enabled.load(std::memory_order_acquire) && drone::radio::game_in_foreground() &&
+                       drone::gamepad_mode()) {
+                // A gamepad, read directly (it is kept from the game while the drone has it).
+                overlay::Gamepad pad;
+                {
+                    drone::radio::detail::InputAccess access;
+                    pad = overlay::read_gamepad();
+                }
+                if (pad.valid) {
+                    // While the ReSkate menu is open (no flight input) the pad is the menu's: the drone
+                    // holds still in the air and the buttons do nothing.
+                    const bool menu_closed = input && input->active;
+                    drone::apply_gamepad_buttons(pad.buttons, menu_closed);
+                    overlay::Gamepad resting;
+                    resting.valid = true;
+                    next = drone::step_drone_radio(debug.flight_matrix, debug.drone_state,
+                        drone::read_gamepad(menu_closed ? pad : resting), seconds, debug.flight_speed, drone::live_settings(), &world);
+                    flown_by_radio = true;
+                }
             } else if (drone::radio::config().enabled.load(std::memory_order_acquire) && drone::radio::game_in_foreground()) {
                 const auto sample = drone::radio::poll();
                 if (sample.valid) {
