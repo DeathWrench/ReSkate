@@ -111,7 +111,7 @@ struct State {
     std::string status = "Waiting for the game.", last;
     bool ready{};
     std::map<std::string, Saved, std::less<>> saved;                                    // by key
-    std::map<std::string, std::map<std::string, double, std::less<>>, std::less<>> user; // presets
+    UserPresets user;                                                                   // presets
     std::vector<std::string> active;                                                    // presets applied since Stock
     std::map<std::string, MapData, std::less<>> maps;
     std::string map;
@@ -264,7 +264,7 @@ void load_store() {
                     s.saved[lower(key)] = {row.at("value").get<double>(), row.value("frozen", false)};
         if (json->contains("presets") && json->at("presets").is_object())
             for (const auto &[name, values] : json->at("presets").items()) {
-                if (!values.is_object() || name.empty() || name.size() > 48) continue;
+                if (!values.is_object() || name.empty() || name.size() > max_preset_name) continue;
                 auto &preset = s.user[name];
                 for (const auto &[key, value] : values.items())
                     if (value.is_number()) preset[lower(key)] = value.get<double>();
@@ -283,6 +283,16 @@ void load_store() {
             }
     } catch (...) {
         say(logging::Level::warning, "Trainer: trainer.json is damaged; starting from what could be read.");
+    }
+    // A preset of the player's own saved before a built-in one took its name would hide the
+    // built-in. It keeps its values under a new name, and what named it follows.
+    for (const auto &[from, to] : rename_reserved_presets(s.user)) {
+        for (auto &name : s.active)
+            if (lower(name) == lower(from)) name = to;
+        for (auto &entry : s.maps)
+            if (lower(entry.second.preset) == lower(from)) entry.second.preset = to;
+        s.save_due = true;
+        say(logging::Level::info, std::format("Trainer: your preset \"{}\" is now \"{}\": a built-in preset has that name.", from, to));
     }
 }
 void save_store() {
@@ -1696,10 +1706,8 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             return apply_preset(name);
         }
         if (action == "save") {
-            if (name.size() > 48) return "error: that name is too long.";
-            for (const auto &preset : builtin_presets())
-                if (lower(preset.name) == lower(name)) return "error: that name belongs to a built-in preset.";
-            if (lower(name) == "stock" || lower(name) == "map") return "error: that name is reserved.";
+            if (name.size() > max_preset_name) return "error: that name is too long.";
+            if (reserved_preset_name(name)) return "error: that name belongs to a built-in preset (or Stock, or Map).";
             std::map<std::string, double, std::less<>> values;
             for (const auto &e : s.entries)
                 if (e.touched) values[e.key] = e.value;
