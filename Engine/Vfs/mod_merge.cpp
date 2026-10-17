@@ -98,15 +98,15 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         for (const auto* mod : mods) modFiles[mod] = scan(mod->directory);
 
         // What the store sells comes from the content cache, which the launcher installs.
-        const bool storeKnown = content_cache::installed();
+        //const bool storeKnown = content_cache::installed();
         // Disabled mods count too: their archives and map registration are placed at launch.
-        auto fingerprint = merge_fingerprint(catalog, mods, modFiles, storeKnown);
+        auto fingerprint = merge_fingerprint(catalog, mods, modFiles);
         for (const auto& mod : catalog.inactive)
             fingerprint += " inactive " + mod.name + " " + mod_fingerprint(mod.directory);
         if (options.live) {
             fs::remove(output / stamp_file, error);
         } else if (auto previous = previous_merge(output, fingerprint);
-                   previous && (!storeKnown || fs::exists(output / item_sources_file, error))) {
+                   previous && (fs::exists(output / item_sources_file, error))) {
             // (A patch from before items were traced to their mods is built again, once.)
             return std::move(*previous);
         }
@@ -119,7 +119,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         const auto cores = std::max(1U, std::thread::hardware_concurrency());
         const std::size_t readers = std::min<std::size_t>(options.live ? std::max(1U, cores / 2) : cores, options.live ? 6U : 8U);
         std::optional<std::vector<StoreCopies::Added>> itemsRead;
-        if (storeKnown && store_copy_problems(catalog, report, options.live ? options.checked : std::vector<std::string>{},
+        if (store_copy_problems(catalog, report, options.live ? options.checked : std::vector<std::string>{},
                                               readers - 1, options.live, itemsRead)) return report;
         // Which mod each item is from (mod_item_sources.h): what was just read, and for a mod a
         // live merge did not read again, what the launch's merge found. Read before the patch
