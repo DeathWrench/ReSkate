@@ -65,16 +65,17 @@ inline bool set_setting_value(Settings& s, std::string_view name, int value) noe
 
 // ---- how hard a slam has to be ------------------------------------------------------------------
 // The slam forces measured in play run from about 2 (a stumble) to 10 and more (a hard slam).
-inline constexpr float heavy_slam = 10.0f, light_chance = 0.25f;
+inline constexpr float heavy_slam = 10.0f;
 // A worn board takes less: at the end of its life about half the force it took new.
 inline constexpr float worn_strength = 0.5f;
 // How likely a slam of `force` breaks the board, with the player's sensitivity (percent) and the
-// board's wear (0 new, 1 worn out).
+// board's wear (0 new, 1 worn out). A new board at 100%: never under 6, half the time at 8, always
+// from 10. A bail whose force is not known (0) never breaks it.
 inline float slam_chance(float force, int sensitivity, float wear) noexcept {
+    if (!(force > 0.0f)) return 0.0f;
     const float s = std::clamp(sensitivity, sensitivity_min, sensitivity_max) / 100.0f;
     const float strength = 1.0f - (1.0f - worn_strength) * std::clamp(wear, 0.0f, 1.0f);
-    const float light = std::clamp(light_chance * s * (1.0f + wear), 0.0f, 0.95f);
-    return break_chance(force, heavy_slam * strength / s, light);
+    return break_chance(force, heavy_slam * strength / s);
 }
 
 // ---- wear and tear ------------------------------------------------------------------------------
@@ -112,14 +113,20 @@ inline Handling handling(float wear) noexcept {
     const float eased = w * w * (3.0f - 2.0f * w);
     return {1.0f - 0.25f * eased, 1.0f - 0.6f * eased, 1.0f - 0.5f * eased, 1.0f + 0.4f * eased};
 }
-// A worn board can give way under the rider: per second of riding.
-inline double gives_way_per_second(float wear) noexcept {
-    const double w = std::clamp((wear - 0.8f) / 0.2f, 0.0f, 1.0f);
-    return 0.0001 + w * w * 0.01;
-}
-// What a board's state is called on the menus.
+// What a board's state is called on the menus. A board is "done" from `done_wear` on.
+inline constexpr float done_wear = 0.85f;
 inline std::string_view condition_name(float wear) noexcept {
-    return wear < 0.15f ? "new" : wear < 0.4f ? "used" : wear < 0.65f ? "worn" : wear < 0.85f ? "beat" : "done";
+    return wear < 0.15f ? "new" : wear < 0.4f ? "used" : wear < 0.65f ? "worn" : wear < done_wear ? "beat" : "done";
+}
+// A done board gives way under the rider on a landing (the nose goes, and they ride on): from a
+// big drop (6.5 m/s coming down) as it becomes done, down to any real drop (3.5 m/s, a curb's)
+// when it is worn right out. Never a board less worn, and never on flat ground riding: a board
+// breaks from something the rider did. Sensitivity as for a slam.
+inline bool gives_way_on_landing(float down_speed, int sensitivity, float wear) noexcept {
+    if (wear < done_wear) return false;
+    const float s = std::clamp(sensitivity, sensitivity_min, sensitivity_max) / 100.0f;
+    const float t = std::clamp((wear - done_wear) / (1.0f - done_wear), 0.0f, 1.0f);
+    return down_speed >= (6.5f - 3.0f * t) / s;
 }
 
 // ---- the board on a rail ------------------------------------------------------------------------

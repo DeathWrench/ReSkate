@@ -36,12 +36,12 @@ void a_break_leaves_two_pieces_or_one_that_hangs_together() {
 }
 
 void a_harder_slam_breaks_a_board_more_often() {
-    check(break_chance(10.0f, 10.0f, 0.25f) == 1.0f && break_chance(30.0f, 10.0f, 0.25f) == 1.0f, "A heavy slam always breaks it");
-    check(break_chance(0.0f, 10.0f, 0.25f) == 0.25f && break_chance(6.0f, 10.0f, 0.25f) == 0.25f, "A light one now and then");
-    check(near(break_chance(8.0f, 10.0f, 0.25f), 0.625f), "and in between it rises evenly");
+    check(break_chance(10.0f, 10.0f) == 1.0f && break_chance(30.0f, 10.0f) == 1.0f, "A heavy slam always breaks it");
+    check(break_chance(0.0f, 10.0f) == 0.0f && break_chance(6.0f, 10.0f) == 0.0f, "A light one never does");
+    check(near(break_chance(8.0f, 10.0f), 0.5f), "and in between it rises smoothly");
     float before{};
     for (float force = 0; force <= 12.0f; force += 0.5f) {
-        const auto chance = break_chance(force, 10.0f, 0.25f);
+        const auto chance = break_chance(force, 10.0f);
         check(chance >= before && chance <= 1.0f, "It never falls with more force");
         before = chance;
     }
@@ -164,7 +164,8 @@ void a_worn_or_touchy_board_breaks_sooner() {
     check(slam_chance(6.0f, 100, 0.0f) < slam_chance(6.0f, 100, 1.0f), "A worn board breaks from less");
     check(slam_chance(heavy_slam * 0.5f, 200, 0.0f) == 1.0f, "At 200% half the force always breaks it");
     check(slam_chance(8.0f, 50, 0.0f) < slam_chance(8.0f, 100, 0.0f), "at 50% it takes more");
-    check(slam_chance(0.0f, 400, 1.0f) <= 0.95f, "and a stumble never breaks it for certain");
+    check(slam_chance(2.0f, 100, 0.0f) == 0.0f && slam_chance(2.0f, 100, 0.6f) == 0.0f, "A stumble never breaks a board that is not done");
+    check(slam_chance(0.0f, 400, 1.0f) == 0.0f, "nor does a bail whose force is not known, at any setting");
 }
 
 void every_hit_wears_a_board() {
@@ -182,7 +183,12 @@ void a_worn_board_handles_worse() {
     check(half.steering < 1.0f && done.steering < half.steering && done.spring < half.spring && done.twist > half.twist,
           "The more worn, the lazier the turn and the softer the trucks");
     check(done.steering > 0.5f && done.spring > 0.2f, "but it can still be ridden");
-    check(gives_way_per_second(1.0f) > 50 * gives_way_per_second(0.0f), "A worn-out board gives way under the rider far more often");
+    check(!gives_way_on_landing(20.0f, 400, done_wear - 0.01f), "A board that is not done never gives way on a landing");
+    check(!gives_way_on_landing(6.0f, 100, done_wear) && gives_way_on_landing(6.5f, 100, done_wear),
+          "A board just done goes on a big drop");
+    check(!gives_way_on_landing(3.0f, 100, 1.0f) && gives_way_on_landing(3.5f, 100, 1.0f),
+          "one worn right out on any real drop, but not on an ollie on flat ground");
+    check(gives_way_on_landing(4.0f, 200, done_wear) && !gives_way_on_landing(4.0f, 100, done_wear), "Sensitivity makes it touchier");
 }
 
 void a_board_across_its_way_slides() {
