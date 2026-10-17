@@ -42,6 +42,9 @@ struct Config {
     // The release it came from, and whether GitHub marks it a pre-release.
     std::string tag;
     bool prerelease{};
+    // Whether GitHub has a pre-release newer than the latest release (whichever was chosen): the
+    // "Test pre-releases" setting is only offered then.
+    bool prerelease_available{};
 };
 
 // Release builds replace ReSkateLauncher.exe and ReSkate.dll; local builds only report.

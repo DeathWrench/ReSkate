@@ -333,6 +333,8 @@ void Launcher::run_check() {
         std::lock_guard lock(mutex_);
         state_.config = config;
     }
+    // (Unreachable GitHub: what the last check found stands.)
+    if (config) prerelease_available_ = config->prerelease_available;
     const bool newer = config && (launcher_outdated(*config) || runtime_outdated(*config));
     if (newer && update::binary_updates_enabled() && binaries_ && settings_.updates) {
         set(Phase::update_available, "A ReSkate update is ready",

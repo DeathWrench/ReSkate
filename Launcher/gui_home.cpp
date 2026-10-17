@@ -558,6 +558,8 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     g_drag_allowed = !modal && !ImGui::IsAnyItemHovered();
     ImGui::End();
 
+    // An update choice flipped while a check was already running is checked as soon as it ends.
+    launcher.check_again_if_update_choices_changed();
     if (state.prompt) prompt_window(launcher, fonts, size, *state.prompt, ui);
     else if (qr_open) qr_window(launcher, fonts, size, state.qr);
     else if (ui.sign_in) sign_in_window(launcher, fonts, size, ui);

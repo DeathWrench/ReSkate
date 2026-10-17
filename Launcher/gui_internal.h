@@ -257,8 +257,11 @@ public:
     Settings& settings() { return settings_; }
     const launcher_app::Session& session() const { return session_; }
     void save();
-    // After settings are closed: the update check again, when an update choice changed.
+    // The update check again when an update choice changed since the last one: as either switch
+    // is flipped, and each frame after (a check already running holds the next one until it ends).
     void check_again_if_update_choices_changed();
+    // Whether the last update check found a pre-release newer than the latest release.
+    bool prerelease_available() const { return prerelease_available_; }
 
     void check();
     // The merge the game would do at startup, run here so its failures can be
@@ -288,6 +291,7 @@ private:
     // The update choices the last check was made with: one changed in settings is checked
     // again straight away (save()).
     std::atomic<bool> checked_updates_{true}, checked_prereleases_{};
+    std::atomic<bool> prerelease_available_{};
     bool binaries_{true};
     std::mutex mutex_;
     std::condition_variable answered_;

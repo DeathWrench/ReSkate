@@ -79,6 +79,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Music/spotify_station.cpp
     Extension/Music/spotify_cover.cpp
     Extension/Music/spotify_web.cpp
+    Extension/Music/plex_web.cpp
     Extension/Music/spotify_device.cpp
     Extension/Music/spotify_dashboard.cpp
     Extension/Music/external_audio.cpp
