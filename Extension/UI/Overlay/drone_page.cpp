@@ -39,7 +39,7 @@ void slider(SkateMenu& menu, const CallbacksV3& callbacks, Knob k, const char* l
     field(menu, label, help.c_str());
     float v = get(k);
     ImGui::PushID(static_cast<int>(k));
-    if (ImGui::SliderFloat("##value", &v, drone::knob_info[k].lo, drone::knob_info[k].hi, format)) set(k, v);
+    if (::dingosdk::overlay::menu::slider_float("##value", &v, drone::knob_info[k].lo, drone::knob_info[k].hi, format)) set(k, v);
     if (ImGui::IsItemDeactivatedAfterEdit()) save(callbacks, k);
     ImGui::PopID();
 }
@@ -48,7 +48,7 @@ void integer(SkateMenu& menu, const CallbacksV3& callbacks, Knob k, const char* 
     field(menu, label, help.c_str());
     int v = static_cast<int>(std::lround(get(k)));
     ImGui::PushID(static_cast<int>(k));
-    if (ImGui::SliderInt("##value", &v, static_cast<int>(drone::knob_info[k].lo), static_cast<int>(drone::knob_info[k].hi)))
+    if (::dingosdk::overlay::menu::slider_int("##value", &v, static_cast<int>(drone::knob_info[k].lo), static_cast<int>(drone::knob_info[k].hi)))
         set(k, static_cast<float>(v));
     if (ImGui::IsItemDeactivatedAfterEdit()) save(callbacks, k);
     ImGui::PopID();
@@ -172,7 +172,7 @@ void fly_tab(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) 
                                 (sent_at > 0.0 && ImGui::GetTime() - sent_at > 1.0))) { pending = -1.0f; sent_at = 0.0; }
         float top = pending >= 0.0f ? pending : model.debug.camera_speed;
         field(menu, "Top speed", "The same setting as freecam's flight speed.\n\nConsole: flyspeed");
-        if (ImGui::SliderFloat("##top-speed", &top, 0.6f, 300.0f, "%.1f", ImGuiSliderFlags_Logarithmic)) pending = top;
+        if (::dingosdk::overlay::menu::slider_float("##top-speed", &top, 0.6f, 300.0f, "%.1f", ImGuiSliderFlags_Logarithmic)) pending = top;
         if (ImGui::IsItemDeactivatedAfterEdit()) { run(callbacks, std::format("flyspeed {}", top)); sent_at = ImGui::GetTime(); }
         // The flight model's drag is set so full throttle flat out settles near four times the fly speed (m/s).
         const auto speed = std::format("Flat out at about {:.0f} km/h (a little faster with boost).", top * 4.0f * 3.6f);
@@ -260,7 +260,7 @@ void handling_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
     if (limited) {
         field(menu, "Range");
         float metres = get(Knob::kRange);
-        if (ImGui::SliderFloat("##range", &metres, 50.0f, 5000.0f, "%.0f m", ImGuiSliderFlags_Logarithmic)) set(Knob::kRange, metres);
+        if (::dingosdk::overlay::menu::slider_float("##range", &metres, 50.0f, 5000.0f, "%.0f m", ImGuiSliderFlags_Logarithmic)) set(Knob::kRange, metres);
         if (ImGui::IsItemDeactivatedAfterEdit()) save(callbacks, Knob::kRange);
         const auto explained = std::format(
             "Measured from where you took off. The picture starts to break up at {:.0f} m and is lost at {:.0f} m. Stay without a "
@@ -552,16 +552,20 @@ void lobby_tab(SkateMenu& menu, const CallbacksV3& callbacks) {
 } // namespace
 
 void drone_page(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {
-    category_tabs(menu, menu.drone_tab, {"FLY", "HANDLING", "RATES", "DISPLAY", "CONTROLLER", "LOBBY"}, "drone-tabs");
+    category_tabs(menu, menu.drone_tab, {"FLY", "FLIGHT", "DISPLAY", "CONTROLLER"}, "drone-tabs");
     ImGui::PushID(menu.drone_tab);
-    ImGui::BeginChild("drone-tab", ImVec2(0, page_body_height(menu)));
+    ImGui::BeginChild("drone-tab", ImVec2(0, page_body_height(menu)), ImGuiChildFlags_NavFlattened);
     switch (menu.drone_tab) {
     case 0: fly_tab(menu, model, callbacks); break;
-    case 1: handling_tab(menu, callbacks); break;
-    case 2: rates_tab(menu, callbacks); break;
-    case 3: display_tab(menu, callbacks); break;
-    case 4: controller_tab(menu, callbacks); break;
-    default: lobby_tab(menu, callbacks); break;
+    case 1:
+        handling_tab(menu, callbacks);
+        rates_tab(menu, callbacks);
+        break;
+    case 2:
+        display_tab(menu, callbacks);
+        lobby_tab(menu, callbacks);
+        break;
+    default: controller_tab(menu, callbacks); break;
     }
     ImGui::EndChild();
     ImGui::PopID();

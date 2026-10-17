@@ -46,6 +46,9 @@ CallbacksV3 hub_callbacks; // under the mutex
 } // namespace
 void set_hub_page_feed(HubPageFeed feed) noexcept { page_feed.store(feed); }
 void set_ui_sound(UiSound play) noexcept { ui_sound.store(play); }
+void play_ui_sound(std::uint32_t sound) noexcept {
+    if (const auto play = ui_sound.load()) play(sound);
+}
 void set_hub_callbacks(const CallbacksV3 &callbacks) noexcept {
     std::lock_guard lock(hub_callbacks_mutex);
     hub_callbacks = callbacks;
@@ -157,6 +160,8 @@ struct Hub {
     ULONGLONG join_asked{};
     std::string failed, failed_name; // why the last join did not get in, and where to; empty: nothing to say
     ULONGLONG notice_until{};
+    // The frame the ReSkate menu last drew these pages itself (draw_online_embedded).
+    int embedded_frame{-10};
 };
 Hub &hub() {
     static Hub value;
@@ -1454,22 +1459,14 @@ bool hub_page_pending() {
     return shown;
 }
 
-void draw_hub_page() {
-    auto &h = hub();
-    if (!h.shown) return;
+// One frame of the pages, in `a`..`z` with their tabs at `tabs_y`: in the game's pause menu
+// (draw_hub_page), or on the ReSkate menu's full screen ONLINE page (draw_online_embedded), which
+// keeps B for itself.
+void hub_frame(Hub &h, ImDrawList *draw, float u, ImVec2 a, ImVec2 z, float tabs_y, bool input, bool embedded) {
     auto &s = state();
     auto &io = ImGui::GetIO();
-    const auto display = io.DisplaySize;
-    // One unit of the game's menu in pixels, and where its page sits in this window.
-    const float u = std::min(display.x / layout_width, display.y / layout_height);
-    const float across = display.x / u, down = display.y / u, canvas = std::min(across, layout_widest);
-    const float page_left = ((across - canvas) * .5f + side_margin) * u, page_right = ((across + canvas) * .5f - side_margin) * u;
-    const float lower = (down - layout_height) * .05f; // how far a taller window moves the page down
-    const bool others = s.visible.load() || s.console_visible.load() || s.editor_visible.load() || s.chat_visible.load();
-    Ui ui{h, ImGui::GetBackgroundDrawList(), s.menu.bold ? s.menu.bold : ImGui::GetFont(), s.menu.body ? s.menu.body : ImGui::GetFont(), nullptr, u, io.MousePos,
-          // (A card that asks something over the page has the input while it asks.)
-          !others && !s.prompt_input_active.load(std::memory_order_relaxed) && game_window_foreground(s.window.load()),
-          false, false, false, 0, h.model, {}};
+    Ui ui{h, draw, s.menu.bold ? s.menu.bold : ImGui::GetFont(), s.menu.body ? s.menu.body : ImGui::GetFont(), nullptr, u, io.MousePos,
+          input, false, false, false, 0, h.model, {}};
     ui.heading = s.menu.heading ? s.menu.heading : ui.bold;
     ui.clicked = ui.input && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     ui.doubled = ui.input && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
@@ -1537,16 +1534,16 @@ void draw_hub_page() {
     int previous_tab{}, next_tab{};
     if (ui.input && !typing_before) {
         // Back closes the game's menu, which takes a moment to say so: this goes at once.
-        if (key_new(7) || (pressed & 0x2000)) h.dismissed = true;
+        if (!embedded && (key_new(7) || (pressed & 0x2000))) h.dismissed = true;
         const std::array<bool, 4> held{keys[0] || (ui.pad.buttons & 1), keys[1] || (ui.pad.buttons & 2), keys[2] || (ui.pad.buttons & 4), keys[3] || (ui.pad.buttons & 8)};
         const std::array<bool, 4> fresh{key_new(0) || (pressed & 1), key_new(1) || (pressed & 2), key_new(2) || (pressed & 4), key_new(3) || (pressed & 8)};
         const auto tick = GetTickCount64();
         int direction = -1;
         for (int i = 0; i < 4; ++i)
-            if (fresh[static_cast<std::size_t>(i)]) direction = i, h.repeat_at = tick + 380;
+            if (fresh[static_cast<std::size_t>(i)]) direction = i, h.repeat_at = tick + (embedded ? 420 : 380); // (the full screen menu's pace inside it)
         if (direction < 0 && tick >= h.repeat_at)
             for (int i = 0; i < 4; ++i)
-                if (held[static_cast<std::size_t>(i)]) direction = i, h.repeat_at = tick + 70;
+                if (held[static_cast<std::size_t>(i)]) direction = i, h.repeat_at = tick + (embedded ? 160 : 70);
         if (direction >= 0) {
             // The first press only shows where the focus is.
             if (h.ring || !h.focus) move_focus(h, direction == 2 ? -1 : direction == 3 ? 1 : 0, direction == 0 ? -1 : direction == 1 ? 1 : 0);
@@ -1567,9 +1564,7 @@ void draw_hub_page() {
     h.items.clear();
 
     // ---- the page's tabs
-    const ImVec2 a(page_left, (body_top + lower) * u);
-    const ImVec2 z(std::min(page_right, a.x + body_most * u), (down - (layout_height - body_bottom) - lower) * u);
-    const bool tools = h.page.section == 1;
+    const bool tools = !embedded && h.page.section == 1;
     {
         // (Each page keeps the tab it was left on.)
         std::vector<std::pair<int, const char *>> tabs;
@@ -1595,7 +1590,7 @@ void draw_hub_page() {
             h.sound = sound_tab;
             set_typing(h, 0);
         }
-        const float top = (tabs_top + lower) * u, bottom = top + tabs_height * u, size = 44 * u;
+        const float top = tabs_y, bottom = top + tabs_height * u, size = 44 * u;
         float x = a.x;
         const auto cap = [&](std::uint32_t pad_button, const char *key) {
             const auto name = ui.pad.available ? controller_combo_label(pad_button, ui.pad.style) : std::string(key);
@@ -1662,4 +1657,51 @@ void draw_hub_page() {
         if (const auto play = ui_sound.load(); play && (wanted != sound_navigate || tick - h.sound_at >= 45)) play(wanted), h.sound_at = tick;
     }
 }
+
+void draw_hub_page() {
+    auto &h = hub();
+    if (!h.shown) return;
+    // (The ReSkate menu drew these pages over this one this frame: once is enough.)
+    if (h.embedded_frame == ImGui::GetFrameCount()) return;
+    auto &s = state();
+    const auto display = ImGui::GetIO().DisplaySize;
+    // One unit of the game's menu in pixels, and where its page sits in this window.
+    const float u = std::min(display.x / layout_width, display.y / layout_height);
+    const float across = display.x / u, down = display.y / u, canvas = std::min(across, layout_widest);
+    const float page_left = ((across - canvas) * .5f + side_margin) * u, page_right = ((across + canvas) * .5f - side_margin) * u;
+    const float lower = (down - layout_height) * .05f; // how far a taller window moves the page down
+    const bool others = s.visible.load() || s.console_visible.load() || s.editor_visible.load() || s.chat_visible.load();
+    const ImVec2 a(page_left, (body_top + lower) * u);
+    const ImVec2 z(std::min(page_right, a.x + body_most * u), (down - (layout_height - body_bottom) - lower) * u);
+    // (A card that asks something over the page has the input while it asks.)
+    hub_frame(h, ImGui::GetBackgroundDrawList(), u, a, z, (tabs_top + lower) * u,
+              !others && !s.prompt_input_active.load(std::memory_order_relaxed) && game_window_foreground(s.window.load()), false);
+}
+
+void draw_online_embedded(ImDrawList *draw, ImVec2 a, ImVec2 z, const Model &model, const CallbacksV3 &callbacks, bool input) {
+    auto &h = hub();
+    const int frame = ImGui::GetFrameCount();
+    const bool fresh = h.embedded_frame != frame - 1;
+    h.embedded_frame = frame;
+    const auto now = Clock::now();
+    if (fresh) {
+        // What is held as the page comes up is not a press on it.
+        h.last.clear();
+        h.focus = 0;
+        h.searched = false;
+        h.keys_before.fill(true);
+        h.pad_before = ~0U;
+    }
+    if (fresh || now >= h.next_model) {
+        h.next_model = now + 200ms;
+        h.full = model;
+        h.model = model.multiplayer;
+        h.callbacks = callbacks;
+        h.rows_stale = true;
+    }
+    const auto display = ImGui::GetIO().DisplaySize;
+    const float u = std::min(display.x / layout_width, display.y / layout_height);
+    hub_frame(h, draw, u, ImVec2(a.x, a.y + (tabs_height + 64) * u), z, a.y, input, true);
+}
+bool online_embedded_typing() { return hub().typing != 0; }
 } // namespace dingosdk::overlay::detail

@@ -189,7 +189,7 @@ inline constexpr KnobInfo knob_info[] = {
     {"motorpitch", "Motor sound pitch. Higher sounds like a smaller drone", 0.4f, 2.5f, 1.0f},
     {"throttlecentre", "Your throttle stick springs back to the middle (gamepads): the middle hovers, up climbs, down descends", 0.0f, 1.0f, 0.0f},
     {"deadzone", "How far a stick must move before the drone reacts (0-0.3). Raise it if the drone drifts on its own", 0.0f, 0.3f, 0.03f},
-    {"goggles", "What your skater wears over their eyes while you fly: 0 = nothing, 1-8 = one of the eyewear choices on the DRONE page", 0.0f, 8.0f, 1.0f},
+    {"goggles", "What your skater wears over their eyes while you fly: 0 = nothing, 1-8 = one of the eyewear choices in Addons > Drone", 0.0f, 8.0f, 1.0f},
     {"hideui", "Hide the game's own interface while you fly or the drone follows you (Start flying or Follow me hides it, stopping brings it back)", 0.0f, 1.0f, 1.0f},
     {"gamepad", "Fly with a gamepad (Xbox or PlayStation) instead of an RC radio: left stick throttle and yaw, right stick pitch and roll, with gentler sticks. A arms, Menu / Options puts the drone back", 0.0f, 1.0f, 1.0f},
     {"padrate", "Gamepad: how much of your rates the sticks reach at full tilt (0.2-1). Lower is calmer. In angle mode it slows turning only: full stick still leans all the way", 0.2f, 1.0f, 0.6f},

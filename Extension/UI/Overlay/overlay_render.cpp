@@ -77,6 +77,8 @@ void destroy_graphics() {
     s.frames.clear();
     s.card_texture.Reset(); s.card_upload.Reset();
     card_image_lost();
+    s.menu_map_texture.Reset(); s.menu_map_upload.Reset();
+    menu_map_pixels_lost();
     s.commands.Reset(); s.rtvs.Reset(); s.srvs.Reset(); s.fence.Reset(); s.device.Reset();
     if (s.fence_event) CloseHandle(s.fence_event);
     s.fence_event = nullptr;
@@ -284,7 +286,7 @@ bool setup_graphics() {
         return false;
     }
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap.NumDescriptors = 2; // ImGui's atlas, then the map download card's icon (upload_card_image)
+    heap.NumDescriptors = 3; // ImGui's atlas, the map download card's icon, the menu's map pictures (upload_image)
     heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     graphics_result = s.device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&s.srvs));
     if (FAILED(graphics_result)) {
@@ -524,17 +526,76 @@ void draw_menu() {
     if (!visible) s.visible.store(false);
 }
 
-// The map download card's icon (map_download_card.cpp), when one is waiting: made into a
-// texture in the SRV heap's second slot. Recorded on the frame's command list ahead of ImGui's
-// draws, so the copy is done before anything samples it. Nothing here is fatal: without the
-// icon the card shows a plain tile.
-void upload_card_image(State& s) {
-    CardPixels pixels;
-    if (!take_card_pixels(pixels) || pixels.rgba.empty() || !s.device || !s.srvs) return;
-    // Frames still on the GPU may sample the icon this one replaces.
-    if (s.card_texture && s.next_fence && !completed(s.next_fence, render_fence_timeout_ms)) return;
-    s.card_texture.Reset();
-    s.card_upload.Reset();
+// The ReSkate menu on a controller: while it is open the pad drives ImGui's navigation (the game
+// does not see the pad then), and nothing of it reaches the overlay otherwise. X is left out: ImGui
+// holds it for its window switcher.
+void feed_menu_gamepad(bool menu_open) {
+    auto& io = ImGui::GetIO();
+    // Holding a direction in the full screen menu waits before it repeats, then moves at a pace
+    // the eye can follow (ImGui's own, made for a keyboard, races through a list).
+    const bool slow = menu_open && dingosdk::overlay::menu_fullscreen_shown().load();
+    io.KeyRepeatDelay = slow ? 0.42f : 0.275f;
+    io.KeyRepeatRate = slow ? 0.16f : 0.05f;
+    // A page with its own focus (the full screen ONLINE page) takes the D-pad and the arrow keys itself.
+    if (menu_open && dingosdk::overlay::menu_page_owns_pad().load()) io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableKeyboard;
+    else io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    struct Button { unsigned bit; ImGuiKey key; };
+    static constexpr Button buttons[]{
+        {0x0001, ImGuiKey_GamepadDpadUp}, {0x0002, ImGuiKey_GamepadDpadDown}, {0x0004, ImGuiKey_GamepadDpadLeft},
+        {0x0008, ImGuiKey_GamepadDpadRight}, {0x0010, ImGuiKey_GamepadStart}, {0x0020, ImGuiKey_GamepadBack},
+        {0x0040, ImGuiKey_GamepadL3}, {0x0080, ImGuiKey_GamepadR3}, {0x0100, ImGuiKey_GamepadL1}, {0x0200, ImGuiKey_GamepadR1},
+        {0x1000, ImGuiKey_GamepadFaceDown}, {0x2000, ImGuiKey_GamepadFaceRight}, {0x8000, ImGuiKey_GamepadFaceUp}};
+    static bool fed = false;
+    const auto pad = menu_open ? dingosdk::overlay::read_gamepad() : dingosdk::overlay::Gamepad{};
+    {
+        // A button pressed, a trigger pulled or a stick pushed in the full screen menu hands it to
+        // the controller: the pointer hides until the mouse is used again.
+        static unsigned before{};
+        const bool used = pad.valid && ((pad.buttons & ~before) != 0 || pad.left_trigger > 0.5f || pad.right_trigger > 0.5f ||
+                                        std::abs(pad.left_x) > 0.5f || std::abs(pad.left_y) > 0.5f || std::abs(pad.right_x) > 0.5f ||
+                                        std::abs(pad.right_y) > 0.5f);
+        before = pad.valid ? pad.buttons : 0;
+        if (used && slow) dingosdk::overlay::menu_pad_in_charge().store(true);
+        if (!menu_open) dingosdk::overlay::menu_pad_in_charge().store(false);
+    }
+    if (!pad.valid && !fed) return;
+    for (const auto& button : buttons) io.AddKeyEvent(button.key, (pad.buttons & button.bit) != 0);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadL2, pad.left_trigger > 0.5f, pad.left_trigger);
+    io.AddKeyAnalogEvent(ImGuiKey_GamepadR2, pad.right_trigger > 0.5f, pad.right_trigger);
+    // The left stick moves like the D-pad, past a dead zone.
+    constexpr float dead = 0.35f;
+    const auto stick = [&](ImGuiKey key, float value) {
+        const float past = std::clamp((value - dead) / (1.0f - dead), 0.0f, 1.0f);
+        io.AddKeyAnalogEvent(key, value > dead, past);
+    };
+    stick(ImGuiKey_GamepadLStickLeft, -pad.left_x);
+    stick(ImGuiKey_GamepadLStickRight, pad.left_x);
+    stick(ImGuiKey_GamepadLStickUp, pad.left_y);
+    stick(ImGuiKey_GamepadLStickDown, -pad.left_y);
+    // The right stick scrolls the full screen menu's page.
+    stick(ImGuiKey_GamepadRStickUp, pad.right_y);
+    stick(ImGuiKey_GamepadRStickDown, -pad.right_y);
+    fed = pad.valid;
+    if (fed && !(menu_open && dingosdk::overlay::menu_page_owns_pad().load())) {
+        io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    } else if (fed) {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+        io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    } else {
+        io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+        io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+    }
+}
+
+// Pixels made into a texture in the SRV heap's slot `slot`: the map download card's icon (1) or
+// the menu's map pictures (2). Recorded on the frame's command list ahead of ImGui's draws, so
+// the copy is done before anything samples it. Returns the texture's id for ImGui, or 0. Nothing
+// here is fatal: without it a card shows a plain tile.
+ImTextureID upload_image(State& s, const CardPixels& pixels, UINT slot, ComPtr<ID3D12Resource>& texture_out,
+                         ComPtr<ID3D12Resource>& upload_out) {
+    texture_out.Reset();
+    upload_out.Reset();
     D3D12_RESOURCE_DESC texture{};
     texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     texture.Width = pixels.width;
@@ -565,10 +626,10 @@ void upload_card_image(State& s) {
                                                  IID_PPV_ARGS(&made))) ||
         FAILED(s.device->CreateCommittedResource(&upload_heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
                                                  IID_PPV_ARGS(&upload))))
-        return;
+        return {};
     void* mapped{};
     const D3D12_RANGE none{};
-    if (FAILED(upload->Map(0, &none, &mapped)) || !mapped) return;
+    if (FAILED(upload->Map(0, &none, &mapped)) || !mapped) return {};
     for (UINT row = 0; row < pixels.height; ++row)
         std::memcpy(static_cast<unsigned char*>(mapped) + layout.Offset + std::size_t{row} * layout.Footprint.RowPitch,
                     pixels.rgba.data() + std::size_t{row} * pixels.width * 4, std::size_t{pixels.width} * 4);
@@ -590,18 +651,35 @@ void upload_card_image(State& s) {
     const auto step = s.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     auto cpu = s.srvs->GetCPUDescriptorHandleForHeapStart();
     auto gpu = s.srvs->GetGPUDescriptorHandleForHeapStart();
-    cpu.ptr += step;
-    gpu.ptr += step;
+    cpu.ptr += std::size_t{step} * slot;
+    gpu.ptr += std::uint64_t{step} * slot;
     D3D12_SHADER_RESOURCE_VIEW_DESC view{};
     view.Format = texture.Format;
     view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
     view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     view.Texture2D.MipLevels = 1;
     s.device->CreateShaderResourceView(made.Get(), &view, cpu);
-    s.card_texture = std::move(made);
-    s.card_upload = std::move(upload);
+    texture_out = std::move(made);
+    upload_out = std::move(upload);
     // Drawable from the next frame on: this frame's draws were made before the copy was recorded.
-    card_image_uploaded(static_cast<ImTextureID>(gpu.ptr), pixels.serial);
+    return static_cast<ImTextureID>(gpu.ptr);
+}
+
+void upload_card_image(State& s) {
+    CardPixels pixels;
+    if (!take_card_pixels(pixels) || pixels.rgba.empty() || !s.device || !s.srvs) return;
+    // Frames still on the GPU may sample the icon this one replaces.
+    if (s.card_texture && s.next_fence && !completed(s.next_fence, render_fence_timeout_ms)) return;
+    if (const auto id = upload_image(s, pixels, 1, s.card_texture, s.card_upload)) card_image_uploaded(id, pixels.serial);
+}
+
+// The menu's map pictures (menu_map_pictures.cpp), when a new set is waiting.
+void upload_menu_map_image(State& s) {
+    if (!s.device || !s.srvs) return;
+    if (s.menu_map_texture && s.next_fence && !completed(s.next_fence, render_fence_timeout_ms)) return;
+    CardPixels pixels;
+    if (!take_menu_map_pixels(pixels) || pixels.rgba.empty()) return;
+    if (const auto id = upload_image(s, pixels, 2, s.menu_map_texture, s.menu_map_upload)) menu_map_pixels_uploaded(id, pixels.serial);
 }
 
 void render(IDXGISwapChain* presented, UINT flags) {
@@ -656,6 +734,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool hub_frame = hub_page_pending();
     if (trainer_open_requested()) s.visible.store(true);
     if (dingosdk::drone::menu_flag().load()) s.visible.store(true); // `dronemenu`: the menu opens on its DRONE page
+    if (dingosdk::overlay::menu_open_flag().exchange(false)) s.visible.store(true); // `menu`, or its controller bind
     const bool menu_frame = interactive_visible(s);
     if (!menu_frame) {
         if (s.ui_was_interactive) {
@@ -710,6 +789,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     // (Watching the pointer for the pause menu's browser keeps the mouse state between frames,
     // or every frame would look like a fresh click.)
     if (!interactive) { ImGui::GetIO().ClearInputKeys(); if (!hub_frame) ImGui::GetIO().ClearInputMouse(); }
+    feed_menu_gamepad(interactive && s.visible.load() && !s.editor_visible.load());
     ImGui::GetIO().MouseDrawCursor = owns_menu_cursor(s);
     ImGui_ImplDX12_NewFrame();
     { OverlayInputAccess access; ImGui_ImplWin32_NewFrame(); }
@@ -752,6 +832,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
         ImGui::SetCurrentContext(previous); s.failed = true; restore_input(true); return;
     }
     upload_card_image(s);
+    upload_menu_map_image(s);
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = frame.buffer.Get();

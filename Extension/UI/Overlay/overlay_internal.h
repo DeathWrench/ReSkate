@@ -179,6 +179,8 @@ struct State {
     // The map download card's icon (map_download_card.cpp), in the SRV heap's second slot, and
     // the buffer it was uploaded from, which lives until the next one replaces it.
     ComPtr<ID3D12Resource> card_texture, card_upload;
+    // The menu's map pictures (menu_map_pictures.cpp) in the third slot, likewise.
+    ComPtr<ID3D12Resource> menu_map_texture, menu_map_upload;
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12Fence> fence;
     HANDLE fence_event = nullptr;
@@ -304,6 +306,12 @@ struct CardPixels {
 bool take_card_pixels(CardPixels& pixels);
 void card_image_uploaded(ImTextureID texture, unsigned serial);
 void card_image_lost();
+// Decodes a PNG to RGBA; with `side`, scaled to a square of that many pixels.
+bool decode_picture(const std::string& png, CardPixels& out, UINT side);
+// The menu's map pictures (menu_map_pictures.cpp), the same way, in the SRV heap's third slot.
+bool take_menu_map_pixels(CardPixels& pixels);
+void menu_map_pixels_uploaded(ImTextureID texture, unsigned serial);
+void menu_map_pixels_lost();
 // Game debug text (game_text_overlay.cpp): polled every presented frame.
 bool game_text_pending();
 void draw_game_text();

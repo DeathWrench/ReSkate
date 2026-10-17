@@ -274,29 +274,58 @@ void set_local_values(const std::vector<std::pair<std::string, Json>>& values) n
     } catch (...) { /* Saving is best effort; the runtime values already applied. */ }
 }
 
-// Shared with the overlay through the model; clamped to a legible range.
-std::atomic<float>& menu_scale_cache() noexcept { static std::atomic<float> value{0}; return value; }
+// Shared with the overlay through the model; clamped to a legible range. The window and the full
+// screen menu each keep their own (ReSkate.MenuScale, ReSkate.MenuScaleFullscreen).
+std::atomic<float>& menu_scale_cache(bool fullscreen) noexcept {
+    static std::atomic<float> window{0}, full{0};
+    return fullscreen ? full : window;
+}
+const char* menu_scale_key(bool fullscreen) noexcept { return fullscreen ? "ReSkate.MenuScaleFullscreen" : "ReSkate.MenuScale"; }
 
-float local_menu_scale() noexcept {
-    auto& cache = menu_scale_cache();
+float local_menu_scale(bool fullscreen) noexcept {
+    auto& cache = menu_scale_cache(fullscreen);
     if (const auto value = cache.load(std::memory_order_relaxed); value > 0) return value;
     float value = default_menu_scale;
     try {
         auto& s = local_runtime();
         if (s.store)
-            if (const auto saved = s.store->user_value("ReSkate.MenuScale"); saved && saved->is_number())
+            if (const auto saved = s.store->user_value(menu_scale_key(fullscreen)); saved && saved->is_number())
                 value = std::clamp(static_cast<float>(saved->get<double>()), min_menu_scale, max_menu_scale);
     } catch (...) { /* An unreadable preference just means the default scale. */ }
     cache.store(value, std::memory_order_relaxed);
     return value;
 }
 
-bool set_local_menu_scale(float value) noexcept {
-    if (!(value >= min_menu_scale && value <= max_menu_scale)) return false;
-    menu_scale_cache().store(value, std::memory_order_relaxed);
+std::atomic<int>& menu_fullscreen_cache() noexcept { static std::atomic<int> value{-1}; return value; }
+
+bool local_menu_fullscreen() noexcept {
+    auto& cache = menu_fullscreen_cache();
+    if (const auto value = cache.load(std::memory_order_relaxed); value >= 0) return value != 0;
+    bool value = false;
     try {
         auto& s = local_runtime();
-        if (s.store) s.store->set_user_value("ReSkate.MenuScale", static_cast<double>(value));
+        if (s.store)
+            if (const auto saved = s.store->user_value("ReSkate.MenuFullscreen"); saved && saved->is_boolean())
+                value = saved->get<bool>();
+    } catch (...) { /* An unreadable preference just means a window. */ }
+    cache.store(value ? 1 : 0, std::memory_order_relaxed);
+    return value;
+}
+
+void set_local_menu_fullscreen(bool fullscreen) noexcept {
+    menu_fullscreen_cache().store(fullscreen ? 1 : 0, std::memory_order_relaxed);
+    try {
+        auto& s = local_runtime();
+        if (s.store) s.store->set_user_value("ReSkate.MenuFullscreen", fullscreen);
+    } catch (...) { /* Saving is best effort; the runtime value already applied. */ }
+}
+
+bool set_local_menu_scale(float value, bool fullscreen) noexcept {
+    if (!(value >= min_menu_scale && value <= max_menu_scale)) return false;
+    menu_scale_cache(fullscreen).store(value, std::memory_order_relaxed);
+    try {
+        auto& s = local_runtime();
+        if (s.store) s.store->set_user_value(menu_scale_key(fullscreen), static_cast<double>(value));
     } catch (...) { /* Saving is best effort; the runtime value already applied. */ }
     return true;
 }
