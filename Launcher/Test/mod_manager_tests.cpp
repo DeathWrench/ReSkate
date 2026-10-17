@@ -173,6 +173,53 @@ int main() {
     check(install(mods, sources / L"Loose") == "My Folder Mod", "Folders install like zips");
     check(fs::exists(sources / L"Loose" / L"My Folder Mod" / L"layout.toc"), "Installing a folder copies it");
 
+    // Links in a mod folder (issue #265): one inside it refuses the install and nothing outside is
+    // written; links on the way to the folder or to the Mods folder are fine. Junctions need no
+    // rights to make; a file symbolic link needs Developer Mode, so that case is skipped without it.
+    {
+        const auto place = root / L"links";
+        const auto junction = [](const fs::path& link, const fs::path& target) {
+            fs::create_directories(target);
+            return _wsystem((L"mklink /J \"" + link.wstring() + L"\" \"" + target.wstring() + L"\" >nul").c_str()) == 0;
+        };
+        const auto real_game = place / L"real game";
+        fs::create_directories(real_game);
+        const bool made = junction(place / L"linked game", real_game);
+        const auto linked_mods = launcher_mods::mods_root(place / L"linked game");
+        write(place / L"outside" / L"sentinel.txt", "untouched");
+
+        write(place / L"Junction Mod" / L"layout.toc", "toc");
+        const bool inner = junction(place / L"Junction Mod" / L"stuff", place / L"outside");
+        check(made && inner, "links: junctions could be made for the checks");
+        const auto refused = error_of([&] { install(linked_mods, place / L"Junction Mod"); });
+        check(refused.find("holds a link (stuff)") != std::string::npos && !fs::exists(linked_mods / L"Junction Mod") &&
+                  read(place / L"outside" / L"sentinel.txt") == "untouched",
+              ("A junction inside a mod folder refuses the install: " + refused).c_str());
+        check(!fs::exists(linked_mods / L".reskate-install"), "A refused folder leaves no staging behind");
+
+        write(place / L"Plain Mod" / L"layout.toc", "toc");
+        check(install(linked_mods, place / L"Plain Mod") == "Plain Mod" && read(real_game / L"Mods" / L"Plain Mod" / L"layout.toc") == "toc",
+              "A Mods folder reached through a junction still installs");
+        junction(place / L"picked", place / L"Picked Mod");
+        write(place / L"Picked Mod" / L"layout.toc", "toc");
+        check(install(linked_mods, place / L"picked") == "picked", "A mod folder picked through a junction still installs");
+
+        write(place / L"File Link Mod" / L"layout.toc", "toc");
+        const auto link = place / L"File Link Mod" / L"linked.txt";
+        if (CreateSymbolicLinkW(link.c_str(), (place / L"outside" / L"sentinel.txt").c_str(),
+                                SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+            const auto file_refused = error_of([&] { install(linked_mods, place / L"File Link Mod"); });
+            check(file_refused.find("holds a link (linked.txt)") != std::string::npos &&
+                      read(place / L"outside" / L"sentinel.txt") == "untouched" && !fs::exists(linked_mods / L"File Link Mod"),
+                  ("A file link inside a mod folder refuses the install: " + file_refused).c_str());
+        } else {
+            std::cout << "SKIP: file symbolic link (Windows error " << GetLastError() << "; needs Developer Mode)\n";
+        }
+        // Junctions first, so nothing below follows one.
+        for (const auto* name : {L"linked game", L"picked", L"Junction Mod\\stuff"})
+            RemoveDirectoryW((place / name).c_str());
+    }
+
     // The list: unlisted folders load after listed ones, by name.
     auto list = mods::scan_mods(game);
     check(list.present && list.issue.empty() && list.entries.size() == 4, "Every installed mod is listed");

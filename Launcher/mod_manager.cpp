@@ -347,16 +347,38 @@ std::string install_zip(const fs::path& mods, const fs::path& source, bool repla
     return name;
 }
 
+// A symbolic link, junction or mount point: an entry that names a path somewhere else. (Cloud
+// placeholders such as OneDrive's are reparse points too, but name nothing else.)
+bool links_elsewhere(const fs::path& path) {
+    WIN32_FIND_DATAW found{};
+    const auto search = FindFirstFileW(path.c_str(), &found);
+    if (search == INVALID_HANDLE_VALUE) return false;
+    FindClose(search);
+    return (found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && IsReparseTagNameSurrogate(found.dwReserved0);
+}
+
+// A folder's files are named by where they sit in it, never by where a link leads, and checked
+// as a zip's entries are. fs::relative followed links: a file link inside the folder to one
+// outside it came out as ../../<file>, which was copied over that file (issue #265, first fixed
+// in PR #267 by Jean-LucTch). So a link inside the folder refuses the install. Links on the way
+// to the folder or to the Mods folder (a library moved to another drive) are the player's own
+// and stay fine.
 std::string install_folder(const fs::path& mods, const fs::path& source, bool replace,
                            const Progress& progress, const std::atomic<bool>& cancel, const InstallOptions& options) {
     std::vector<std::string> files;
     std::vector<fs::path> paths;
     for (auto it = fs::recursive_directory_iterator(source); it != fs::recursive_directory_iterator(); ++it) {
         if (cancel) fail("Install cancelled.");
-        if (!it->is_regular_file()) continue;
+        const auto inside = it->path().lexically_relative(source);
+        if (links_elsewhere(it->path()))
+            fail(utf8(source.filename().wstring()) + " holds a link (" + utf8(inside.generic_wstring()) +
+                 "), which a mod folder may not: copy the real files in and try again.");
+        if (!fs::is_regular_file(it->symlink_status())) continue;
+        auto relative = safe_entry(utf8(inside.generic_wstring()));
+        if (!relative) fail("The folder contains an unsafe path (" + utf8(inside.generic_wstring()) + "); it was not installed.");
+        if (relative->empty()) continue;
         paths.push_back(it->path());
-        auto relative = utf8(fs::relative(it->path(), source).generic_wstring());
-        files.push_back(std::move(relative));
+        files.push_back(std::move(*relative));
     }
     const auto root = mod_root(files);
     if (!root) fail(utf8(source.filename().wstring()) + no_mod);
