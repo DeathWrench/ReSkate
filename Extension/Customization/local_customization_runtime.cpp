@@ -150,6 +150,8 @@ bool refresh_cosmetic_catalog() {
         !read(manager + 0x30, current_buckets) || current_buckets != buckets ||
         !read(manager + 0x3c, current_count) || current_count != count) return false;
     const auto& catalogs = content_cache::catalogs();
+
+    const bool unlock_everything = s.store->bool_option(profile::unlock_everything_option).value_or(false);
     c.ownership_unavailable = !catalogs.available;
     // What is owned is worked out from the items installed (installed_item_owned), not saved item
     // by item: the rows earlier versions saved go, once.
