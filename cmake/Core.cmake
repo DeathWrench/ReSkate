@@ -63,6 +63,7 @@ add_library(dingosdk_frostbite STATIC
     Engine/Resource/binary_bundle.cpp
     Engine/Resource/cas_codec.cpp
     Engine/Resource/ebx_document.cpp
+    Engine/Resource/ebx_fixup_repair.cpp
     Engine/Resource/ebx_merge.cpp
     Engine/Resource/material_grid.cpp
     Engine/Resource/shader_lookup.cpp

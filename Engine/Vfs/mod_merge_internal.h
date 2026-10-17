@@ -80,6 +80,12 @@ bool unshift(const ArchivePlacement& placement, std::string_view directory, std:
 
 fb::Sha1 sha1_of(std::span<const std::byte> bytes);
 
+// A mod's EBX as stored in cas, with the type-reference fixups that would crash the game's
+// load taken out (Engine/Resource/ebx_fixup_repair.h): the payload is encoded again and the
+// asset's sha1 and size follow it. How many came out; with none, or a payload that does not
+// decode, both stay as they were.
+std::size_t repair_ebx_payload(std::vector<std::byte>& encoded, fb::BundleAsset& asset, const fs::path& gameRoot);
+
 // Where the launch's merge put every installed mod's archives, and which
 // superbundle TOCs the patch holds: Mods/.reskate/reskate-placements.json.
 inline constexpr wchar_t placements_file[] = L"reskate-placements.json";

@@ -147,12 +147,18 @@ ModRead read_mod(const Mod& mod, const RelativeFiles& files, const CasStore& sto
                     const auto at = modListing->first + index;
                     if (at >= modListing->files.size()) continue;
                     const auto& file = modListing->files[at];
+                    // As the merge places it in the mod's own bundle: repaired when it would
+                    // crash the game's load (repair_ebx_payload).
+                    auto repairedAsset = asset;
                     const auto payload = [&] {
-                        return store.read(file.location.patch ? mod.directory : baseRoot,
-                                          file.location, file.offset, file.size);
+                        auto encoded = store.read(file.location.patch ? mod.directory : baseRoot,
+                                                  file.location, file.offset, file.size);
+                        if (file.location.patch) repair_ebx_payload(encoded, repairedAsset, gameRoot);
+                        return encoded;
                     };
                     if (game_copy == original.end()) {
-                        candidates.push_back({bundleName, {mod.name, asset, payload(), tocKey}});
+                        auto encodedPayload = payload();
+                        candidates.push_back({bundleName, {mod.name, repairedAsset, std::move(encodedPayload), tocKey}});
                         continue;
                     }
                     auto encodedPayload = payload();
@@ -164,8 +170,8 @@ ModRead read_mod(const Mod& mod, const RelativeFiles& files, const CasStore& sto
                     if (const auto gameAt = gameListing->first + game_copy->second.second;
                         gameAt < gameListing->files.size())
                         gameFile = gameListing->files[gameAt];
-                    changes.push_back({bundleName, name, asset.name, game_copy->second.first, asset.sha1,
-                                       asset.originalSize, std::move(encodedPayload), gameFile});
+                    changes.push_back({bundleName, name, asset.name, game_copy->second.first, repairedAsset.sha1,
+                                       repairedAsset.originalSize, std::move(encodedPayload), gameFile});
                 }
                 for (std::size_t index = 0; index < modListing->manifest.resources.size(); ++index) {
                     const auto& asset = modListing->manifest.resources[index];

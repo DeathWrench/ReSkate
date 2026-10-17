@@ -10,6 +10,7 @@
 #include "Extension/World/mesh_unload_guard.h"
 #include "Extension/World/mesh_settings_guard.h"
 #include "Extension/World/shader_permutation_guard.h"
+#include "Extension/World/shader_registry_guard.h"
 #include "Extension/World/light_table_guard.h"
 #include "Extension/World/stack_check_report.h"
 #include "Extension/Music/music_inject.h"
@@ -336,6 +337,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::mesh_unload_guard::install(r.base);
         (void)dingosdk::mesh_settings_guard::install(r.base);
         (void)dingosdk::shader_permutation_guard::install(r.base);
+        (void)dingosdk::shader_registry_guard::install(r.base);
         (void)dingosdk::light_table_guard::install(r.base);
         (void)dingosdk::load_error_guard::install(r.base);
         (void)dingosdk::texture_handle_limit::install(r.base);

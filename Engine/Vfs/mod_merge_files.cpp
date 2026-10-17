@@ -1,6 +1,8 @@
 #include "mod_merge_internal.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Platform/path_text.h"
+#include "Engine/Resource/cas_codec.h"
+#include "Engine/Resource/ebx_fixup_repair.h"
 
 #include <Windows.h>
 #include <bcrypt.h>
@@ -140,6 +142,20 @@ fb::Sha1 sha1_of(std::span<const std::byte> bytes) {
     BCryptCloseAlgorithmProvider(algorithm, 0);
     if (status < 0) throw std::runtime_error("Cannot hash the merged asset");
     return digest;
+}
+
+std::size_t repair_ebx_payload(std::vector<std::byte>& encoded, fb::BundleAsset& asset, const fs::path& gameRoot) {
+    std::optional<fb::ebx::FixupRepair> repaired;
+    try {
+        repaired = fb::ebx::repair_type_fixups(fb::decode_cas(encoded, {gameRoot}));
+    } catch (const std::exception&) {
+        return 0;
+    }
+    if (!repaired) return 0;
+    encoded = fb::encode_cas(repaired->bytes, {gameRoot});
+    asset.sha1 = sha1_of(repaired->bytes);
+    asset.originalSize = repaired->bytes.size();
+    return repaired->removed;
 }
 
 PlacementRecord read_placements(const fs::path& file) {

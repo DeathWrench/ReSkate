@@ -1,6 +1,7 @@
 #include "mod_merge_internal.h"
 #include "Engine/Resource/cas_codec.h"
 #include "Engine/Resource/ebx_document.h"
+#include "Engine/Resource/ebx_fixup_repair.h"
 #include "Engine/Resource/bundle_ref_table.h"
 #include "Engine/Resource/ebx_merge.h"
 #include "Engine/Resource/ebx_writer.h"
@@ -444,7 +445,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         // Studio writes the manifest as the region's first file, but a mod built
         // by another tool or an older build may keep it elsewhere, so every small
         // file is a candidate; a placement outside the patch lives in the base.
-        if (region.inlineManifest.empty() && (needed || propagate) && !region.files.empty()) {
+        if (region.inlineManifest.empty() && (needed || propagate || !isBase) && !region.files.empty()) {
             std::string firstFailure;
             constexpr std::uint32_t largestManifest = 32u << 20;
             const auto expected = region.files.size() - 1;
@@ -573,6 +574,43 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                 report.notes.push_back(modName + ": " + bundle.name + ": " + std::to_string(overridden.size()) +
                     " asset(s) take another mod's change, e.g. " + example);
         }
+        // The mod's own EBX whose type-reference fixups sit on another fixup's slot, which crash
+        // the game as it loads (Engine/Resource/ebx_fixup_repair.h): the repaired copy goes into
+        // the merged patch. The one in the mod's folder, by where it lies there and its sha1, is
+        // still what a combine reads and compares.
+        std::map<std::size_t, fb::BundleFileInfo> repaired;
+        std::map<std::size_t, std::pair<fb::BundleFileInfo, fb::Sha1>> repairedFrom;
+        if (!isBase && (casBacked || !region.inlineManifest.empty())) {
+            auto manifest = casBacked ? std::move(casManifest) : fb::read_binary_bundle(region.inlineManifest);
+            std::size_t removed{};
+            std::string example;
+            for (std::size_t index = 0; index < manifest.ebx.size(); ++index) {
+                const auto at = (casBacked ? 1 : 0) + index;
+                if (at >= region.files.size() || overridden.contains(at)) continue;
+                const auto& file = region.files[at];
+                if (!file.location.patch) continue;   // the game's own copy
+                auto& asset = manifest.ebx[index];
+                try {
+                    auto encoded = store.read(root, file.location, file.offset, file.size);
+                    const auto before = asset.sha1;
+                    const auto count = repair_ebx_payload(encoded, asset, gameRoot);
+                    if (!count) continue;
+                    repaired[at] = store.write(file.location.installChunk, manifestArchive, encoded);
+                    repairedFrom.emplace(at, std::pair{file, before});
+                    removed += count;
+                    if (example.empty()) example = asset.name;
+                } catch (const std::exception& error) {
+                    report.notes.push_back(modName + ": " + bundle.name + ": " + asset.name +
+                        ": its type references could not be checked (" + error.what() + ")");
+                }
+            }
+            if (casBacked) casManifest = std::move(manifest);
+            else if (!repaired.empty()) region.inlineManifest = fb::write_binary_bundle(manifest);
+            if (!repaired.empty())
+                report.notes.push_back(modName + ": " + bundle.name + ": " + std::to_string(repaired.size()) +
+                    " asset(s) listed " + std::to_string(removed) + " type reference(s) on another fixup's slot, "
+                    "which crash the game as it loads; taken out of the merged copies, e.g. " + example);
+        }
         // Assets another mod added to the game's copy of this bundle: this copy
         // loads instead of the game's on this mod's levels, so it gets them too.
         std::vector<Asset> additions;
@@ -634,7 +672,8 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             }
         }
         // Nothing moved in this bundle: it passes through whole, as before.
-        if (casBacked && !shared && !gridBundle && renumbered.empty() && overridden.empty() && additions.empty())
+        if (casBacked && !shared && !gridBundle && renumbered.empty() && overridden.empty() && repaired.empty() &&
+            additions.empty())
             casBacked = false;
 
         for (auto& file : region.files) {
@@ -646,7 +685,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         // below moves every later file along, and the pass over the bundle's assets
         // further down asks by where a file is then, not where it was.
         std::vector<bool> inPatch(region.files.size());
-        for (const auto* moved : {&renumbered, &overridden})
+        for (const auto* moved : {&renumbered, &overridden, &repaired})
             for (const auto& [index, file] : *moved) {
                 region.files[index] = file;
                 inPatch[index] = true;
@@ -755,7 +794,11 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             const bool rewritten = firstFile + position < inPatch.size() && inPatch[firstFile + position];
             // A mod's copy that is the game's adds nothing: the game's copy is recorded, first.
             const bool combinable = !rewritten && (entry.asset.kind == fb::AssetKind::ebx || entry.asset.kind == fb::AssetKind::resource);
-            if (combinable && !isBase && state.matches_game_copy(id, entry.asset.sha1)) {
+            if (const auto original = repairedFrom.find(firstFile + position); original != repairedFrom.end()) {
+                // Repaired above: what this mod changed is its copy as it ships it.
+                state.history[id].push_back({&root, original->second.first, original->second.second,
+                                             entry.asset.resourceMeta, isBase});
+            } else if (combinable && !isBase && state.matches_game_copy(id, entry.asset.sha1)) {
                 ++report.unchangedCopies;
             } else if (combinable) {
                 // The contributor's own copy still sits at its original offset in
@@ -907,6 +950,10 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         const auto table = entry.asset.resourceType == fb::shader::programLookupType
                             ? fb::shader::merge_program_lookup(baseTable, tables)
                             : fb::shader::merge_texture_lookup(baseTable, tables);
+                        if (table.outside)
+                            report.notes.push_back(entry.asset.name + ": " + std::to_string(table.outside) +
+                                " material row(s) left out: they point past the shader programs the game ships, "
+                                "which the game would read outside its shader database");
                         if (!table.added) continue;
                         rebuilt = table.resource;
                         entry.asset.resourceMeta = table.resourceMeta;
@@ -1013,6 +1060,12 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                                              ", which no enabled mod adds to the bundle"));
                         }
                     }
+                    if (entry.asset.kind == fb::AssetKind::ebx)
+                        if (auto repaired = fb::ebx::repair_type_fixups(rebuilt)) {
+                            rebuilt = std::move(repaired->bytes);
+                            report.notes.push_back(entry.asset.name + ": " + std::to_string(repaired->removed) +
+                                " type reference(s) on another fixup's slot taken out of the merged copy");
+                        }
                     const auto placement = store.write(state.manifestChunk, manifestArchive,
                                                        fb::encode_cas(rebuilt, {gameRoot}));
                     entry.file = placement;

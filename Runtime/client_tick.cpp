@@ -51,7 +51,7 @@
 #include "Extension/World/level_loading.h"
 #include "Extension/World/loading_screen.h"
 #include <Windows.h>
-#include <dxgi.h>
+#include <dxgi1_4.h>
 #include <Psapi.h>
 #include <algorithm>
 #include <array>
@@ -205,14 +205,20 @@ void apply_local_connection_timeouts() {
 // How far it is raised depends on the card: 1.0.0 set 3.5 GiB on every card, the likely cause
 // of older cards resetting the device while loading (DXGI_ERROR_DEVICE_RESET in
 // gameRendBeginFrame on an RX 580, 2026-10-03). A quarter of the card's dedicated memory, from
-// the game's own 520 MB up to 3.5 GiB (from 16 GB cards up); cards of 6 GB or less keep the
+// the game's own 520 MB up to 3.5 GiB (from 16 GB cards up); cards of 8 GB or less keep the
 // game's value. Cards of up to 12 GB stop at 2 GiB: a quarter was 3 GiB of a 12 GB card, and
 // with a big map and texture mods on top the game ran out of video memory (E_OUTOFMEMORY from
 // CreateCommittedResource on an RTX 4070 SUPER, 2026-10-04).
+// Since 2026-10-17 it is raised only for a custom map's load (mesh_pool_for_load): San Van fits
+// the game's own pool. And it is sized from the video memory free as the load starts, not from
+// the card: raised on every map by the card's size, 8 GB cards ran out of video memory creating
+// the 2 GB pool itself (E_OUTOFMEMORY from CreateHeap, the game's DirectX error box, on an RTX 4060
+// and an RX 7600). The card's size (size_kb) is only the fallback for a driver that reports no
+// budget.
 namespace mesh_pool {
 constexpr std::uint32_t stock_kb = 532960, most_kb = 3584u * 1024u, most_to_12gb_kb = 2048u * 1024u;
 static_assert((std::uint64_t{most_kb} + 24576u) * 1024u <= 0xffffffffull);
-struct Card { std::uint64_t memory{}; std::string name; };
+struct Card { std::uint64_t memory{}; std::string name; LUID luid{}; };
 // The hardware adapter with the most dedicated memory: the one the game renders on (a laptop's
 // integrated GPU has little or none). The game's own dxgi.dll, so nothing new is loaded.
 Card largest_card() {
@@ -228,6 +234,7 @@ Card largest_card() {
         if (SUCCEEDED(adapter->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
             desc.DedicatedVideoMemory > card.memory) {
             card.memory = desc.DedicatedVideoMemory;
+            card.luid = desc.AdapterLuid;
             card.name.clear();
             for (const auto* c = desc.Description; *c; ++c) card.name.push_back(*c < 128 ? static_cast<char>(*c) : '?');
         }
@@ -245,41 +252,121 @@ std::uint32_t override_kb() {
     const auto megabytes = std::wcstoul(value, nullptr, 10);
     return megabytes ? static_cast<std::uint32_t>(std::clamp<std::uint64_t>(std::uint64_t{megabytes} * 1024, stock_kb, most_kb)) : 0;
 }
-// KiB for the pool on this card, or 0 to keep the game's own value.
+// What Windows lets this process use of the card's own memory now, and what it uses: the budget
+// (DXGI 1.4) and the current usage, in bytes. Nothing when the driver does not say.
+struct Budget { std::uint64_t budget{}, usage{}; };
+std::optional<Budget> budget_of(const Card& card) {
+    const auto module = GetModuleHandleW(L"dxgi.dll");
+    using Create = HRESULT(WINAPI*)(REFIID, void**);
+    const auto create = module ? reinterpret_cast<Create>(GetProcAddress(module, "CreateDXGIFactory1")) : nullptr;
+    IDXGIFactory1* factory{};
+    if (!create || FAILED(create(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))) || !factory) return std::nullopt;
+    std::optional<Budget> result;
+    IDXGIAdapter1* adapter{};
+    for (UINT i = 0; !result && factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc{};
+        IDXGIAdapter3* three{};
+        if (SUCCEEDED(adapter->GetDesc1(&desc)) && desc.AdapterLuid.LowPart == card.luid.LowPart &&
+            desc.AdapterLuid.HighPart == card.luid.HighPart &&
+            SUCCEEDED(adapter->QueryInterface(__uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&three))) && three) {
+            DXGI_QUERY_VIDEO_MEMORY_INFO info{};
+            if (SUCCEEDED(three->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)) && info.Budget)
+                result = Budget{info.Budget, info.CurrentUsage};
+            three->Release();
+        }
+        adapter->Release();
+    }
+    factory->Release();
+    return result;
+}
+// KiB for a custom map's pool from what is free now: half of it, the rest left for the map's
+// textures and whatever else loads with it. `current_kb` is the pool in use now, which the load
+// frees and makes again. Never under the game's own size nor over the engine's limit.
+std::uint32_t free_kb(const Budget& b, std::uint32_t current_kb) {
+    const auto used = b.usage > std::uint64_t{current_kb} * 1024 ? b.usage - std::uint64_t{current_kb} * 1024 : 0;
+    const auto free = b.budget > used ? b.budget - used : 0;
+    return static_cast<std::uint32_t>(std::clamp<std::uint64_t>(free / 2 / 1024, stock_kb, most_kb));
+}
+// The fallback, by the card's size, for a driver that reports no budget: 0 keeps the game's own.
 std::uint32_t size_kb(std::uint64_t memory) {
     if (const auto chosen = override_kb()) return chosen;
     // Cards report a little under or over their nominal size.
-    constexpr std::uint64_t six_gib = 6ull << 30, twelve_gib = 12ull << 30, slack = 256ull << 20;
-    if (memory <= six_gib + slack) return 0;
+    constexpr std::uint64_t eight_gib = 8ull << 30, twelve_gib = 12ull << 30, slack = 256ull << 20;
+    if (memory <= eight_gib + slack) return 0;
     const auto most = memory <= twelve_gib + slack ? most_to_12gb_kb : most_kb;
     return static_cast<std::uint32_t>(std::clamp<std::uint64_t>(memory / 4 / 1024, stock_kb, most));
 }
 }
-void apply_mesh_streaming_pool() {
+// What the pool should be for the level loading or loaded now: 0 until a load asks (the game's
+// own value is left alone), then a custom map's size, the game's own for any other.
+std::uint32_t mesh_pool_wanted_kb = 0;
+const mesh_pool::Card& mesh_pool_card() {
     static const auto card = mesh_pool::largest_card();
-    static const auto pool_kb = mesh_pool::size_kb(card.memory);
     static bool reported = false;
     if (!reported) {
         reported = true;
         dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
-            "Mesh streaming pool: {} for {} ({:.1f} GB of video memory).",
-            pool_kb ? std::format("{} MB", pool_kb / 1024) : std::string("the game's own 520 MB"),
+            "Mesh streaming pool: the game's own 520 MB for San Van; for a custom map, half the video memory free "
+            "as it loads, on {} ({:.1f} GB).",
             card.name.empty() ? std::string("an unknown card") : card.name, static_cast<double>(card.memory) / (1ull << 30));
     }
-    if (!pool_kb) return;
-    static ULONGLONG next_check = 0;
+    return card;
+}
+void set_mesh_pool(std::uint32_t kb, bool now_or_never) {
     static std::string last_result;
+    try {
+        const auto result = dingosdk::change_named_setting("MeshStreaming.PoolSize", std::to_string(kb), false);
+        if (result.starts_with("error: ")) {
+            if (now_or_never)
+                dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::runtime,
+                    "Mesh streaming pool not set for this load: {}", result);
+            return;
+        }
+        if (result != last_result && !result.ends_with("(unchanged)"))
+            dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
+                "Mesh streaming pool for this level: {}", result);
+        last_result = result;
+    } catch (...) {}
+}
+// Just before a level load is submitted (the pools are re-created at its start, from the setting):
+// for a custom map, half the video memory free now (or by the card's size when the driver reports
+// no budget); the game's own for any other. RESKATE_MESH_POOL_MB sets it for every load.
+void mesh_pool_for_load(bool custom) {
+    const auto& card = mesh_pool_card();
+    std::uint32_t kb = mesh_pool::override_kb();
+    std::string how = "RESKATE_MESH_POOL_MB";
+    if (!kb && custom) {
+        const auto current = mesh_pool_wanted_kb ? mesh_pool_wanted_kb : mesh_pool::stock_kb;
+        if (const auto budget = mesh_pool::budget_of(card)) {
+            kb = mesh_pool::free_kb(*budget, current);
+            how = std::format("{} MB free of a {} MB budget", (budget->budget - (std::min)(budget->budget, budget->usage)) >> 20,
+                              budget->budget >> 20);
+        } else {
+            kb = (std::max)(mesh_pool::size_kb(card.memory), mesh_pool::stock_kb);
+            how = "no budget reported: by the card's size";
+        }
+    }
+    if (!kb) {
+        // San Van and the game's other maps: its own, once a custom map has raised it.
+        if (!mesh_pool_wanted_kb) return;
+        kb = mesh_pool::stock_kb;
+        how = "not a custom map";
+    }
+    mesh_pool_wanted_kb = kb;
+    dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
+        "Mesh streaming pool for this load: {} MB ({}).", kb / 1024, how);
+    set_mesh_pool(kb, true);
+}
+// Every tick: the graphics quality script sets the game's own value again whenever settings are
+// applied, so the wanted one is put back.
+void apply_mesh_streaming_pool() {
+    (void)mesh_pool_card();
+    if (!mesh_pool_wanted_kb) return;
+    static ULONGLONG next_check = 0;
     const auto now = GetTickCount64();
     if (now < next_check) return;
     next_check = now + 2000;
-    try {
-        const auto result = dingosdk::change_named_setting("MeshStreaming.PoolSize", std::to_string(pool_kb), false);
-        if (result.starts_with("error: ")) { next_check = now + 500; return; }
-        if (result != last_result && !result.ends_with("(unchanged)"))
-            dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::runtime,
-                "Mesh streaming pool raised for big custom maps (applies from the next level load): {}", result);
-        last_result = result;
-    } catch (...) {}
+    set_mesh_pool(mesh_pool_wanted_kb, false);
 }
 void apply_throwdown_modes() {
     // The throwdowner flow picks between the mode-select page and straight Jam
@@ -1243,6 +1330,13 @@ void update_model(std::uintptr_t client, TickState& frame) {
     record("{\"event\":\"native_level_request\",\"predicted_route\":\"" + std::string(hosted ? "HostedLocal" : "SinglePlayer") +
            "\",\"selection\":" + dingosdk::world_description_json(selected) + "}");
     dingosdk::multiplayer::host_map_change(request->asset + "|" + request->lm_level);
+    {
+        // A custom map gets the raised mesh streaming pool; San Van the game's own.
+        bool custom = selected_level->custom;
+        for (const auto& level : catalog.levels)
+            if (!request->lm_level.empty() && equals(level.asset, request->lm_level)) custom = custom || level.custom;
+        mesh_pool_for_load(custom);
+    }
     submit_local(r.base, client, *request, selected_level->level_flag68);
 }
 }
