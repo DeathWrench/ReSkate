@@ -171,6 +171,11 @@ void apply_performance_settings() {
 // SecureReason_TimedOut while the export went on. -1 turns them off, as the game's own
 // development config does. Kept apart from the settings above so an unknown name here cannot
 // hold those back; tried for a minute.
+// Players were still dropped to the splash screen by a long export with those off (2026-10-17):
+// the game also ends a session after a stretch without input (DingoOnline.InactivityTimeOut*,
+// SecureReason_InteractivityTimeout), and no one touches the pad while an export runs. The same
+// development config (disableAllTimeouts in Game.cfg) turns that off too; the loading timeouts
+// it also clears are left as they are, so a load that never finishes still ends.
 void apply_local_connection_timeouts() {
     static int attempts = 0;
     static ULONGLONG next_attempt = 0;
@@ -181,8 +186,9 @@ void apply_local_connection_timeouts() {
     try {
         bool pending = false;
         std::string results;
-        for (const auto* name : {"Client.IngameTimeout", "Server.IngameTimeout"}) {
-            const auto result = dingosdk::change_named_setting(name, "-1", false);
+        for (const auto& [name, value] : {std::pair{"Client.IngameTimeout", "-1"}, std::pair{"Server.IngameTimeout", "-1"},
+                                          std::pair{"DingoOnline.InactivityTimeOutEnabled", "false"}}) {
+            const auto result = dingosdk::change_named_setting(name, value, false);
             pending = pending || result.starts_with("error: ");
             results += (results.empty() ? "" : " | ") + result;
         }

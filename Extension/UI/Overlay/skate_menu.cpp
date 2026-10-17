@@ -1038,7 +1038,8 @@ void wordmark(ImDrawList* draw, SkateMenu& menu, ImVec2 at, float size) {
 }
 
 // A window over the game, moved by dragging and resized from its edges: made for a mouse. The
-// side rail lists the pages in their groups, and the addons under ADDONS.
+// side rail lists the pages in their groups, and every addon in EXTRAS in place of an ADDONS page:
+// the window has no overview of them, full screen's ALL ADDONS tab is that.
 void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks, bool& visible, bool appearing) {
     auto& io = ImGui::GetIO();
     const ImVec2 maximum(std::max(px(400.0f), io.DisplaySize.x - 24), std::max(px(320.0f), io.DisplaySize.y - 24));
@@ -1055,14 +1056,31 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
         const auto origin = ImGui::GetWindowPos();
         auto* draw = ImGui::GetWindowDrawList();
         const float sidebar = px(190.0f);
+        if (menu.page == page_addons && menu.addon == addon_all) menu.addon = addon_drone;
 
         // Side rail: brushed wordmark, then the pages in their groups like the HUB's tab icons.
         draw->AddRectFilled(origin, ImVec2(origin.x + sidebar, origin.y + size.y), IM_COL32(10, 10, 11, 250));
         wordmark(draw, menu, ImVec2(origin.x + px(16), origin.y + px(14)), px(40));
         draw->AddText(menu.body, px(12), ImVec2(origin.x + px(18), origin.y + px(66)), muted, "YOUR SESSION. YOUR RULES.");
         ImGui::SetCursorPos(ImVec2(px(10), px(90)));
-        ImGui::BeginChild("navigation", ImVec2(sidebar - px(20), size.y - px(134)), ImGuiChildFlags_NavFlattened);
+        const float rail_height = size.y - px(134);
+        ImGui::BeginChild("navigation", ImVec2(sidebar - px(20), rail_height), ImGuiChildFlags_NavFlattened);
         const float rail = sidebar - px(20);
+        // Every row is as tall as fits the rail without scrolling, from 28 to 36.
+        float row_height = px(36);
+        {
+            int rows = 0, groups = 0;
+            for (int i = 0; i < page_count; ++i) {
+                if (page_hidden(menu, model, i)) continue;
+                rows += i == page_addons ? addon_count - 1 : 1;
+                if (group_of(i)) ++groups;
+            }
+            const float spacing = ImGui::GetStyle().ItemSpacing.y;
+            ImGui::PushFont(menu.bold);
+            const float heading = px(2) + spacing + ImGui::GetTextLineHeightWithSpacing();
+            ImGui::PopFont();
+            if (rows) row_height = std::clamp((rail_height - groups * heading) / rows - spacing, px(28), px(36));
+        }
         const auto row = [&](const char* id, const char* label, bool selected, float height, float indent, ImFont* font, float text) {
             const auto at = ImGui::GetCursorScreenPos();
             const bool pressed = ImGui::InvisibleButton(id, ImVec2(rail, height), ImGuiButtonFlags_EnableNav) && !selected;
@@ -1089,17 +1107,17 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
                 ImGui::PopStyleColor();
             }
             ImGui::PushID(i);
-            const bool on_page = menu.page == i;
-            if (row("##page", page_names[static_cast<std::size_t>(i)], on_page && !(i == page_addons && menu.addon > addon_all), px(36), 0,
-                    menu.bold, px(16)))
-                open_page(menu, i, i == page_addons ? addon_all : -1);
-            if (i == page_addons && on_page)
+            if (i == page_addons) {
                 for (int a = addon_drone; a < addon_count; ++a) {
                     ImGui::PushID(a);
-                    if (row("##addon", addon_names[static_cast<std::size_t>(a)], menu.addon == a, px(30), px(14), menu.bold, px(13)))
+                    if (row("##addon", addon_names[static_cast<std::size_t>(a)], menu.page == page_addons && menu.addon == a, row_height, 0,
+                            menu.bold, px(16)))
                         open_page(menu, page_addons, a);
                     ImGui::PopID();
                 }
+            } else if (row("##page", page_names[static_cast<std::size_t>(i)], menu.page == i, row_height, 0, menu.bold, px(16))) {
+                open_page(menu, i, -1);
+            }
             ImGui::PopID();
         }
         ImGui::EndChild();
