@@ -367,9 +367,40 @@ std::atomic<CreatePlaced1> original_placed1{};
 std::atomic<CreateCommitted3> original_committed3{};
 std::atomic<CreatePlaced2> original_placed2{};
 
+// A resource creation that holds up its thread (the driver waiting on the GPU inside it): said with
+// what was made and which game code asked, at most 40 times. A 170 ms stall every 5 s was one of
+// these (2026-10-17): the game's batched GPU uploads (Skate 0x1446b3f20) making their upload buffer.
+std::uint64_t creation_clock() noexcept {
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+template<class Desc>
+void note_slow_creation(std::uint64_t started, const D3D12_HEAP_PROPERTIES* properties, D3D12_HEAP_FLAGS heap_flags, const Desc* desc,
+                        void* caller) noexcept {
+    const auto ms = static_cast<double>(creation_clock() - started) / 1e6;
+    if (ms < 20) return;
+    static std::atomic<unsigned> said{};
+    if (said.fetch_add(1, std::memory_order_relaxed) >= 40) return;
+    try {
+        const auto image = reinterpret_cast<std::uintptr_t>(GetModuleHandleW(nullptr));
+        const auto at = reinterpret_cast<std::uintptr_t>(caller);
+        const auto where = at > image && at - image < 0x10000000 ? std::format("Skate 0x{:x}", 0x140000000 + (at - image))
+                                                                   : std::format("0x{:x}", at);
+        static constexpr const char* dimensions[]{"unknown", "buffer", "1D texture", "2D texture", "3D texture"};
+        const auto dimension = desc && static_cast<unsigned>(desc->Dimension) < 5 ? dimensions[desc->Dimension] : "unknown";
+        dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::graphics,
+            "CreateCommittedResource took {:.1f} ms: heap type {}, heap flags {:#x}; a {} {} x {} x {}, {} mips, format {}, "
+            "flags {:#x}; asked for by {}.", ms, properties ? static_cast<int>(properties->Type) : -1, static_cast<unsigned>(heap_flags),
+            dimension, desc ? desc->Width : 0, desc ? desc->Height : 0, desc ? desc->DepthOrArraySize : 0, desc ? desc->MipLevels : 0,
+            desc ? static_cast<int>(desc->Format) : 0, desc ? static_cast<unsigned>(desc->Flags) : 0u, where);
+    } catch (...) {}
+}
+
 HRESULT STDMETHODCALLTYPE hooked_committed(ID3D12Device* device, const D3D12_HEAP_PROPERTIES* properties, D3D12_HEAP_FLAGS flags,
     const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, REFIID riid, void** out) {
+    const auto started = creation_clock();
     const auto result = original_committed.load()(device, properties, flags, desc, state, clear, riid, out);
+    note_slow_creation(started, properties, flags, desc, _ReturnAddress());
     if (SUCCEEDED(result)) note_resource(out, nullptr, 0);
     return result;
 }
@@ -387,7 +418,9 @@ HRESULT STDMETHODCALLTYPE hooked_placed(ID3D12Device* device, ID3D12Heap* heap, 
 HRESULT STDMETHODCALLTYPE hooked_committed1(ID3D12Device* device, const D3D12_HEAP_PROPERTIES* properties, D3D12_HEAP_FLAGS flags,
     const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session,
     REFIID riid, void** out) {
+    const auto started = creation_clock();
     const auto result = original_committed1.load()(device, properties, flags, desc, state, clear, session, riid, out);
+    note_slow_creation(started, properties, flags, desc, _ReturnAddress());
     if (SUCCEEDED(result)) note_resource(out, nullptr, 0);
     return result;
 }
@@ -400,7 +433,9 @@ HRESULT STDMETHODCALLTYPE hooked_heap1(ID3D12Device* device, const D3D12_HEAP_DE
 HRESULT STDMETHODCALLTYPE hooked_committed2(ID3D12Device* device, const D3D12_HEAP_PROPERTIES* properties, D3D12_HEAP_FLAGS flags,
     const D3D12_RESOURCE_DESC1* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session,
     REFIID riid, void** out) {
+    const auto started = creation_clock();
     const auto result = original_committed2.load()(device, properties, flags, desc, state, clear, session, riid, out);
+    note_slow_creation(started, properties, flags, desc, _ReturnAddress());
     if (SUCCEEDED(result)) note_resource(out, nullptr, 0);
     return result;
 }
@@ -413,7 +448,9 @@ HRESULT STDMETHODCALLTYPE hooked_placed1(ID3D12Device* device, ID3D12Heap* heap,
 HRESULT STDMETHODCALLTYPE hooked_committed3(ID3D12Device* device, const D3D12_HEAP_PROPERTIES* properties, D3D12_HEAP_FLAGS flags,
     const D3D12_RESOURCE_DESC1* desc, D3D12_BARRIER_LAYOUT layout, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session,
     UINT32 formats, const DXGI_FORMAT* castable, REFIID riid, void** out) {
+    const auto started = creation_clock();
     const auto result = original_committed3.load()(device, properties, flags, desc, layout, clear, session, formats, castable, riid, out);
+    note_slow_creation(started, properties, flags, desc, _ReturnAddress());
     if (SUCCEEDED(result)) note_resource(out, nullptr, 0);
     return result;
 }

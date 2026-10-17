@@ -13,6 +13,9 @@ std::atomic<bool> zones_enabled{false};
 namespace detail {
 std::atomic<std::uint32_t> client_thread{0}, present_thread{0};
 std::atomic<bool> sampling{false};
+std::atomic<bool> marking_presents{false};
+std::atomic<std::uint32_t> present_mark_count{0};
+std::array<std::atomic<std::uint64_t>, present_mark_capacity> present_marks{};
 }
 namespace {
 std::atomic<Site*> sites{nullptr};
@@ -294,6 +297,10 @@ void record_client_frame(std::uint64_t frame_ns) noexcept {
 void record_present() noexcept {
     detail::present_thread.store(GetCurrentThreadId(), std::memory_order_relaxed);
     present_count.fetch_add(1, std::memory_order_relaxed);
+    if (detail::marking_presents.load(std::memory_order_relaxed)) {
+        const auto at = detail::present_mark_count.fetch_add(1, std::memory_order_relaxed);
+        if (at < detail::present_mark_capacity) detail::present_marks[at].store(now_ns(), std::memory_order_relaxed);
+    }
     if (!zones_enabled.load(std::memory_order_relaxed)) return;
     static std::uint64_t last{};
     const auto now = now_ns();
