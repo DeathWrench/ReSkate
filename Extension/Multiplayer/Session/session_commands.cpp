@@ -32,6 +32,11 @@ void apply_object_limit(Session &s, unsigned limit) {
     s.object_limit = limit;
     set_lobby_object_limit(s.mode == Mode::host || (s.role_permissions & role_objects) ? 0 : limit);
 }
+void apply_object_scaling(Session &s, bool allowed) {
+    s.object_scaling = allowed;
+    // As the menus see it (session_view.cpp): the host, and a role that may always build, are exempt.
+    set_lobby_object_scaling_allowed(allowed || s.mode != Mode::join || (s.role_permissions & role_objects));
+}
 void apply_object_placement(Session &s, ObjectPlacement policy) {
     s.object_placement = policy;
     // On a dedicated server "host only" means the roles that may always build.

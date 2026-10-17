@@ -279,8 +279,9 @@ void placement_finish_batch(std::uintptr_t manager, const PlacementBatch& incomi
             }
         } else if (const auto restored = claim_restore()) {
             r.tracked[applied.entity] = *restored;
-            // claim_restore gave the candidate the saved scale; the spawned object is at 1x.
-            if (candidate->scale != 1.0f && r.resizes.size() < 1024) {
+            // claim_restore gave the candidate the saved scale; the spawned object is at 1x. Where
+            // the session has scaling off it stays 1x in the world, and its saved scale is kept.
+            if (candidate->scale != 1.0f && lobby_object_scaling_allowed() && r.resizes.size() < 1024) {
                 auto saved = *candidate;
                 saved.id = *restored;
                 r.resizes.push_back({applied.entity, saved});
@@ -504,7 +505,9 @@ void update_placement_poses() {
         auto next = row.object;
         std::copy_n(transform.data() + 8, 3, next.position.data());
         std::copy_n(transform.data() + 4, 4, next.rotation.data());
-        next.scale = transform[0];
+        // Where the session has scaling off, an object is 1x in the world whatever it was saved at:
+        // the saved scale stays, for when scaling is allowed again.
+        if (lobby_object_scaling_allowed()) next.scale = transform[0];
         if (!profile::valid_placed_object(next)) continue;
         row.object = next;
         if (!r.enabled || !row.saved_id) continue;

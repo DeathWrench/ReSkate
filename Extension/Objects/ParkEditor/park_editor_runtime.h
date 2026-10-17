@@ -12,6 +12,11 @@ void set_park_mod_list_visible(bool visible) noexcept;
 // on disconnect; existing placed objects remain in the world.
 void set_lobby_object_placement_allowed(bool enabled);
 bool lobby_object_placement_allowed() noexcept;
+// Whether objects may be resized in this session (a dedicated server can turn object scaling off;
+// its roles that may always build are exempt). Off, a saved object's scale is kept in the layout
+// but it is not resized in the world, and the world's 1x is never saved over it. On outside a session.
+void set_lobby_object_scaling_allowed(bool enabled) noexcept;
+bool lobby_object_scaling_allowed() noexcept;
 // The session's limit on this player's objects (object_placement.h), 0 for none: the host's
 // own game and a server admin's are given none. Adding an object is refused at the limit.
 void set_lobby_object_limit(unsigned limit) noexcept;

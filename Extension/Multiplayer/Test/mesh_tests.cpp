@@ -37,6 +37,8 @@ void remove_remote_network_objects(std::uint64_t owner, std::uint64_t epoch) {
 std::string network_object_status() { return {}; }
 bool simulated_placement_allowed = true;
 void set_lobby_object_placement_allowed(bool allowed) { simulated_placement_allowed = allowed; }
+bool simulated_scaling_allowed = true;
+void set_lobby_object_scaling_allowed(bool allowed) noexcept { simulated_scaling_allowed = allowed; }
 unsigned simulated_object_limit{};
 void set_lobby_object_limit(unsigned limit) noexcept { simulated_object_limit = limit; }
 unsigned lobby_object_limit() noexcept { return simulated_object_limit; }

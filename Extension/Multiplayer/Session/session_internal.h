@@ -581,6 +581,9 @@ void apply_distances(Session &s, const MultiplayerDistances &distances);
 void apply_object_placement(Session &s, ObjectPlacement policy);
 // The session's limit, and this game's own share of it: none while hosting or as a server's admin.
 void apply_object_limit(Session &s, unsigned limit);
+// Whether a dedicated server lets players resize what they place, and whether this game may (the
+// host and a role that may always build are exempt): the placements follow it.
+void apply_object_scaling(Session &s, bool allowed);
 // Stores what guests may use and applies it to the local player (the host and a dedicated
 // server's admins are exempt).
 void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts);

@@ -858,6 +858,32 @@ int main() {
             live.object = 0;
         }
         {
+            // A session with object scaling off: the scaled copy is made at 1x in the world without
+            // waiting on a resize the server would not take, and the layout keeps its scale.
+            set_lobby_object_scaling_allowed(false);
+            const auto world_before = fixture::world;
+            EditorPasteRequest scaled{e.generation, e.revision};
+            scaled.objects.push_back(paste.objects[1]);
+            scaled.objects[0].position[0] += 10;
+            require(queue_local_park_paste(scaled), "A paste with object scaling off was refused");
+            finish();
+            require(!e.transaction, "A scaled paste with object scaling off did not finish");
+            require(std::any_of(fixture::world.begin(), fixture::world.end(),
+                                [&](const auto &entry) {
+                                    return !world_before.contains(entry.first) && entry.second.item == scaled.objects[0].item &&
+                                           entry.second.scale == 1.0f;
+                                }),
+                    "With object scaling off a pasted object was resized in the world");
+            require(std::any_of(r.document.maps[r.map].begin(), r.document.maps[r.map].end(),
+                                [&](const auto &object) {
+                                    return object.position == scaled.objects[0].position && object.scale == scaled.objects[0].scale;
+                                }),
+                    "With object scaling off a pasted object lost its scale in the layout");
+            run("undo");
+            finish();
+            set_lobby_object_scaling_allowed(true);
+        }
+        {
             // Deleting a multi-selection: every object leaves the world in one edit and one undo
             // step, and undo brings them all back at their scale.
             std::vector<std::uint64_t> pasted_ids;

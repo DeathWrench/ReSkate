@@ -567,10 +567,12 @@ void update_park_editor() {
             }
             if (tx.preview && !tx.preview->ending)
                 return; // Live poses remain temporary until mouse release.
-            if (step.kind == Kind::create && step.object.scale != 1.0f) {
+            if (step.kind == Kind::create && step.object.scale != 1.0f && lobby_object_scaling_allowed()) {
                 // The create recipe has no scale, so the object spawned at 1x (a paste, a set, an
                 // undo or a loaded park). Resize it with a move, verified by the server tick's
-                // readback before the object is committed, as a placement preview does.
+                // readback before the object is committed, as a placement preview does. Not where
+                // the session has scaling off: the server would not take it, and the edit would
+                // wait on it; the object stays 1x and keeps its scale in the layout.
                 step = {Kind::move, step.object, step.entity};
                 tx.sent = false;
                 tx.waiting_since = GetTickCount64();

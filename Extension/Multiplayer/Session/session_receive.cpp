@@ -284,7 +284,7 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     }
     apply_object_placement(s, p.object_placement);
     apply_object_limit(s, p.object_limit); // after server_admin, which exempts an admin
-    s.object_scaling = !dedicated_host(s) || p.object_scaling;
+    apply_object_scaling(s, !dedicated_host(s) || p.object_scaling);
     s.sync_effects = !dedicated_host(s) || p.sync_effects;
     s.sync_drones = !dedicated_host(s) || p.sync_drones;
     drone::beacon::server_allows().store(s.sync_drones);
@@ -975,6 +975,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 s.server_admin = s.role_all_commands || !s.role_commands.empty();
                 apply_object_limit(s, s.object_limit);
                 apply_object_placement(s, s.object_placement);
+                apply_object_scaling(s, s.object_scaling);
                 apply_guest_tools(s, s.guest_noclip, s.guest_no_bail, s.guest_boosts);
                 publish(s);
                 publish_chat(s);
