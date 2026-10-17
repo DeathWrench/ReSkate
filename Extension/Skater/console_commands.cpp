@@ -192,7 +192,8 @@ void register_movement_commands(Commands &registry) {
     auto model_mode = argument("mode", Type::integer, true);
     auto model_test = action("dronemodeltest",
         "Test for the drone model: spawns the drone (dronemodeltest drone), the traffic cone (cone) or a named blueprint in front of you and moves it "
-        "round a circle. Mode 0, 1 or 2 tries a different way of moving it. 'dronemodeltest stop' removes it; on its own it reports",
+        "round a circle. Mode 0, 1 or 2 tries a different way of moving it. 'dronemodeltest remote' has a pretend other player fly a drone "
+        "in front of you, shown as theirs would be. 'dronemodeltest stop' removes them; on its own it reports",
         Group::movement, {model_name, model_mode});
     model_test.inspect = [](const Model &) { return State{true, {}, {}, {}, false}; };
     model_test.run = [](const Model &, const Values &args, const Output &out) {
@@ -206,7 +207,13 @@ void register_movement_commands(Commands &registry) {
         }
         if (name == "stop") {
             multiplayer::request_prop_test({}, 0);
+            multiplayer::request_fake_remote_drone(false);
             out("Removing the test prop.");
+            return;
+        }
+        if (name == "remote") {
+            multiplayer::request_fake_remote_drone(true);
+            out("A pretend other player takes off in front of you. Run dronemodeltest again in a few seconds for what happened.");
             return;
         }
         const std::string blueprint = name == "drone" ? std::string(multiplayer::drone_model_blueprint)

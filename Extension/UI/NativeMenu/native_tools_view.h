@@ -228,6 +228,14 @@ inline void activate(State& s, const overlay::Model& m, const overlay::Callbacks
         const int strength = m.grind_exit.strength;
         const int next = strength > 75 ? 75 : strength > 50 ? 50 : strength > 25 ? 25 : 100;
         console("grindexit strength " + std::to_string(next), m.grind_exit.available);
+    } else if (command == "keyframe-smoothing") {
+        console(m.keyframe_smoothing.enabled ? "keysmooth off" : "keysmooth on", m.keyframe_smoothing.available);
+    } else if (command == "keyframe-smoothness") {
+        // 100 -> 75 -> 50 -> 25 -> 100 (the ReSkate menu's slider sets any value from 0 to 100).
+        const int percent = overlay::keyframe_smoothness_percent(m.keyframe_smoothing);
+        const int next = percent > 75 ? 75 : percent > 50 ? 50 : percent > 25 ? 25 : 100;
+        console("keysmooth amount " + std::string(next == 100 ? "1" : next == 75 ? "0.75" : next == 50 ? "0.5" : "0.25"),
+                m.keyframe_smoothing.available && m.keyframe_smoothing.enabled);
     } else if (command == "board-wear-reset") {
         console("boardwear reset", m.offline.board_wear.available && m.offline.board_wear.effective);
     } else if (command == "challenges") {
@@ -372,6 +380,12 @@ inline Page render(State& s, const overlay::Model& m, const overlay::CallbacksV3
                 "graphics", m.graphics.available && cb.queue_console_command, graphics_keys[i]);
         }
         button(p.main, "graphics-reset", "Restore default effects", "graphics-reset", m.graphics.available && cb.queue_console_command);
+        text(p.main, "replay-title", "REPLAY EDITOR");
+        toggle(p.main, "keyframe-smoothing", "Keyframe smoothing", m.keyframe_smoothing.enabled,
+            m.keyframe_smoothing.available && cb.queue_console_command);
+        button(p.main, "keyframe-smoothness",
+            "Keyframe smoothness: " + std::to_string(overlay::keyframe_smoothness_percent(m.keyframe_smoothing)) + "%",
+            "keyframe-smoothness", m.keyframe_smoothing.available && m.keyframe_smoothing.enabled && cb.queue_console_command);
         text(p.side, "hud-title", "CHALLENGES");
         button(p.side, "challenges", m.progression.challenges_hidden ? "Challenges: Hidden" : "Challenges: Shown", "challenges",
             m.progression.challenges_enabled && cb.queue_console_command);

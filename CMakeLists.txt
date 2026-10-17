@@ -127,6 +127,24 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
             dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dl pthread)
     endif()
     add_test(NAME server_park_mods COMMAND dingosdk_server_park_tests "${PROJECT_SOURCE_DIR}/Server/Test/fixtures/park_mods")
+    # Tools locked for single players (lock, throwdown_locks), as each player's game reads its roster.
+    add_executable(dingosdk_server_lock_tests Server/Test/server_lock_tests.cpp Server/server_host.cpp Server/server_party.cpp
+        Extension/Multiplayer/Session/party_book.cpp Server/server_config.cpp Server/server_update.cpp Server/server_release.cpp
+        $<$<BOOL:${WIN32}>:Launcher/updater.cpp> Server/global_bans.cpp Server/server_words.cpp Extension/Multiplayer/developer_identity.cpp
+        Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Net/delta_codec.cpp
+        Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Remote/playback_buffers.cpp
+        Extension/Multiplayer/Session/password.cpp Server/server_activity.cpp Server/server_votes.cpp Server/server_commands.cpp
+        Server/server_parks.cpp Extension/Throwdowns/throwdown_wire.cpp)
+    target_include_directories(dingosdk_server_lock_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_include_directories(dingosdk_server_lock_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
+    if(WIN32)
+        target_link_libraries(dingosdk_server_lock_tests PRIVATE dingosdk_launcher_support dingosdk_world_layer_scan dingosdk_json
+            dingosdk_lz4 dingosdk_zstd dingosdk_logging dingosdk_miniz dingosdk_word_filter dingosdk_https winhttp bcrypt winmm)
+    else()
+        target_link_libraries(dingosdk_server_lock_tests PRIVATE dingosdk_launcher_support dingosdk_world_layer_scan dingosdk_json
+            dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dl pthread)
+    endif()
+    add_test(NAME server_locks COMMAND dingosdk_server_lock_tests)
     add_executable(dingosdk_server_release_tests Server/Test/server_release_tests.cpp Server/server_release.cpp)
     target_include_directories(dingosdk_server_release_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_server_release_tests PRIVATE dingosdk_json)
@@ -355,6 +373,16 @@ if(DINGOSDK_BUILD_BOARD_BREAK_TESTS)
     add_executable(dingosdk_board_break_tests Extension/BoardBreak/Test/board_break_tests.cpp)
     target_include_directories(dingosdk_board_break_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME board_break COMMAND dingosdk_board_break_tests)
+endif()
+option(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS "Build replay keyframe smoothing regression tests" OFF)
+if(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS)
+    enable_testing()
+    # The smoother curve: stock at 0, every key met, C2 at 1, and a framing segment the game's spline plays as
+    # meant; the saved settings read back as written.
+    add_executable(dingosdk_replay_keyframes_tests Extension/ReplayKeyframes/Test/replay_keyframes_tests.cpp
+        Extension/ReplayKeyframes/replay_curve.cpp Extension/ReplayKeyframes/replay_settings.cpp)
+    target_include_directories(dingosdk_replay_keyframes_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME replay_keyframes COMMAND dingosdk_replay_keyframes_tests)
 endif()
 option(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS "Build Hall of Meat regression tests" OFF)
 if(DINGOSDK_BUILD_HALL_OF_MEAT_TESTS)

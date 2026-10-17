@@ -1,5 +1,6 @@
 #include "overlay_internal.h"
 #include "skate_style.h"
+#include "skate_menu_internal.h"
 #include "cursor.h"
 #include "input_capture.h"
 #include "Extension/UI/NativeMenu/native_menu_view.h"
@@ -1061,55 +1062,98 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
         changed();
     };
     const auto on_off = [](bool on) { return std::string(on ? "On" : "Off"); };
-    const float list_width = std::min((z.x - a.x) * .56f, 2300 * u), column_width = std::min(z.x - a.x, 2100 * u);
-    // A list of levels: the one pointed at says LOAD, and pressing it travels there.
-    const auto levels = [&](bool custom, const char *title, const char *empty, const char *empty_help) {
+    const float column_width = std::min(z.x - a.x, 2100 * u);
+    // Every map as a grid of cards, each with its picture (an official map's loading screen, a custom
+    // map's mod icon: the same pictures as the ReSkate menu's map grid, menu_map_pictures.cpp) and its
+    // name under it: the game's maps, then the custom ones under their own heading. The one pointed at
+    // says LOAD, and pressing it travels there. (Not Tutorial Island: the game's first-time tutorial.)
+    const auto levels = [&](const char *title) {
         draw->AddText(ui.heading, 52 * u, a, theme::paper, title);
         std::vector<const Level *> listed;
-        for (const auto &entry : m.levels)
-            if (native_tools::listed(entry) && entry.custom == custom) listed.push_back(&entry);
-        std::sort(listed.begin(), listed.end(), [](const auto *x, const auto *y) { return native_tools::level_name(*x) < native_tools::level_name(*y); });
+        for (const bool custom : {false, true}) {
+            const auto first = listed.size();
+            for (const auto &entry : m.levels)
+                if (native_tools::listed(entry) && entry.custom == custom && world_level_name(entry.asset) != "Tutorial Island")
+                    listed.push_back(&entry);
+            std::sort(listed.begin() + static_cast<std::ptrdiff_t>(first), listed.end(),
+                      [](const auto *x, const auto *y) { return native_tools::level_name(*x) < native_tools::level_name(*y); });
+        }
+        {
+            std::vector<MenuMapWanted> wanted;
+            for (const auto *entry : listed) wanted.push_back({entry->asset, native_tools::level_name(*entry)});
+            want_menu_map_pictures(std::move(wanted));
+        }
+        // Why a level cannot be loaded now, or what loading one said: beside the title.
+        const std::string note = multiplayer_controls_level(mp) ? "Only the lobby host can change levels."
+                                 : !m.can_queue_load ? "Travel is unavailable right now. Wait for the game to finish loading." : h.notice;
+        if (!note.empty()) {
+            const float after = a.x + width_of(ui.heading, 52 * u, title) + 48 * u;
+            label(draw, ui.body, 30 * u, ImVec2(after, a.y + 14 * u), z.x - 20 * u, theme::muted, note);
+        }
         const auto *root = native_tools::level(m, native_tools::root_asset);
         const bool travel = root && root->native_registered && root->can_load && m.can_queue_load && !multiplayer_controls_level(mp) && cb.queue_load;
-        Scroller list(ui, hash(title, 30), ImVec2(a.x, a.y + 96 * u), ImVec2(a.x + list_width, z.y));
-        for (const auto *entry : listed) {
+        const float card_gap = 24 * u, room = z.x - a.x - 16 * u;
+        const int columns = std::max(1, static_cast<int>((room + card_gap) / (540 * u + card_gap)));
+        const float card = (room - card_gap * static_cast<float>(columns - 1)) / static_cast<float>(columns);
+        const float picture = card * 0.5625f, name_bar = 86 * u, card_tall = picture + name_bar;
+        Scroller list(ui, hash(title, 30), ImVec2(a.x, a.y + 96 * u), ImVec2(z.x, z.y));
+        float row_top{};
+        bool row_drawn{};
+        std::size_t in_section{};
+        bool any_custom{};
+        for (std::size_t i = 0; i < listed.size(); ++i) {
+            const auto *entry = listed[i];
+            // The custom maps start a new row under their own heading.
+            if (entry->custom && !any_custom) {
+                any_custom = true;
+                in_section = 0;
+                bool heading_drawn{};
+                const float heading_top = list.next(70 * u, 0, heading_drawn);
+                if (heading_drawn) draw->AddText(ui.heading, 40 * u, ImVec2(a.x, heading_top + 18 * u), theme::paper, "CUSTOM MAPS");
+            }
+            const auto column = static_cast<int>(in_section++ % static_cast<std::size_t>(columns));
+            if (!column) row_top = list.next(card_tall, card_gap, row_drawn);
             const auto id = hash("level", hash(entry->asset));
             const bool can = travel && entry->can_load && entry != root;
-            bool drawn{};
-            const float top = list.next(tall, between, drawn);
-            const ImVec2 p(a.x, top), q(a.x + list_width - 20 * u, top + tall);
+            const ImVec2 p(a.x + (card + card_gap) * static_cast<float>(column), row_top), q(p.x + card, row_top + card_tall);
             const Hit hit = item(ui, id, p, q, &list.box);
-            list.reveal(id, top, tall);
+            list.reveal(id, row_top, card_tall);
             if (hit.press && can) h.tools.destination = entry->asset, act("load-level");
-            if (!drawn) continue;
+            if (!row_drawn) continue;
             const bool lit = hit.focus || hit.hover;
             skate_theme::rough_rect(draw, p, q, lit ? theme::blue : skate_theme::tile, id & 0xfff, u * 2);
-            float name_right = q.x - 30 * u;
+            // The picture: the middle band of its square, to the card's shape.
+            const ImVec2 shot_a(p.x + 8 * u, p.y + 8 * u), shot_b(q.x - 8 * u, p.y + picture);
+            ImTextureID texture{};
+            ImVec2 uv0, uv1;
+            if (menu_map_picture(entry->asset, texture, uv0, uv1)) {
+                const float band = (uv1.y - uv0.y) * (1.0f - (shot_b.y - shot_a.y) / (shot_b.x - shot_a.x)) * 0.5f;
+                draw->AddImage(texture, shot_a, shot_b, ImVec2(uv0.x, uv0.y + band), ImVec2(uv1.x, uv1.y - band),
+                               can || lit ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 110));
+            } else {
+                draw->AddRectFilled(shot_a, shot_b, IM_COL32(18, 18, 20, 255));
+            }
+            // The name under it, and on the one pointed at what pressing it does.
+            const float bar_top = p.y + picture, text_y = bar_top + (name_bar - 38 * u) * .5f;
+            float name_right = q.x - 24 * u;
             if (lit) {
                 const char *does = can ? "LOAD" : multiplayer_controls_level(mp) ? "HOST'S CHOICE" : "NOT NOW";
-                const float w = width_of(ui.bold, 30 * u, does) + 40 * u;
-                const ImVec2 c(q.x - w - 24 * u, top + 20 * u), d(q.x - 24 * u, top + tall - 20 * u);
+                const float w = width_of(ui.bold, 28 * u, does) + 36 * u;
+                const ImVec2 c(q.x - w - 18 * u, bar_top + 18 * u), d(q.x - 18 * u, q.y - 18 * u);
                 skate_theme::rough_rect(draw, c, d, can ? sticky : sticky_off, 0x52, u * 2);
-                draw->AddText(ui.bold, 30 * u, ImVec2(c.x + 20 * u, c.y + (d.y - c.y - 30 * u) * .5f), skate_theme::black, does);
-                name_right = c.x - 20 * u;
+                draw->AddText(ui.bold, 28 * u, ImVec2(c.x + 18 * u, c.y + (d.y - c.y - 28 * u) * .5f), skate_theme::black, does);
+                name_right = c.x - 16 * u;
             }
-            label(draw, ui.bold, 42 * u, ImVec2(p.x + 30 * u, top + (tall - 42 * u) * .5f), name_right, can || lit ? theme::paper : theme::muted,
+            label(draw, ui.bold, 38 * u, ImVec2(p.x + 24 * u, text_y), name_right, can || lit ? theme::paper : theme::muted,
                   native_tools::level_name(*entry));
         }
         list.end();
-        if (listed.empty()) {
-            draw->AddText(ui.body, 38 * u, ImVec2(a.x, a.y + 110 * u), theme::muted, empty);
-            if (*empty_help) draw->AddText(ui.body, 32 * u, ImVec2(a.x, a.y + 164 * u), theme::muted, empty_help);
-        }
-        const std::string note = multiplayer_controls_level(mp) ? "Only the lobby host can change levels."
-                                 : !m.can_queue_load ? "Travel is unavailable right now. Wait for the game to finish loading." : h.notice;
-        if (!note.empty())
-            draw->AddText(ui.body, 30 * u, ImVec2(a.x + list_width + gap, a.y + 110 * u), theme::muted, note.c_str(), nullptr, std::min(z.x - a.x - list_width - gap, 1500 * u));
+        if (listed.empty()) draw->AddText(ui.body, 38 * u, ImVec2(a.x, a.y + 110 * u), theme::muted, "Waiting for available levels...");
     };
 
     switch (h.tools_tab) {
-    case official_tab: levels(false, "FIND YOUR SPOT", "Waiting for available levels...", ""); break;
-    case custom_tab: levels(true, "CUSTOM MAPS", "No custom maps installed.", "Custom maps from the Mods folder appear here."); break;
+    case official_tab:
+    case custom_tab: levels("FIND YOUR SPOT"); break; // (custom maps are on the one tab now)
     case world_tab: {
         Column list(ui, hash("world"), a, ImVec2(a.x + column_width, z.y));
         list.heading("THIS WORLD");
@@ -1265,6 +1309,11 @@ void tools_page(Ui &ui, ImVec2 a, ImVec2 z) {
             if (list.setting(names[i], on_off(on) + (choice < 0 ? " (default)" : ""), m.graphics.available && console)) act("graphics", std::string(graphics_keys[i]));
         }
         if (list.setting("Restore default effects", {}, m.graphics.available && console)) act("graphics-reset");
+        if (list.setting("Keyframe smoothing", on_off(m.keyframe_smoothing.enabled), m.keyframe_smoothing.available && console))
+            act("keyframe-smoothing");
+        if (list.setting("Keyframe smoothness", std::to_string(keyframe_smoothness_percent(m.keyframe_smoothing)) + "%",
+                         m.keyframe_smoothing.available && m.keyframe_smoothing.enabled && console))
+            act("keyframe-smoothness");
         if (list.setting("Challenges", m.progression.challenges_hidden ? "Hidden" : "Shown", m.progression.challenges_enabled && console)) act("challenges");
         {
             const bool shuffle = dingosdk::profile_runtime::music_shuffle_enabled();
@@ -1571,7 +1620,8 @@ void hub_frame(Hub &h, ImDrawList *draw, float u, ImVec2 a, ImVec2 z, float tabs
         int multiplayer_tab = static_cast<int>(h.tab);
         int &open = tools ? h.tools_tab : multiplayer_tab;
         if (tools) {
-            tabs = {{official_tab, "OFFICIAL MAPS"}, {custom_tab, "CUSTOM MAPS"}, {world_tab, "WORLD"}, {parks_tab, "PARKS"},
+            if (h.tools_tab == custom_tab) h.tools_tab = official_tab;
+            tabs = {{official_tab, "MAPS"}, {world_tab, "WORLD"}, {parks_tab, "PARKS"},
                     {player_tab, "PLAYER"}, {online_tab, "ONLINE"}, {visuals_tab, "VISUALS"}, {binds_tab, "BINDS"}};
         } else {
             tabs = {{static_cast<int>(Tab::browser), "SERVER BROWSER"}, {static_cast<int>(Tab::host), "HOST LOBBY"}};

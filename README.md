@@ -81,6 +81,11 @@ CachyOS: the launcher, the server browser, joining a public server and hosting a
 custom map and then join a server on another map, the screen can stay black
 ([#31](https://github.com/Dingo-Shenanigans/ReSkate/issues/31)): load the server's map first.
 
+### macOS (NotProton / CrossOver)
+
+Steam for Mac with a Wine-based compatibility tool works much the same way; see
+[MACOS-SETUP.md](MACOS-SETUP.md) for its launch option.
+
 ### Multiplayer map downloads
 
 Missing multiplayer custom maps can be downloaded from Thunderstore after confirmation.

@@ -33,9 +33,12 @@ void relaunch(const std::filesystem::path& self, const std::vector<std::wstring>
 // Under Wine/Proton with MangoHud on, restarts the launcher with MangoHud off for
 // its own window and returns true. The game it starts still gets MangoHud.
 bool relaunch_without_mangohud(const std::filesystem::path& self, const std::vector<std::wstring>& arguments);
-// Steam's client process is running and signed in to an account. When it is
-// not, start_game runs the game in offline mode.
+// Steam's client process is running and signed in to an account (or, started by the native
+// Steam client through a compatibility tool, it has a signed-in account). When it is not,
+// start_game runs the game in offline mode.
 bool steam_signed_in();
+// Running under Wine (Proton, or a Wine-based tool on macOS).
+bool under_wine();
 // Why steam_signed_in() is false, for ReSkate.log; empty when it is true.
 std::wstring steam_offline_reason();
 // Display name of the signed-in Steam account (UTF-8), or empty when Steam is

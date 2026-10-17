@@ -29,6 +29,9 @@ LocalProfileAccess local_profile_access() noexcept;
 bool local_profile_owns_entitlement(std::string_view id) noexcept;
 // Called on the game-update thread after native item data becomes available.
 void update_local_customization() noexcept;
+// The item grids' favorites, search and focused item (Customization/item_browser.h): every client
+// tick on the same thread, as the grids follow the player's every move.
+void update_local_item_browser() noexcept;
 // Cancel asset-backed service callbacks before native level teardown.
 void local_profile_before_level_transition(unsigned next) noexcept;
 using LocalLocationTravelQueue = bool (*)(const char* map);

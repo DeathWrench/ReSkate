@@ -6,6 +6,7 @@
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Build/20260929/local_cosmetic_catalog.h"
+#include "item_origins.h"
 
 namespace dingosdk::profile_runtime {
 // Retail OwnableData catalog bridge; included after the installed-item reader.
@@ -191,6 +192,12 @@ CosmeticShared make_cosmetic_catalog(const profile::Snapshot& snapshot) {
             metadata["group"] = placement.group ? placement.group->id : key;
             metadata["browser_category"] = placement.category ? placement.category->id : info.category;
         }
+        // A mod's item (or one of the game's own a mod changes, unless it has a description of
+        // its own) keeps three empty lines where the game shows a description: room at the
+        // bottom of the game's item card, whose bottom edge never moves, for the overlay to show
+        // the mod there.
+        if (!info.build_kit && !metadata.contains("description") && item_origins::find(key))
+            metadata["description"] = std::string(item_origins::reserved_description);
         try {
             node.item = make_cosmetic_message(cosmetic_ownable_message(key, info, owned, metadata));
         } catch (const std::exception& failure) {

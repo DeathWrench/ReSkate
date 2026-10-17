@@ -87,6 +87,11 @@ inline constexpr unsigned max_spawned_parks = 16;
 // ReSkateServer.json. Every setting an admin or the console changes is saved
 // back, so a restart keeps it.
 inline constexpr unsigned dedicated_tps = 20;
+// The tools the server can take away from single players (lock, throwdown_locks): noclip with
+// teleporting, No Bail, the boosts, and their own physics tuning.
+inline constexpr std::uint8_t lock_noclip = 1, lock_nobail = 2, lock_boosts = 4, lock_tuning = 8;
+inline constexpr std::uint8_t lock_movement = lock_noclip | lock_nobail | lock_boosts; // what the role's "movement" gives
+inline constexpr std::uint8_t lock_all = lock_movement | lock_tuning;
 struct ServerConfig {
     std::filesystem::path file;
     std::string name = "ReSkate server";
@@ -154,6 +159,8 @@ struct ServerConfig {
     bool global_bans = true;   // turn away players the ReSkate team has banned (global_bans.h)
     bool activity_log = true;  // console lines for throwdowns, objects and loading
     bool announce_throwdowns = true; // tell everyone in chat when a throwdown drop is placed
+    // The tools locked for the players of a throwdown while it runs (lock_* bits); 0: none.
+    std::uint8_t throwdown_locks{};
     // Players form parties (/party, the game's Social menu): 2-8 players each (the game's Party
     // panel has eight rows). Off, nobody can be in one.
     bool parties = true;
@@ -268,6 +275,11 @@ bool valid_park_key(std::string_view key) noexcept;
 // A scoring fingerprint as the config and console write it (16 hex digits), and read back
 // (nothing for text that is not one, or for 0: the game's own scoring needs no entry).
 std::string scoring_text(std::uint64_t fingerprint);
+// Lock tools by name: "noclip" (or "teleport"), "nobail", "boosts", "tuning", "all", several
+// joined by commas. Nothing for an unknown name or an empty list.
+std::optional<std::uint8_t> parse_lock_tools(std::string_view text);
+// "noclip, nobail, tuning"; "none" for 0.
+std::string lock_tools_text(std::uint8_t tools);
 std::optional<std::uint64_t> parse_scoring(std::string_view text);
 
 // Maps. The game always has its root level (DingoLevel_Root) loaded, and a map

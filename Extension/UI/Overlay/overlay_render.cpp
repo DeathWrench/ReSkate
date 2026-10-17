@@ -79,6 +79,8 @@ void destroy_graphics() {
     card_image_lost();
     s.menu_map_texture.Reset(); s.menu_map_upload.Reset();
     menu_map_pixels_lost();
+    s.mod_icon_texture.Reset(); s.mod_icon_upload.Reset();
+    mod_icon_lost();
     s.commands.Reset(); s.rtvs.Reset(); s.srvs.Reset(); s.fence.Reset(); s.device.Reset();
     if (s.fence_event) CloseHandle(s.fence_event);
     s.fence_event = nullptr;
@@ -286,7 +288,7 @@ bool setup_graphics() {
         return false;
     }
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap.NumDescriptors = 3; // ImGui's atlas, the map download card's icon, the menu's map pictures (upload_image)
+    heap.NumDescriptors = 4; // ImGui's atlas, the map download card's icon, the menu's map pictures, an item's mod icon (upload_image)
     heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     graphics_result = s.device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&s.srvs));
     if (FAILED(graphics_result)) {
@@ -588,8 +590,8 @@ void feed_menu_gamepad(bool menu_open) {
     }
 }
 
-// Pixels made into a texture in the SRV heap's slot `slot`: the map download card's icon (1) or
-// the menu's map pictures (2). Recorded on the frame's command list ahead of ImGui's draws, so
+// Pixels made into a texture in the SRV heap's slot `slot`: the map download card's icon (1),
+// the menu's map pictures (2) or the item card's mod icon (3). Recorded on the frame's command list ahead of ImGui's draws, so
 // the copy is done before anything samples it. Returns the texture's id for ImGui, or 0. Nothing
 // here is fatal: without it a card shows a plain tile.
 ImTextureID upload_image(State& s, const CardPixels& pixels, UINT slot, ComPtr<ID3D12Resource>& texture_out,
@@ -680,6 +682,15 @@ void upload_menu_map_image(State& s) {
     CardPixels pixels;
     if (!take_menu_map_pixels(pixels) || pixels.rgba.empty()) return;
     if (const auto id = upload_image(s, pixels, 2, s.menu_map_texture, s.menu_map_upload)) menu_map_pixels_uploaded(id, pixels.serial);
+}
+
+// The item card's mod icon (item_browser_overlay.cpp), when another is waiting.
+void upload_mod_icon(State& s) {
+    if (!s.device || !s.srvs) return;
+    if (s.mod_icon_texture && s.next_fence && !completed(s.next_fence, render_fence_timeout_ms)) return;
+    CardPixels pixels;
+    if (!take_mod_icon_pixels(pixels) || pixels.rgba.empty()) return;
+    if (const auto id = upload_image(s, pixels, 3, s.mod_icon_texture, s.mod_icon_upload)) mod_icon_uploaded(id, pixels.serial);
 }
 
 void render(IDXGISwapChain* presented, UINT flags) {
@@ -833,6 +844,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     }
     upload_card_image(s);
     upload_menu_map_image(s);
+    upload_mod_icon(s);
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = frame.buffer.Get();

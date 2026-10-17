@@ -62,6 +62,26 @@ void camera_controls(SkateMenu& menu, const Model& model, const CallbacksV3& cal
     if (debug.free_camera) note("Close the menu to fly. WASD / Q E move; hold the right mouse button to look.");
     if (!debug.camera_available) warn(debug.camera_unavailable.c_str());
     end_card();
+
+    // Keyframe smoothing (Extension/ReplayKeyframes/replay_keyframes.h).
+    begin_card(menu, "replay-editor", "REPLAY EDITOR");
+    bool keysmooth = model.keyframe_smoothing.enabled;
+    if (toggle_row(menu, "Keyframe smoothing",
+            "The free camera glides through its keys instead of changing speed at each one. Every key is still met, at its time.",
+            keysmooth, model.keyframe_smoothing.available && callbacks.queue_console_command))
+        send_console(menu, callbacks, keysmooth ? "keysmooth on" : "keysmooth off");
+    field(menu, "Smoothness", "100% is the smoothest that still meets every key; 0% the game's own curve.");
+    // Sent once it is let go: every change rebuilds the open replay's camera.
+    static int dragged = -1;
+    int smoothness = dragged >= 0 ? dragged : keyframe_smoothness_percent(model.keyframe_smoothing);
+    ImGui::BeginDisabled(!model.keyframe_smoothing.available || !model.keyframe_smoothing.enabled || !callbacks.queue_console_command);
+    if (::dingosdk::overlay::menu::slider_int("##keyframe-smoothness", &smoothness, 0, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp))
+        dragged = smoothness;
+    if (ImGui::IsItemDeactivatedAfterEdit() && dragged >= 0)
+        send_console(menu, callbacks, "keysmooth amount " + std::to_string(dragged / 100.0));
+    if (!ImGui::IsItemActive()) dragged = -1;
+    ImGui::EndDisabled();
+    end_card();
 }
 
 void first_person_controls(SkateMenu& menu, const Model& model, const CallbacksV3& callbacks) {

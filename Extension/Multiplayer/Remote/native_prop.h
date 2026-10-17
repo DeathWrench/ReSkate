@@ -24,6 +24,9 @@ std::string drone_models_status();
 // 1 the blueprint transform then the setter, 2 the blueprint transform alone. Empty name: stop.
 inline constexpr std::string_view prop_test_default = drone_model_stand_in;
 void request_prop_test(std::string blueprint, int mode);
+// A pretend other player flying a drone in front of the local skater (dronemodeltest remote), to
+// see their drone's model and marker without a second player. false lands it.
+void request_fake_remote_drone(bool fly);
 void tick_prop_test(std::uintptr_t base, std::uintptr_t client) noexcept;
 std::string prop_test_status();
 // Where the test's prop is now, while it runs (client update thread): drone_sound.cpp plays a

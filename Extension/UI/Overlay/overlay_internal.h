@@ -181,6 +181,8 @@ struct State {
     ComPtr<ID3D12Resource> card_texture, card_upload;
     // The menu's map pictures (menu_map_pictures.cpp) in the third slot, likewise.
     ComPtr<ID3D12Resource> menu_map_texture, menu_map_upload;
+    // The icon of the mod the highlighted item is from (item_browser_overlay.cpp), in the fourth.
+    ComPtr<ID3D12Resource> mod_icon_texture, mod_icon_upload;
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12Fence> fence;
     HANDLE fence_event = nullptr;
@@ -312,6 +314,10 @@ bool decode_picture(const std::string& png, CardPixels& out, UINT side);
 bool take_menu_map_pixels(CardPixels& pixels);
 void menu_map_pixels_uploaded(ImTextureID texture, unsigned serial);
 void menu_map_pixels_lost();
+// The item card's mod icon (item_browser_overlay.cpp), the same way, in the fourth slot.
+bool take_mod_icon_pixels(CardPixels& pixels);
+void mod_icon_uploaded(ImTextureID texture, unsigned serial);
+void mod_icon_lost();
 // Game debug text (game_text_overlay.cpp): polled every presented frame.
 bool game_text_pending();
 void draw_game_text();
