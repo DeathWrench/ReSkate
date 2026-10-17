@@ -320,13 +320,14 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
 endif()
 # Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h), one zip each in assets/builtin:
 # the FPV drone's model (tools/models/build_drone_pack.py; without it other players' drones use a
-# stand-in prop), and Fourth Studio's Board Break and Road Rash packs. A missing zip is left out.
+# stand-in prop). A missing zip is left out. (Mods that are content for ReSkate's features, such
+# as Board Break's decks, are official mods the launcher downloads: Launcher/official_mods.h.)
 # Each zip is made into a zstd pack by ReSkateBuiltinPacker as the build goes (again only when the
 # zip changes), which is what the DLL carries: compressed whole, a pack's repeated files cost
-# next to nothing (Board Break's ten decks).
+# next to nothing.
 set(dingosdk_builtin_rc "")
 set(dingosdk_builtin_packs "")
-foreach(pack IN ITEMS "FPV_DRONE fpv_drone" "BOARD_BREAK board_break" "ROAD_RASH road_rash")
+foreach(pack IN ITEMS "FPV_DRONE fpv_drone")
     separate_arguments(pack)
     list(GET pack 0 pack_resource)
     list(GET pack 1 pack_file)

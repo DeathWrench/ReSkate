@@ -1,6 +1,7 @@
 #include "gui_internal.h"
 
 #include "mod_manager.h"
+#include "official_mods.h"
 
 #include "Engine/Core/Log/logging.h"
 
@@ -167,6 +168,13 @@ bool rail(const Fonts& fonts, ModsPanel& panel, HWND window, float width,
             panel.profiles_loaded ? std::to_string(panel.profiles.list.size()) : std::string(), false, std::string()))
         panel.tab = 2;
     if (panel.tab == 2) default_focus();
+    {
+        const auto official = official_mods::snapshot();
+        if (nav_tile(fonts, width, "OFFICIAL", panel.tab == 3, std::to_string(official.mods.size()), false,
+                official.syncing ? std::string("Getting the official mods") : std::string()))
+            panel.tab = 3;
+        if (panel.tab == 3) default_focus();
+    }
 
     ImGui::Dummy(ImVec2(0, S(8)));
     if (!pending.empty()) {
@@ -1114,6 +1122,7 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
     const float body = ImGui::GetWindowHeight() - status;
     if (panel.tab == 1) browse_page(launcher, fonts, panel, body, installing);
     else if (panel.tab == 2) profiles_page(fonts, panel, window, body, installing);
+    else if (panel.tab == 3) official_page(fonts, panel, body);
     else installed_page(launcher, fonts, panel, installed, body, installing);
     if (!panel.message.empty()) {
         ImGui::SetCursorPosY(ImGui::GetWindowHeight() - status + S(8));

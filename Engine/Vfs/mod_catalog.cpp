@@ -142,11 +142,12 @@ std::vector<fs::path> deck_mod_folders() {
     const auto mods = engine_data_root() / L"Mods";
     std::error_code error;
     for (fs::directory_iterator at(mods, error), end; !error && at != end; at.increment(error))
-        if (at->is_directory(error) && !superseded_by_builtin(path_utf8(at->path().filename()))) found.push_back(at->path());
+        if (at->is_directory(error) && !kept_by_reskate(mods, path_utf8(at->path().filename()))) found.push_back(at->path());
     error.clear();
     for (fs::directory_iterator at(mods / std::string(builtin_folder), error), end; !error && at != end; at.increment(error))
         if (at->is_directory(error) && at->path().filename().wstring().find(L".unpacking-") == std::wstring::npos)
             found.push_back(at->path());
+    for (auto& official : official_packs(mods)) found.push_back(std::move(official.directory));
     return found;
 }
 // Every deck in the Mods folder with the folder of the mod that brings it, in the menus' order,
@@ -336,15 +337,18 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     try {
         for (const auto& name : list.missing)
             result.notes.push_back("mods.json names a folder that is not present: " + name);
-        // A mod a built-in pack replaces (builtin_packs.h) is left out, should the launcher not have
-        // taken it away yet: its content would load twice.
+        // A mod ReSkate keeps itself (an official mod, or one retired with it: builtin_packs.h) is
+        // left out, should the launcher not have taken it away yet: its content would load twice.
         std::erase_if(list.entries, [&](const ModEntry& entry) {
-            if (!superseded_by_builtin(entry.mod.name)) return false;
-            result.notes.push_back(entry.mod.name + " is built into ReSkate now; the installed copy is left out");
+            if (!kept_by_reskate(data_root / mods_folder, entry.mod.name)) return false;
+            result.notes.push_back(entry.mod.name + " is an official mod ReSkate keeps itself; the copy in the Mods folder is left out");
             return true;
         });
-        // After every installed mod, so none of theirs is ever shadowed by it; always on.
+        // After every installed mod, so none of theirs is ever shadowed by it; always on. Official
+        // mods (builtin_packs.h) the same way.
         for (const auto& pack : builtin)
+            list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
+        for (const auto& pack : official_packs(data_root / mods_folder))
             list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
         // Board Break: a deck pack holds several decks in one mod folder (mod_catalog.h). Each deck
         // inside becomes a mod of its own for the run, listed after the pack as <folder>#<deck>, so

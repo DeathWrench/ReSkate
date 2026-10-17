@@ -1,7 +1,6 @@
 #include "mod_manager.h"
 #include "text_encoding.h"
 
-#include "Engine/Vfs/builtin_packs.h"
 #include "Engine/Vfs/mod_list.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Platform/launcher_support.h"
@@ -402,31 +401,6 @@ std::string install(const fs::path& mods, const fs::path& source, bool replace,
     } catch (const fs::filesystem_error& failure) {
         fail(std::string("Install failed: ") + failure.what());
     }
-}
-
-std::vector<std::string> retire_superseded(const fs::path& mods) noexcept {
-    std::vector<std::string> retired;
-    try {
-        std::vector<std::pair<std::string, fs::path>> found;
-        std::error_code error;
-        for (fs::directory_iterator at(mods, error), end; !error && at != end; at.increment(error)) {
-            if (!at->is_directory(error)) continue;
-            const auto name = utf8(at->path().filename().wstring());
-            if (mods::superseded_by_builtin(name)) found.emplace_back(name, at->path());
-        }
-        for (const auto& [name, path] : found) {
-            try {
-                recycle(path);
-                retired.push_back(name);
-            } catch (...) {}
-        }
-        // mods.json keeps the rest as it was; a malformed one is left for the player to see.
-        if (!retired.empty()) {
-            const auto list = mods::scan_mods(mods.parent_path());
-            if (list.issue.empty()) mods::save_mod_order(mods, list.entries);
-        }
-    } catch (...) {}
-    return retired;
 }
 
 void remove(const fs::path& mods, const std::string& name) {

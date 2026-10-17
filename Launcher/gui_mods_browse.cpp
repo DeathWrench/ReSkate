@@ -1,6 +1,6 @@
 #include "gui_internal.h"
 #include "gui_renderer.h"
-#include "Engine/Vfs/builtin_packs.h"
+#include "official_mods.h"
 
 #include "mod_manager.h"
 #include "updater.h"
@@ -216,8 +216,8 @@ std::vector<const ts::Package*> visible_packages(const Store& store, const ts::I
         // or a category of that name. A deprecated one only shows once installed.
         if (nsfw(package)) continue;
         if (package.deprecated && !have) continue;
-        // ReSkate carries these itself now (Engine/Vfs/builtin_packs.h).
-        if (mods::superseded_by_builtin(ts::folder_for(package.full_name))) continue;
+        // Every player has the official mods already (official_mods.h).
+        if (official_mods::official(package.full_name)) continue;
         if (!store.category.empty() && !package.in_category(store.category)) continue;
         if (!query.empty() && lower(package.title()).find(query) == std::string::npos &&
             lower(package.owner).find(query) == std::string::npos &&
@@ -324,7 +324,7 @@ const thunderstore::Package* package_for(const Store& store, std::string_view fo
 std::vector<const thunderstore::Package*> updates(const Store& store, const thunderstore::Installed& installed) {
     std::vector<const ts::Package*> result;
     for (const auto& package : store.packages)
-        if (ts::update_available(package, installed) && !mods::superseded_by_builtin(ts::folder_for(package.full_name)))
+        if (ts::update_available(package, installed) && !official_mods::official(package.full_name))
             result.push_back(&package);
     return result;
 }
@@ -337,8 +337,8 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
         std::vector<thunderstore::Package> expanded;
         for (const auto& package : packages)
             for (auto& needed : thunderstore::with_dependencies(package, panel.store.packages, have))
-                // (A mod that needs Board Break or Road Rash has them built in: they are not installed.)
-                if (!mods::superseded_by_builtin(thunderstore::folder_for(needed.full_name)) &&
+                // (A mod that needs an official mod has it already: it is not installed again.)
+                if (!official_mods::official(needed.full_name) &&
                     std::none_of(expanded.begin(), expanded.end(),
                         [&](const auto& queued) { return queued.full_name == needed.full_name; }))
                     expanded.push_back(std::move(needed));
@@ -455,6 +455,50 @@ void pick(Store& store, const std::string& full_name, bool on) {
     const auto found = std::find(store.picked.begin(), store.picked.end(), full_name);
     if (on && found == store.picked.end()) store.picked.push_back(full_name);
     else if (!on && found != store.picked.end()) store.picked.erase(found);
+}
+
+void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
+    // (The listing gives their icons.)
+    refresh_listing(panel, ImGui::GetTime());
+    const auto state = official_mods::snapshot();
+    ImGui::PushTextWrapPos(0);
+    ImGui::TextDisabled("Every player has these, always on: ReSkate keeps them at their latest version from Thunderstore.");
+    const char* source = state.syncing ? "Getting them now..."
+        : state.source == "ReSkate" ? "The list comes from ReSkate."
+        : state.source == "the last list read" ? "ReSkate could not be reached: this is the last list it gave."
+        : state.source.empty() ? "" : "No list has been read yet: these are the ones ReSkate starts with.";
+    ImGui::TextDisabled("%s", source);
+    ImGui::PopTextWrapPos();
+    ImGui::Spacing();
+    ImGui::BeginChild("##official", ImVec2(0, std::max(S(80), height - ImGui::GetCursorPosY())), ImGuiChildFlags_NavFlattened);
+    const float icon = S(64);
+    for (const auto& mod : state.mods) {
+        ImGui::PushID(mod.full_name.c_str());
+        const auto* package = ts::find_package(panel.store.packages, mod.full_name);
+        const auto top = ImGui::GetCursorScreenPos();
+        mod_icon(panel, package, top, icon);
+        ImGui::SetCursorScreenPos(ImVec2(top.x + icon + S(14), top.y));
+        ImGui::BeginGroup();
+        ImGui::PushFont(fonts.bold);
+        ImGui::TextUnformatted(mod.title.c_str());
+        ImGui::PopFont();
+        const auto author = mod.full_name.substr(0, mod.full_name.find('-'));
+        const auto version = !mod.installed.empty() ? "v" + mod.installed : !mod.version.empty() ? "v" + mod.version : std::string("-");
+        ImGui::TextDisabled("%s  |  by %s  |  always on", version.c_str(), author.c_str());
+        const auto status = mod.working ? (mod.status.empty() ? std::string("Checking for an update...") : mod.status + "...")
+                                        : mod.status.empty() ? std::string("Waiting") : mod.status;
+        const bool fine = !mod.working && mod.status == "Up to date";
+        const bool trouble = !mod.working && !fine && !mod.status.empty();
+        ImGui::PushTextWrapPos(0);
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(fine ? color::good : trouble ? color::warning : color::muted), "%s", status.c_str());
+        if (!mod.description.empty()) ImGui::TextWrapped("%s", mod.description.c_str());
+        ImGui::PopTextWrapPos();
+        ImGui::EndGroup();
+        ImGui::SetCursorScreenPos(ImVec2(top.x, std::max(ImGui::GetCursorScreenPos().y, top.y + icon) + S(14)));
+        ImGui::PopID();
+    }
+    if (state.mods.empty()) ImGui::TextDisabled("%s", state.syncing ? "Reading the list..." : "There are no official mods right now.");
+    ImGui::EndChild();
 }
 
 void browse_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, float height, bool installing) {

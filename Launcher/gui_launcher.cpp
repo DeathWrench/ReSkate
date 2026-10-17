@@ -1,6 +1,7 @@
 #include "gui_internal.h"
 
 #include "depot_output.h"
+#include "official_mods.h"
 
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
@@ -511,6 +512,12 @@ bool Launcher::run_mod_merge() {
 }
 
 void Launcher::run_play() {
+    // The official mods first (official_mods.h): the merge takes them in.
+    if (!official_mods::wait(std::chrono::milliseconds(0))) {
+        set(Phase::merging, "Getting official mods", "Downloading the mods every player has", -1.0f);
+        if (!official_mods::wait(std::chrono::minutes(3)))
+            logging::write(logging::Level::warning, logging::Channel::launcher, "Official mods were still downloading; Skate starts without them");
+    }
     if (!ignore_mod_problems_ && !run_mod_merge()) return;
     ignore_mod_problems_ = false;
     set(Phase::launching, "Starting Skate");

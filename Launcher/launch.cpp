@@ -6,6 +6,7 @@
 #include "Engine/Vfs/world_layer_scan.h"
 #include "launch.h"
 #include "mod_manager.h"
+#include "official_mods.h"
 #include "text_encoding.h"
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/runtime.h"
@@ -468,10 +469,8 @@ Session open_session(const std::string& log_level) {
         logging::Channel::launcher, "File logging is unavailable; debugger output remains active.");
     logging::write(logging::Level::info, logging::Channel::launcher, L"ReSkate launcher starting");
     logging::write(logging::Level::info, logging::Channel::launcher, L"Current launch log: " + (session.paths.logs / L"ReSkate.log").wstring());
-    // Mods ReSkate now carries itself are taken away before anything reads the Mods folder.
-    for (const auto& name : launcher_mods::retire_superseded(launcher_mods::mods_root(session.paths.directory)))
-        logging::write(logging::Level::info, logging::Channel::launcher,
-            "Mod removed: " + name + " is built into ReSkate now (it is in the Recycle Bin)");
+    // The official mods, put in place on a thread of their own while the launcher opens (Play waits).
+    official_mods::start(launcher_mods::mods_root(session.paths.directory));
     return session;
 }
 
