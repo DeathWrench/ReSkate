@@ -121,8 +121,19 @@ int main() {
     }
     check(conflict, "Installing over an installed mod asks first");
     make_zip(sources / L"v2.zip", {{"Cool Park/layout.toc", "toc v2"}});
+    // A file of the installed copy held open: the replacement is refused and the copy stays whole.
+    {
+        const auto held = CreateFileW((mods / L"Cool Park" / L"layout.toc").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        bool refused = false;
+        try { install(mods, sources / L"v2.zip", true); } catch (const std::exception&) { refused = true; }
+        CloseHandle(held);
+        check(refused && read(mods / L"Cool Park" / L"layout.toc") == "toc" && !fs::exists(mods / L".reskate-install"),
+              "A copy in use is not replaced, and stays as it was");
+    }
     check(install(mods, sources / L"v2.zip", true) == "Cool Park" && read(mods / L"Cool Park" / L"layout.toc") == "toc v2",
           "Replacing installs the new copy");
+    check(!fs::exists(mods / L".reskate-install"), "The replaced copy is deleted, not left beside the mods");
     {
         std::atomic<bool> cancel{};
         unsigned callbacks{};

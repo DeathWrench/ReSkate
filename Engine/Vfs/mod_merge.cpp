@@ -503,6 +503,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                 used.emplace(installChunk, archive == CasStore::waiting_archive ? manifestArchive : archive);
             report.mergedBundles += job.report.mergedBundles;
             report.mergedAssets += job.report.mergedAssets;
+            report.unchangedCopies += job.report.unchangedCopies;
             report.notes.insert(report.notes.end(), std::make_move_iterator(job.report.notes.begin()),
                                 std::make_move_iterator(job.report.notes.end()));
             for (auto& [mod, problems] : job.report.problems) {

@@ -120,12 +120,22 @@ bool nav_tile(const Fonts& fonts, float width, const char* label, bool selected,
 float badge_width(const Fonts& fonts, const std::string& text);
 void badge(ImDrawList* draw, const Fonts& fonts, ImVec2 position, const std::string& text,
            ImU32 fill = color::blue, ImU32 ink = color::ink);
+// How tall `text` is in `font`, wrapped at `wrap` (0: not wrapped); 0 for no text.
+float text_height(ImFont* font, float wrap, const std::string& text);
+// A page's banner, as wide as the page: its heading with a blue pill beside it (`pill` may be
+// empty), a line on what the page is for, and at the right how things stand: a pill in
+// `status_fill`, with `caption` under it (either may be empty). Leaves the cursor under it.
+void page_banner(const Fonts& fonts, const char* heading, const char* pill, const std::string& about,
+                 const std::string& status = {}, ImU32 status_fill = color::good, const std::string& caption = {});
+// A card behind what a page draws on it: lighter edged while hovered, with a blue edge when `marked`.
+void card(ImDrawList* draw, ImVec2 start, ImVec2 size, bool marked = false);
 // A caption over its value: the detail lines of an open list row.
 void field(const Fonts& fonts, const char* name, const std::string& value);
-// One row of a mod list: its background, a hover tint, a rule under it and a
-// blue edge when it is ticked. Returns true when the row itself was clicked,
+// One row of a mod list, `height` tall: a card, lighter edged while hovered, with a blue edge
+// when it is ticked. Leave a gap under it (row_gap). Returns true when the row itself was clicked,
 // which opens the mod's overview; the widgets drawn over it keep their clicks.
 bool list_row(const char* id, float width, float height, bool ticked);
+inline float row_gap() { return S(8); }
 // An on/off switch, blue while on. Returns true when it was flipped.
 bool toggle(const char* id, bool* on);
 // A square button with three dots, for a row's menu.

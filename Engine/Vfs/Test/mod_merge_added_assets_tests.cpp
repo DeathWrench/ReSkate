@@ -395,6 +395,27 @@ void two_music_mods_both_carried_into_maps_copy(int baseline) {
            std::to_string(files) + " vs " + std::to_string(baseline + 6));
 }
 
+// Two mods edit the playlist and two others carry the game's copy of the bundle untouched. Only
+// the copies equal to the game's are left out for combining: every test/other, but neither edit
+// of the playlist (the carriers' playlists take the edits, so they are not the game's either).
+void copies_equal_to_the_games_are_not_edits() {
+    Fixture fixture("untouched-copies");
+    const std::vector<Ebx> music1{{"test/playlist", 1, ebx_document(guid(1), {guid(10)})},
+                                  {"test/other", 0, ebx_document(guid(2), {})},
+                                  {"test/song1", 0, ebx_document(guid(10), {})}};
+    const std::vector<Ebx> music2{{"test/playlist", 2, ebx_document(guid(1), {guid(20)})},
+                                  {"test/other", 0, ebx_document(guid(2), {})},
+                                  {"test/song2", 0, ebx_document(guid(20), {})}};
+    fixture.add("carrier1", false, shared_toc, {}, game_copy());
+    fixture.add("music1", false, shared_toc, {}, music1);
+    fixture.add("music2", false, shared_toc, {}, music2);
+    fixture.add("carrier2", false, shared_toc, {}, game_copy());
+    const auto report = mods::merge_mods(fixture.catalog);
+    expect(report.issue.empty() && report.built, "untouched copies: the merge builds the patch\n" + describe(report));
+    expect(report.unchangedCopies == 4, "untouched copies: " + std::to_string(report.unchangedCopies) +
+                                            " copies equal to the game's were left out, not 4");
+}
+
 // The game keeps the playlist in a second bundle too, as it keeps the music playlist in eight. A
 // mod that ships its own copy of that one (it changed something else in it) takes the music mod's
 // playlist there. The song, its wave and the wave's resource were added beside the playlist in
@@ -465,6 +486,7 @@ int main() try {
     same_name_from_two_mods(true);
     same_name_from_two_mods(false);
     two_music_mods_both_carried_into_maps_copy(baseline);
+    copies_equal_to_the_games_are_not_edits();
     carried_into_another_bundle_with_the_list(true);
     carried_into_another_bundle_with_the_list(false);
     if (failures) {

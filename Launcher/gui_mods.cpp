@@ -496,6 +496,25 @@ void installed_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, co
                     float height, bool installing) {
     auto& entries = panel.list.entries;
     const float top = ImGui::GetCursorPosY();
+    {
+        const auto enabled = std::count_if(entries.begin(), entries.end(), [](const auto& entry) { return entry.enabled; });
+        const auto problems = std::count_if(entries.begin(), entries.end(), [&](const auto& entry) {
+            return !entry.mod.outdated.empty() || (entry.enabled && panel.list.excluded.contains(entry.mod.name));
+        });
+        const auto waiting = std::count_if(entries.begin(), entries.end(),
+            [&](const auto& entry) { return update_waiting(panel, installed, entry.mod.name); });
+        std::uint64_t bytes{};
+        for (const auto& [name, size] : panel.sizes) bytes += size;
+        auto caption = std::format("{} {}  /  {} on", entries.size(), entries.size() == 1 ? "mod" : "mods", enabled);
+        if (bytes) caption += "  /  " + size_text(bytes);
+        page_banner(fonts, "MY MODS", nullptr,
+            "Your installed mods. They load top to bottom: where two change the same thing, the higher one wins. "
+            "Changes apply the next time Skate starts.",
+            problems ? std::format("{} {}", problems, problems == 1 ? "PROBLEM" : "PROBLEMS")
+                : waiting ? std::format("{} {} WAITING", waiting, waiting == 1 ? "UPDATE" : "UPDATES")
+                : entries.empty() ? std::string("NONE YET") : std::string("ALL GOOD"),
+            problems ? color::danger : waiting ? color::blue : entries.empty() ? color::tile_grey : color::good, caption);
+    }
 
     // ------------------------------------------------ search, filter, order, refresh
     const float combo = S(170), refresh = S(110);
@@ -555,11 +574,9 @@ void installed_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, co
         return bytes;
     };
     if (panel.marked.empty()) {
-        const auto enabled = std::count_if(entries.begin(), entries.end(), [](const auto& entry) { return entry.enabled; });
-        auto line = std::format("{} {}  /  {} enabled", entries.size(), entries.size() == 1 ? "mod" : "mods", enabled);
-        if (const auto bytes = total([](const std::string&) { return true; })) line += "  /  " + size_text(bytes);
-        if (view.size() != entries.size()) line += std::format("  /  {} shown", view.size());
-        ImGui::TextDisabled("%s", line.c_str());
+        ImGui::TextDisabled("%s", view.size() != entries.size()
+            ? std::format("{} of {} shown", view.size(), entries.size()).c_str()
+            : "Tick mods to change several at once. Shift-click ticks a run of them, Ctrl+A every one.");
     } else {
         const std::vector<std::string> names(panel.marked.begin(), panel.marked.end());
         auto line = std::format("{} selected", names.size());
@@ -626,9 +643,8 @@ void installed_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, co
     ImGui::Spacing();
 
     // ------------------------------------------------ the list, and under it how its order works
-    const float hint = ImGui::GetTextLineHeightWithSpacing();
-    const float body = std::max(S(120), height - (ImGui::GetCursorPosY() - top) - hint);
-    ImGui::BeginChild("##mod_list", ImVec2(0, body), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
+    const float body = std::max(S(120), height - (ImGui::GetCursorPosY() - top));
+    ImGui::BeginChild("##mod_list", ImVec2(0, body), ImGuiChildFlags_NavFlattened);
     const auto note = [](const char* first, const char* second = nullptr) {
         ImGui::Spacing();
         ImGui::Indent(S(14));
@@ -640,16 +656,14 @@ void installed_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, co
         note(panel.list.present ? "No mods installed yet." : "No Mods folder yet.",
              "Use GET MODS to browse Thunderstore, or drop a mod .zip on the window.");
     else if (view.empty()) note("No mods match.");
-    const float row = S(68);
+    const float row = S(72) + row_gap();
     ImGui::BeginDisabled(installing);
-    virtual_rows(static_cast<int>(view.size()), [&](int) { return row; }, [&](int position, float tall) {
-        installed_row(fonts, panel, installed, view, position, tall, reorder, request);
+    virtual_rows(static_cast<int>(view.size()), [&](int) { return row; }, [&](int position, float slot) {
+        installed_row(fonts, panel, installed, view, position, slot - row_gap(), reorder, request);
     });
     ImGui::EndDisabled();
     keep_focus_in_list();
     ImGui::EndChild();
-    ImGui::TextDisabled("Mods load top to bottom: where two change the same thing, the higher one wins. "
-                        "Changes apply the next time Skate starts.");
 
     // Ctrl+A and Delete, as in a file list, while nothing is being typed.
     if (!installing && !ImGui::GetIO().WantTextInput && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
@@ -1219,7 +1233,7 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
     ImGui::SetNextWindowSize(ImVec2(S(440), 0));
     if (ImGui::BeginPopupModal("Replace mod", nullptr, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
         ImGui::PushTextWrapPos(0);
-        ImGui::Text("\"%s\" is already installed. Replace it? The installed copy goes to the Recycle Bin.",
+        ImGui::Text("\"%s\" is already installed. Replace it? The installed copy is deleted.",
             panel.conflict_name.c_str());
         ImGui::PopTextWrapPos();
         ImGui::Spacing();

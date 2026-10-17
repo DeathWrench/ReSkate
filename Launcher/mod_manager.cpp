@@ -225,16 +225,27 @@ private:
     fs::path path_;
 };
 
-// Moves the finished staging folder into place, replacing only when asked.
+// Moves the finished staging folder into place, replacing only when asked. The copy it
+// replaces (an update, mostly) is deleted for good rather than recycled: it is moved aside
+// into the staging folder first, so a new copy that cannot go in leaves the old one where it was.
 void commit(const fs::path& mods, const Staging& staging, const std::string& name, bool replace) {
     const auto target = mods / from_utf8(name);
     std::error_code error;
+    fs::path aside;
     if (fs::exists(target, error)) {
         if (!replace) throw AlreadyInstalled(name);
-        recycle(target);
+        aside = staging.path().parent_path() / (from_utf8(name).wstring() + L".replaced");
+        fs::remove_all(aside, error);
+        if (!MoveFileExW(target.c_str(), aside.c_str(), MOVEFILE_WRITE_THROUGH))
+            fail("Could not replace " + name + ": close anything using its files (the game, an editor) and try again.");
     }
-    if (!MoveFileExW(staging.path().c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH))
-        fail("Could not move the mod into the Mods folder (Windows error " + std::to_string(GetLastError()) + ").");
+    if (!MoveFileExW(staging.path().c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH)) {
+        const auto code = GetLastError();
+        if (!aside.empty()) MoveFileExW(aside.c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH);
+        fail("Could not move the mod into the Mods folder (Windows error " + std::to_string(code) + ").");
+    }
+    // (Whatever of it cannot be deleted now goes with the staging folder.)
+    if (!aside.empty()) fs::remove_all(aside, error);
 }
 
 // miniz is built without stdio, so the archive is read through a handle.
