@@ -158,6 +158,11 @@ struct State {
     HANDLE provider_event = nullptr;
     void* dll_notification_cookie = nullptr;
     Hook factory, create, create_hwnd, present, present1, resize, resize1, fullscreen;
+    // The same four of other swapchain implementations: DXGI's own under a wrapper the game
+    // was given (Streamline's), which is what presents when something else presents for the
+    // game (Intel's frame generation does).
+    static constexpr std::size_t more_swapchains = 3;
+    std::array<Hook, more_swapchains> present_more, present1_more, resize_more, resize1_more;
     Hook clip_cursor, set_cursor_pos;
     std::vector<Binding> bindings;
     IUnknown* swapchain_identity = nullptr;
@@ -174,6 +179,8 @@ struct State {
     // The map download card's icon (map_download_card.cpp), in the SRV heap's second slot, and
     // the buffer it was uploaded from, which lives until the next one replaces it.
     ComPtr<ID3D12Resource> card_texture, card_upload;
+    // The menu's map pictures (menu_map_pictures.cpp) in the third slot, likewise.
+    ComPtr<ID3D12Resource> menu_map_texture, menu_map_upload;
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12Fence> fence;
     HANDLE fence_event = nullptr;
@@ -280,9 +287,15 @@ void draw_notices();
 // chat_pending also refreshes the feed, so it runs every presented frame.
 bool chat_pending();
 void draw_chat();
+// The message to say OK to (message_card.cpp): whether one is up, and drawing it.
+bool message_pending();
+void draw_message();
 // The map download card (map_download_card.cpp): whether there is one this frame, and drawing it.
 bool map_download_pending();
 void draw_map_download();
+// The vote for the next map as its popup: the maps to pick from. False when it is not up (it
+// was answered or closed, or the vote is over), and the vote is drawn as the poll it is.
+bool draw_map_vote(const MultiplayerVote& vote);
 // Its icon on the way to the GPU: decoded pixels the render thread takes once, then says where
 // they went; lost when the device is torn down, after which they are handed out again.
 struct CardPixels {
@@ -293,9 +306,18 @@ struct CardPixels {
 bool take_card_pixels(CardPixels& pixels);
 void card_image_uploaded(ImTextureID texture, unsigned serial);
 void card_image_lost();
+// Decodes a PNG to RGBA; with `side`, scaled to a square of that many pixels.
+bool decode_picture(const std::string& png, CardPixels& out, UINT side);
+// The menu's map pictures (menu_map_pictures.cpp), the same way, in the SRV heap's third slot.
+bool take_menu_map_pixels(CardPixels& pixels);
+void menu_map_pixels_uploaded(ImTextureID texture, unsigned serial);
+void menu_map_pixels_lost();
 // Game debug text (game_text_overlay.cpp): polled every presented frame.
 bool game_text_pending();
 void draw_game_text();
+// The FPV drone's goggle display and stick overlay (drone_hud_overlay.cpp): polled every presented frame.
+bool drone_hud_pending();
+void draw_drone_hud();
 // ReSkate's S.K.A.T.E. throwdown HUD (skate_hud_overlay.cpp): polled every presented frame.
 bool skate_hud_pending();
 void draw_skate_hud();

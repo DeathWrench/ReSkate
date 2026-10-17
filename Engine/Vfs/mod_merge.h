@@ -17,6 +17,7 @@ struct MergeReport {
     std::size_t superbundles{};         // superbundle TOCs written
     std::size_t mergedBundles{};        // bundles combined from two or more mods
     std::size_t mergedAssets{};         // EBX assets two or more mods had both edited
+    std::size_t unchangedCopies{};      // mods' asset copies equal to the game's, not kept for combining
     std::size_t archives{};             // cas files linked in
     std::string issue;                  // non-empty when nothing was produced
     std::vector<std::string> notes;

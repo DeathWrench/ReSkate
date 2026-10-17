@@ -110,6 +110,9 @@ std::string ascii_path(const std::filesystem::path& path);
 // malformed, `issue` says why and `entries` still lists the folders (all
 // shown as enabled) so a manager can offer to rewrite it.
 ModList scan_mods(const std::filesystem::path& data_root) noexcept;
+// One mod folder as scan_mods reads it: its layout, levels, parks, info files and build stamp.
+// `name` is how it is known (for a folder under Mods/, the folder's name). Throws on I/O errors.
+Mod describe_mod(const std::filesystem::path& directory, std::string name, std::vector<std::string>& notes);
 
 // Writes mods.json for `entries` in order, replacing the file atomically.
 // Throws with a readable message on failure.

@@ -127,6 +127,9 @@ bool Renderer::init(HWND window) {
             "Launcher renderer: this driver cannot create the Direct3D 12 pipeline the window draws with.");
         return false;
     }
+    if (!ImGui_ImplDX12_HasOutputTransfer())
+        logging::write(logging::Level::info, logging::Channel::launcher,
+            "Launcher renderer: drawing with ImGui's stock shader; this system could not build the HDR-aware one.");
     return true;
 }
 
@@ -159,6 +162,19 @@ void Renderer::render() {
     queue_->Signal(fence_.Get(), ++fence_value_);
     frame.fence_value = fence_value_;
     ++frame_index_;
+}
+
+void Renderer::resize(UINT width, UINT height) {
+    if (!swap_ || !width || !height) return;
+    queue_->Signal(fence_.Get(), ++fence_value_);
+    wait(fence_value_);
+    for (auto& target : targets_) target.resource.Reset();
+    if (FAILED(swap_->ResizeBuffers(frame_count, width, height, DXGI_FORMAT_UNKNOWN,
+            DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT)))
+        logging::write(logging::Level::warning, logging::Channel::launcher, "Launcher renderer: the window's buffers could not be resized.");
+    for (UINT index = 0; index < frame_count; ++index)
+        if (SUCCEEDED(swap_->GetBuffer(index, IID_PPV_ARGS(&targets_[index].resource))))
+            device_->CreateRenderTargetView(targets_[index].resource.Get(), nullptr, targets_[index].handle);
 }
 
 ImTextureID Renderer::upload_texture(const std::vector<unsigned char>& pixels, UINT width, UINT height) {

@@ -84,11 +84,16 @@ bool teleport_local_skater(const std::array<float, 3>& position);
 // `bottom`, from the client physics world (the park editor's native ray). Empty when nothing
 // is there yet (collision still streaming) or the query is unavailable. Client update thread.
 std::optional<float> local_ground_height(float x, float z, float top, float bottom);
+// The first collision surface along the line from `from` to `to` (world positions), from the same
+// client physics world. Empty when the line is clear, collision is still streaming, or the query
+// is unavailable. Client update thread.
+std::optional<std::array<float, 3>> local_surface_hit(const std::array<float, 3>& from, const std::array<float, 3>& to);
 // Small allowlisted progression commands, executed on the game update thread.
 bool set_local_progression(const std::vector<std::string>& arguments);
 // Small ReSkate-owned booleans saved beside the profile under a "ReSkate."
 // prefix. Absent until first written; never exposed to the game's own settings.
 namespace profile_runtime {
+bool local_profile_store_ready() noexcept;
 std::optional<bool> local_preference(std::string_view key) noexcept;
 void set_local_preference(std::string_view key, bool value) noexcept;
 // The same "ReSkate." store for numbers and text. A key keeps the type it was
@@ -97,8 +102,17 @@ std::optional<Json> local_value(std::string_view key) noexcept;
 void set_local_values(const std::vector<std::pair<std::string, Json>>& values) noexcept;
 // ReSkate menu scale, clamped to a legible range. Cached so the overlay can
 // read it every frame without touching the database.
-float local_menu_scale() noexcept;
-bool set_local_menu_scale(float value) noexcept;
+// The ReSkate menu's size: the window's, or (`fullscreen`) the full screen menu's.
+float local_menu_scale(bool fullscreen = false) noexcept;
+bool set_local_menu_scale(float value, bool fullscreen = false) noexcept;
+// Whether the ReSkate menu fills the screen (made for a controller) or is a window. Cached likewise.
+bool local_menu_fullscreen() noexcept;
+void set_local_menu_fullscreen(bool fullscreen) noexcept;
+// The game's camera height option (UseHighCam, true is the high camera) as the game writes it,
+// which its camera height button does: the listener returns the height to keep instead. Runs on
+// the thread that writes the option.
+using CameraHeightWrite = bool (*)(bool high) noexcept;
+void set_camera_height_write_listener(CameraHeightWrite listener) noexcept;
 }
 PlayerCardModel local_profile_player_card();
 // Renames only the local RIP Card. An empty name restores the Steam name.

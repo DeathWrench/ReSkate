@@ -62,6 +62,12 @@ bool music_ui_current(const MusicUiPending& pending);
 CosmeticShared music_ui_lease(const MusicUiPending& pending);
 
 bool music_ui_text(std::string_view value, std::size_t limit = 255);
+// The most songs the music screen is given, and the most places songs have in playlists: over
+// either, music_ui_catalog_valid turns the whole list down and the screen is empty. The rows of
+// the player's own playlists (Spotify, YouTube Music, their files) are held under them
+// (local_music_assets.cpp): a few large playlists went over the old thousand (2026-10-13).
+// (Two thousand songs: the screen's own table of songs is read only up to 2048, music_ui_context.)
+inline constexpr std::size_t music_ui_most_songs = 2000, music_ui_most_places = 16384;
 
 bool music_ui_catalog_valid(const MusicCatalog& catalog, const std::string& favorites);
 
@@ -89,5 +95,13 @@ void music_ui_initialize_hook(std::uint64_t all, std::uint64_t hidden, std::uint
     const std::uint32_t* handle, const void* callback);
 
 void update_music_catalog();
+// The Spotify station (spotify_station.h): the cover of its song in the music screen is what
+// Spotify is playing while the station is on, and the song's own again when it is left.
+void update_spotify_cover();
+// The music screen's playlists and songs are given to it again as they are now (a playlist
+// the player has just added, in the setup page, is then there without the game being started
+// again). Any thread asks; it is done by the thread that fills the screen. (Being tried.)
+void request_music_catalog_refresh() noexcept;
+void update_music_catalog_refresh();
 
 }

@@ -47,6 +47,8 @@ void register_multiplayer_commands(Commands &registry) {
                           Command{"chat-bubbles-history", "How many recent messages stack above a skater (1-8)"},
                           Command{"score-check", "Host: keep players whose mods change scoring or physics out of throwdowns and "
                                                  "coop challenges (on, off, toggle; on by default)"},
+                          Command{"objects-solid", "Make a player's placed objects solid for you, or ghosts you pass through: "
+                                                   "<SteamID64, or server for a dedicated server's own> on|off"},
                           Command{"retry", "Retry remote skater creation after an error"},
                           Command{"test", "Test a Steam socket-pair round trip"},
                           Command{"status", "Show multiplayer connection and animation status"}}) {
@@ -75,7 +77,8 @@ void register_multiplayer_commands(Commands &registry) {
         if (std::string_view(c.name) == "chat-bubbles-history")
             args.push_back(argument("lines"));
         if (std::string_view(c.name) == "chat" || std::string_view(c.name) == "server" || std::string_view(c.name) == "party" ||
-            std::string_view(c.name) == "tp" || std::string_view(c.name) == "tphere") {
+            std::string_view(c.name) == "tp" || std::string_view(c.name) == "tphere" ||
+            std::string_view(c.name) == "objects-solid") {
             auto message = argument("message");
             message.rest = true;
             args.push_back(std::move(message));
@@ -102,7 +105,7 @@ void register_multiplayer_commands(Commands &registry) {
                           "(default). Off, or players outside your party: the game's plain player dots",
                           Group::gameplay, {std::move(markers_choice)});
     markers.run = [](const Model &, const Values &values, const Output &out) {
-        const auto &choice = std::get<std::string>(values[0]);
+        const auto &choice = values.empty() ? std::string{} : std::get<std::string>(values[0]);
         if (choice == "on" || choice == "off") multiplayer::set_native_party_map_markers(choice == "on");
         else if (!choice.empty()) {
             out("error: Choose on or off.");
@@ -144,7 +147,7 @@ void register_multiplayer_commands(Commands &registry) {
                           Group::gameplay, {std::move(saving_name), std::move(saving_choice)});
     savings.run = [](const Model &, const Values &values, const Output &out) {
         using multiplayer::PuppetSaving;
-        const auto &name = std::get<std::string>(values[0]);
+        const auto &name = values.empty() ? std::string{} : std::get<std::string>(values[0]);
         const auto &choice = values.size() > 1 ? std::get<std::string>(values[1]) : std::string{};
         if (!name.empty()) {
             static const std::array<std::pair<std::string_view, PuppetSaving>, 3> names{{
@@ -175,7 +178,7 @@ void register_multiplayer_commands(Commands &registry) {
                       "The S.K.A.T.E. throwdown HUD: ReSkate's (default) or the game's own debug text",
                       Group::gameplay, {std::move(hud_choice)});
     hud.run = [](const Model &, const Values &values, const Output &out) {
-        const auto &choice = std::get<std::string>(values[0]);
+        const auto &choice = values.empty() ? std::string{} : std::get<std::string>(values[0]);
         if (choice == "reskate" || choice == "game") multiplayer::set_skate_hud_reskate(choice == "reskate");
         else if (!choice.empty()) {
             out("error: Choose reskate or game.");
@@ -189,7 +192,7 @@ void register_multiplayer_commands(Commands &registry) {
                            "S.K.A.T.E.: wait for your turn on foot, off the board (default on)",
                            Group::gameplay, {std::move(offboard_choice)});
     offboard.run = [](const Model &, const Values &values, const Output &out) {
-        const auto &choice = std::get<std::string>(values[0]);
+        const auto &choice = values.empty() ? std::string{} : std::get<std::string>(values[0]);
         if (choice == "on" || choice == "off") multiplayer::set_throwdown_offboard(choice == "on");
         else if (!choice.empty()) {
             out("error: Choose on or off.");

@@ -46,7 +46,7 @@ struct Asset {
 // Where one contributor's copy of an asset lives, so conflicting copies can be
 // fetched and combined later.
 struct Contribution {
-    fs::path root;
+    const fs::path* root{};    // the source's folder, in `sources` or baseRoot: neither moves while combine runs
     fb::BundleFileInfo file;   // still pointing at the archive it came from
     fb::Sha1 sha1;
     std::vector<std::byte> resourceMeta;
@@ -112,7 +112,7 @@ struct BundleState {
     // are asset paths that share long beginnings, which an ordered map compares
     // byte by byte at every step, and nothing reads these in key order.
     std::unordered_map<std::string, std::size_t> seen;
-    // Every copy of an asset more than one source supplies, base included.
+    // Each source's copy of an asset, base first; a mod's copy equal to the base's first is left out.
     std::unordered_map<std::string, std::vector<Contribution>> history;
     // The base's own sha1 for each asset, so a mod that merely carries an
     // unchanged copy can be told apart from one that changed it.
@@ -120,6 +120,12 @@ struct BundleState {
     // Assets a mod added that a higher-priority mod's different asset of the
     // same name then replaced: the key, and the sha1 of the copy that went.
     std::vector<std::pair<std::string, fb::Sha1>> displaced;
+
+    // Whether `sha1` is the game's first copy of `key`: the copy edits are combined onto.
+    [[nodiscard]] bool matches_game_copy(const std::string& key, const fb::Sha1& sha1) const {
+        const auto copies = history.find(key);
+        return copies != history.end() && copies->second.front().base && copies->second.front().sha1 == sha1;
+    }
 };
 
 // The guids of the EBX a merged bundle ends up holding, to tell whether what a
@@ -370,8 +376,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             else if (addition.asset.kind == fb::AssetKind::resource)
                 companions.emplace(std::tuple{bundleName, addition.mod, lower(addition.asset.name)}, &addition);
         }
-    // Where an addition's payload already went in this superbundle's patch
-    // archive, by install chunk: every copy that is given it reads the one.
+    // The carried place each addition got in this superbundle, by install chunk.
     std::map<std::pair<std::uint32_t, const AssetAddition*>, fb::BundleFileInfo> carriedAt;
     // The names any mod changed, to rule the rest out without a copy of each (name_hash).
     std::unordered_set<std::uint64_t> changedNames, scriptNames;
@@ -615,7 +620,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         auto placed = carriedAt.find({installChunk, addition});
                         if (placed == carriedAt.end())
                             placed = carriedAt.emplace(std::pair{installChunk, addition},
-                                store.write(installChunk, manifestArchive, addition->encoded)).first;
+                                store.carry(installChunk, manifestArchive, addition->encoded)).first;
                         additions.push_back({addition->asset, placed->second});
                         addedFrom.insert(addition->mod);
                     } catch (const std::exception& error) {
@@ -748,8 +753,11 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             // (the item collections every cosmetic mod adds its items to) fell back
             // to one mod's copy.
             const bool rewritten = firstFile + position < inPatch.size() && inPatch[firstFile + position];
-            if (!rewritten && (entry.asset.kind == fb::AssetKind::ebx ||
-                               entry.asset.kind == fb::AssetKind::resource)) {
+            // A mod's copy that is the game's adds nothing: the game's copy is recorded, first.
+            const bool combinable = !rewritten && (entry.asset.kind == fb::AssetKind::ebx || entry.asset.kind == fb::AssetKind::resource);
+            if (combinable && !isBase && state.matches_game_copy(id, entry.asset.sha1)) {
+                ++report.unchangedCopies;
+            } else if (combinable) {
                 // The contributor's own copy still sits at its original offset in
                 // its own folder, which is where a later merge reads it from.
                 auto unshifted = entry.file;
@@ -757,7 +765,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                     if (const auto* directory = store.find_directory(unshifted.location.installChunk))
                         unshift(*placement, *directory, unshifted.location.archive, unshifted.offset);
                 state.history[id].push_back(
-                    {root, unshifted, entry.asset.sha1, entry.asset.resourceMeta, isBase});
+                    {&root, unshifted, entry.asset.sha1, entry.asset.resourceMeta, isBase});
             }
             if (isBase) state.baseSha.insert_or_assign(id, entry.asset.sha1);
             const auto at = state.seen.find(id);
@@ -823,7 +831,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             // base install, whichever mod's copy referenced it.
             const auto decode = [&](const Contribution& from) {
                 return fb::decode_cas(
-                    store.read(from.file.location.patch ? from.root : baseRoot,
+                    store.read(from.file.location.patch ? *from.root : baseRoot,
                                from.file.location, from.file.offset, from.file.size),
                     {gameRoot});
             };
@@ -885,7 +893,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                             if (!count++) example = clash.path + " and " + clash.holder;
                         }
                         for (const auto& [index, clash] : shadowed)
-                            report.notes.push_back(path_utf8(edits[index]->root.filename()) + ": " +
+                            report.notes.push_back(path_utf8(edits[index]->root->filename()) + ": " +
                                 std::to_string(clash.first) + " preset(s) share a short name with another mod's, e.g. " +
                                 clash.second + "; they are registered by their full path only");
                     } else if (shaderTable) {
@@ -946,7 +954,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         fb::ebx::MergeSummary summary;
                         auto combined = fb::ebx::merge_documents(baseDocument, pointers, &summary,
                                                                  itemList ? inBundle : notReplaced);
-                        const auto mod_of = [&](std::size_t edit) { return path_utf8(edits[edit]->root.filename()); };
+                        const auto mod_of = [&](std::size_t edit) { return path_utf8(edits[edit]->root->filename()); };
                         if (summary.dropped.empty() && !summary.instances && !summary.arrayEntries) {
                             // One mod's copy with nothing to leave out stays as that mod wrote it.
                             if (edits.size() < 2) continue;

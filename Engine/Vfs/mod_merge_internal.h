@@ -64,6 +64,10 @@ struct ArchivePlacement {
         std::uint64_t offset{};
     };
     std::map<std::pair<std::string, std::uint16_t>, Spot> at;
+    // The mod's files as they were when its archives were placed (mod_fingerprint). A merge
+    // while the game runs places a mod again when they have changed since: one updated, or
+    // removed and installed again at another version, is not read where the old one lay.
+    std::string fingerprint;
 };
 
 // Reverses CasStore::shift: turns a placement in the merged patch back into the
@@ -128,11 +132,19 @@ public:
     // own has been settled, settle() appends what it holds to the real archives, and
     // settled() then moves a placement that points into it to where that went.
     static constexpr std::uint16_t waiting_archive = 0xFFFF;
+    // A carried payload, by its index in the waiting store's list: settle() writes it once per install chunk.
+    static constexpr std::uint16_t carried_archive = 0xFFFE;
     [[nodiscard]] CasStore waiting() const;
-    [[nodiscard]] bool holding() const noexcept { return !held_.empty(); }
-    [[nodiscard]] static bool waits(const fb::CasIdentifier& location) noexcept {
-        return location.patch && location.archive == waiting_archive;
+    [[nodiscard]] bool holding() const noexcept { return !held_.empty() || !carried_.empty(); }
+    [[nodiscard]] static bool placeholder(std::uint16_t archive) noexcept {
+        return archive == waiting_archive || archive == carried_archive;
     }
+    [[nodiscard]] static bool placeholder(const fb::CasIdentifier& location) noexcept {
+        return location.patch && placeholder(location.archive);
+    }
+    // A waiting store only. The bytes must stay valid until settle().
+    [[nodiscard]] fb::BundleFileInfo carry(std::uint32_t installChunk, std::uint16_t archive,
+                                           std::span<const std::byte> encoded);
     void settle(CasStore& waiting);
     // True when the placement was one of this waiting store's; it now names the archive.
     bool settled(fb::CasIdentifier& location, std::uint32_t& offset) const;
@@ -156,6 +168,15 @@ private:
     bool waiting_{};
     std::optional<std::uint16_t> archive_;
     std::map<std::wstring, Held> held_;
+    // Carried payloads (waiting store) and where each landed (settling store).
+    struct Carried {
+        std::uint32_t installChunk{};
+        fb::Sha1 sha1;
+        std::span<const std::byte> bytes;
+        fb::BundleFileInfo at;
+    };
+    std::vector<Carried> carried_;
+    std::map<std::pair<std::uint32_t, fb::Sha1>, fb::BundleFileInfo> carriedAt_;
 };
 
 using ArchiveUse = std::set<std::pair<std::uint32_t, std::uint16_t>>;

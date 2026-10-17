@@ -1,11 +1,11 @@
-#include "backtrace.h"
+#include "crash_report.h"
 #include "protocol.h"
-#include "backtrace_config.h"
+#include "crash_report_config.h"
 #include <algorithm>
 #include <format>
 #include <vector>
 
-namespace dingosdk::backtrace {
+namespace dingosdk::crash_report {
 namespace {
 std::array<HANDLE, handle_count> handles{};
 HANDLE helper{};
@@ -22,12 +22,17 @@ template<std::size_t N> bool copy(std::array<wchar_t, N>& target, const std::wst
     target[value.size()] = 0;
     return true;
 }
+template<std::size_t N> void copy_cut(std::array<wchar_t, N>& target, std::wstring_view value) noexcept {
+    const auto size = std::min(value.size(), N - 1);
+    std::copy_n(value.begin(), size, target.begin());
+    target[size] = 0;
+}
 }
 StartResult start(const std::filesystem::path& log_directory) noexcept {
     try {
         if (report) return StartResult::ready;
         if (environment(L"RESKATE_CRASH_REPORTING") == L"0") return StartResult::disabled;
-        auto url = environment(L"RESKATE_BACKTRACE_URL");
+        auto url = environment(L"RESKATE_CRASH_REPORT_URL");
         if (url.empty()) url = configured_url;
         if (url.empty()) return StartResult::disabled;
         if (!url.starts_with(L"https://") || url.size() >= SharedReport{}.url.size()) return StartResult::failed;
@@ -99,14 +104,32 @@ StartResult start(const std::filesystem::path& log_directory) noexcept {
         return StartResult::ready;
     } catch (...) { return StartResult::failed; }
 }
-void capture(EXCEPTION_POINTERS* exception) noexcept {
-    if (!exception || InterlockedCompareExchange(&capturing, 1, 0) != 0) return;
-    report->thread_id = GetCurrentThreadId();
+namespace {
+void capture_on(DWORD thread_id, EXCEPTION_POINTERS* exception, CaptureSource source) noexcept {
+    if (!exception || !thread_id || InterlockedCompareExchange(&capturing, 1, 0) != 0) return;
+    report->thread_id = thread_id;
     report->exception = exception;
+    report->source = source;
     MemoryBarrier();
     if (SetEvent(handles[requested])) {
         const HANDLE wait_for[]{handles[captured], helper};
         WaitForMultipleObjects(2, wait_for, FALSE, capture_timeout_ms);
+    }
+}
+}
+void capture(EXCEPTION_POINTERS* exception) noexcept {
+    capture_on(GetCurrentThreadId(), exception, CaptureSource::unhandled_exception);
+}
+void capture_game_fatal(DWORD thread_id, EXCEPTION_POINTERS* exception) noexcept {
+    capture_on(thread_id, exception, CaptureSource::game_fatal_handler);
+}
+void set_destination(std::wstring_view destination) noexcept {
+    if (auto* const shared = report) copy_cut(shared->destination, destination);
+}
+void set_gpu(std::wstring_view name, std::wstring_view driver) noexcept {
+    if (auto* const shared = report) {
+        copy_cut(shared->gpu_name, name);
+        copy_cut(shared->gpu_driver, driver);
     }
 }
 void stop() noexcept {

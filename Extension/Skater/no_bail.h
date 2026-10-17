@@ -1,4 +1,5 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 namespace dingosdk {
@@ -39,4 +40,16 @@ bool no_bail_skater(NoBailSkater& skater) noexcept;
 // One observer, nullptr for none; it runs on the physics thread.
 using NoBailStepObserver = void (*)(const NoBailSkater& skater, float seconds, bool wipeout) noexcept;
 void set_no_bail_step_observer(NoBailStepObserver observer) noexcept;
+// Further listeners on the same steps (the grind exit control, grind_exit_control.h),
+// independent of the observer above so none displaces Hall of Meat's. Same thread and timing. Adding one already there, or removing one that is not, does nothing;
+// false when all slots are taken.
+inline constexpr std::size_t no_bail_step_listener_slots = 4;
+bool add_no_bail_step_listener(NoBailStepObserver listener) noexcept;
+// Any thread: the watched local skater bails at its next physics step, as from a slam of
+// `magnitude` (Board Break: a board that snaps on a rail throws the rider). The cause goes in just
+// before the game's selector picks the next state, the way the game's own contact tests record
+// theirs, so the game makes the wipeout itself; while No Bail protects the skater it is dropped like
+// any other. Expires unused after a quarter of a second.
+void no_bail_request_wipeout(float magnitude) noexcept;
+void remove_no_bail_step_listener(NoBailStepObserver listener) noexcept;
 }

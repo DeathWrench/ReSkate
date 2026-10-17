@@ -1,10 +1,13 @@
 #include "gui_internal.h"
+#include "gui_renderer.h"
 
 #include "mod_manager.h"
 
 #include "problem.h"
 
 #include <cmath>
+#include <fstream>
+#include <iterator>
 #include <format>
 
 // The main screen: background, name plate, tiles and the STATUS tile.
@@ -120,21 +123,47 @@ void progress_bar(ImDrawList* draw, ImVec2 a, ImVec2 b, float fill, float time) 
     skate_theme::striped_bar(draw, a, b, fill, time, g_scale);
 }
 
+// Loads the signed-in account's Steam picture for the plate, or drops it when Steam is closed or
+// signed out. Only re-decoded when the cached file changes.
+void refresh_steam_avatar(Ui& ui) {
+    const auto path = launcher_app::steam_avatar_path();
+    std::error_code error;
+    const auto time = path.empty() ? fs::file_time_type{} : fs::last_write_time(path, error);
+    if (path == ui.steam_avatar_path && time == ui.steam_avatar_time) return;
+    if (ui.steam_avatar && g_renderer) g_renderer->release_texture(ui.steam_avatar);
+    ui.steam_avatar = {};
+    ui.steam_avatar_path = path;
+    ui.steam_avatar_time = time;
+    if (path.empty() || !g_renderer) return;
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<unsigned char> bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    std::vector<unsigned char> pixels;
+    UINT width{}, height{};
+    if (!bytes.empty() && decode_image(bytes, ImVec2(S(46), S(46)), pixels, width, height))
+        ui.steam_avatar = g_renderer->upload_texture(pixels, width, height);
+}
+
 // Name plate in the top-left corner, like the HUB's player card.
-void draw_plate(ImDrawList* draw, const Fonts& fonts, ImVec2 position, const std::string& title, const std::string& version) {
+void draw_plate(ImDrawList* draw, const Fonts& fonts, ImVec2 position, const std::string& title, const std::string& version,
+                ImTextureID avatar) {
     const float h = S(46);
     const float text = std::max(fonts.bold->CalcTextSizeA(fonts.bold->FontSize, FLT_MAX, 0, title.c_str()).x,
                                 fonts.body->CalcTextSizeA(fonts.body->FontSize, FLT_MAX, 0, version.c_str()).x);
     const float width = std::max(S(300), h + S(28) + text);
     draw->AddRectFilled(ImVec2(position.x + h, position.y + S(3)), ImVec2(position.x + width, position.y + h - S(3)),
         rgba(44, 47, 49, 0.94f));
-    draw->AddRectFilled(position, ImVec2(position.x + h, position.y + h), color::avatar);
-    // A small deck on the avatar tile.
-    const ImVec2 c(position.x + h * 0.5f, position.y + h * 0.5f);
-    const int start = draw->VtxBuffer.Size;
-    draw->AddRectFilled(ImVec2(c.x - S(15), c.y - S(5.5f)), ImVec2(c.x + S(15), c.y + S(5.5f)), color::text, S(5.5f));
-    for (const float x : {-9.0f, 9.0f}) draw->AddCircleFilled(ImVec2(c.x + S(x), c.y), S(1.8f), color::avatar);
-    rotate_since(draw, start, -40.0f, c);
+    if (avatar) {
+        // The player's Steam picture in the tile.
+        draw->AddImage(avatar, position, ImVec2(position.x + h, position.y + h));
+    } else {
+        draw->AddRectFilled(position, ImVec2(position.x + h, position.y + h), color::avatar);
+        // A small deck on the avatar tile.
+        const ImVec2 c(position.x + h * 0.5f, position.y + h * 0.5f);
+        const int start = draw->VtxBuffer.Size;
+        draw->AddRectFilled(ImVec2(c.x - S(15), c.y - S(5.5f)), ImVec2(c.x + S(15), c.y + S(5.5f)), color::text, S(5.5f));
+        for (const float x : {-9.0f, 9.0f}) draw->AddCircleFilled(ImVec2(c.x + S(x), c.y), S(1.8f), color::avatar);
+        rotate_since(draw, start, -40.0f, c);
+    }
     draw->AddCircleFilled(ImVec2(position.x + S(3), position.y + S(3)), S(5), color::good);
     draw->AddText(fonts.bold, fonts.bold->FontSize, ImVec2(position.x + h + S(12), position.y + S(5)), color::text, title.c_str());
     draw->AddText(fonts.body, fonts.body->FontSize, ImVec2(position.x + h + S(12), position.y + S(24)), color::muted, version.c_str());
@@ -393,6 +422,7 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     // from the first Steam check; steam_offline_seen keeps it to one decision.
     if (time - ui.steam_checked > 5) {
         ui.steam_name = launcher_app::steam_persona_name();
+        refresh_steam_avatar(ui);
         ui.steam_checked = time;
         if (!ui.steam_offline_seen) {
             ui.steam_offline_seen = true;
@@ -417,7 +447,8 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     if (update::binary_updates_enabled() && state.config && !state.config->launcher.version.empty())
         version = "Launcher " + state.config->launcher.version;
     const bool greet = !launcher.settings().offline && !ui.steam_name.empty();
-    draw_plate(draw, fonts, ImVec2(S(50), S(40)), greet ? "Welcome, " + ui.steam_name : std::string("ReSkate"), version);
+    draw_plate(draw, fonts, ImVec2(S(50), S(40)), greet ? "Welcome, " + ui.steam_name : std::string("ReSkate"), version,
+        launcher.settings().offline ? ImTextureID{} : ui.steam_avatar);
     page_title(draw, fonts, ImVec2(S(52), S(88)), "RESKATE");
 
     window_buttons(draw, window, size);
@@ -531,7 +562,10 @@ void frame(Launcher& launcher, const Fonts& fonts, HWND window, Ui& ui, ModsPane
     else if (qr_open) qr_window(launcher, fonts, size, state.qr);
     else if (ui.sign_in) sign_in_window(launcher, fonts, size, ui);
     else if (ui.settings) settings_window(launcher, fonts, size, ui, window);
-    else if (ui.changelog) changelog_window(fonts, size, ui);
+    else if (ui.changelog) {
+        ui.notes.prereleases = launcher.settings().prereleases;
+        changelog_window(fonts, size, ui);
+    }
     else if (ui.mods) mods_window(launcher, fonts, size, ui, mods_panel, window);
     else if (state.phase == Phase::mods_broken)
         mods_broken_window(launcher, fonts, size, ui, mods_panel, state.mod_problems);

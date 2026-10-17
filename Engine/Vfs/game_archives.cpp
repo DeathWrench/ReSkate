@@ -74,12 +74,13 @@ GameArchives::GameArchives(fs::path root, const native_db::Node& layout) : root_
     const auto win32 = root_ / "Win32";
     for (fs::recursive_directory_iterator it(win32, error), end; it != end && !error; it.increment(error)) {
         if (!it->is_regular_file(error) || error) { error.clear(); continue; }
-        if (lower(it->path().extension().string()) != ".cas") continue;
-        const auto index = archive_index(it->path().stem().string());
+        if (lower(path_utf8(it->path().extension())) != ".cas") continue;
+        const auto index = archive_index(path_utf8(it->path().stem()));
         if (!index) continue;
         // Relative to Win32, because read() adds that itself.
-        const auto directory = fs::relative(it->path().parent_path(), win32, error).generic_string();
+        const auto relative = fs::relative(it->path().parent_path(), win32, error).generic_u8string();
         if (error) { error.clear(); continue; }
+        const std::string directory(relative.begin(), relative.end());
         directories_[directory].insert(*index);
     }
     for (const auto& [directory, archives] : directories_) byArchives[archives].push_back(directory);

@@ -1,4 +1,5 @@
 #include "item_browser.h"
+#include "Engine/Core/Platform/path_text.h"
 #include "local_customization_runtime.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
@@ -507,7 +508,7 @@ void log_roots(State& s, const md::Context& context) {
 void log_status(const State& s) {
     logging::log(Level::info, Channel::customization, "Item browser: {} grid(s), search \"{}\", filter {}, {} favorite(s), file {}.",
         s.grids.size(), s.search, filter_names[static_cast<std::size_t>(s.filter)], s.favorites.keys.size(),
-        s.favorites.file.string());
+        path_utf8(s.favorites.file));
     for (const auto& grid : s.grids) {
         std::string focus = "-";
         if (grid.focused >= 0 && static_cast<std::size_t>(grid.focused) < grid.shown.size())
@@ -654,6 +655,13 @@ void update(std::uintptr_t base) noexcept {
         if (sh.status.exchange(false)) { log_status(s); log_roots(s, context); }
         // The search belongs to one visit: it is cleared when the grids are gone, or have been out of
         // focus for longer than one of the game's own cards (a dialog over the grid) usually stays up.
+        // A grid keeps its focus after its screen has gone, so the game's menu has to be up as
+        // well, and to have been for a moment: the game's menu flag is also up for the second
+        // or so it rebuilds the skater after a bail, when the search must not flash up.
+        static ULONGLONG menu_since{};
+        if (!in_menu) menu_since = 0;
+        else if (!menu_since) menu_since = now;
+        if (!menu_since || now - menu_since < 1000) active = nullptr, focused = nullptr;
         if (active) s.last_open = now;
         s.open = active != nullptr;
         if (!s.open && (s.grids.empty() || now > s.last_open + 8000) && (!s.search.empty() || s.filter != Filter::all)) {

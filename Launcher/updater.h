@@ -39,23 +39,30 @@ struct Config {
     // it: a server whose own exe differs is out of date. Empty when not published.
     RemoteFile server;
     std::string server_exe_sha256;
+    // The release it came from, and whether GitHub marks it a pre-release.
+    std::string tag;
+    bool prerelease{};
 };
 
 // Release builds replace ReSkateLauncher.exe and ReSkate.dll; local builds only report.
 bool binary_updates_enabled() noexcept;
 Config parse_config(std::string_view text);
 // Returns nothing when offline or the config is invalid; the reason is logged.
-std::optional<Config> fetch_config();
+// `prereleases`: the newest release that carries a launcher.json, pre-release or not (the
+// launcher's "Test pre-releases" setting); otherwise GitHub's latest full release.
+std::optional<Config> fetch_config(bool prereleases = false);
 
 // One GitHub release, for the launcher's changelogs: its patch notes are what its page on
 // GitHub shows, the release's description or, without one, its commit's message.
 struct ReleaseNote {
     std::string tag, title, date, notes;   // date: YYYY-MM-DD; notes: markdown
+    bool prerelease{};
 };
 // The releases page's Atom feed (<repo>/releases.atom), newest first as it comes.
 std::vector<ReleaseNote> parse_release_feed(std::string_view feed);
-// The newest release of the repo the launcher updates from. Throws when GitHub cannot be reached.
-ReleaseNote fetch_release_note();
+// The newest release of the repo the launcher updates from (with `prereleases`, the newest
+// pre-release when it is newer). Throws when GitHub cannot be reached.
+ReleaseNote fetch_release_note(bool prereleases = false);
 // That repo's releases page on GitHub.
 std::string releases_page();
 
@@ -63,6 +70,10 @@ std::string releases_page();
 // `limit` bytes, on a non-200 answer, or whatever `sink` throws (to cancel).
 void http_stream(const std::wstring& url, std::uint64_t limit, int timeout_ms,
                  const std::function<void(const char*, DWORD)>& sink);
+// An HTTPS POST of `body`; the answer's body, which must come with a 200 or 201 and
+// fit in `limit` bytes. No redirect is followed. Throws a readable message otherwise.
+std::string http_post(const std::wstring& url, const wchar_t* content_type, std::string_view body,
+                      std::uint64_t limit, int timeout_ms);
 
 // Reports bytes received and the expected total while a download runs.
 using Progress = std::function<void(std::uint64_t received, std::uint64_t total)>;

@@ -176,6 +176,21 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         if (options.live) record = read_placements(placementsPath);
         std::vector<const Mod*> placedMods = mods;
         for (const auto& mod : catalog.inactive) placedMods.push_back(&mod);
+        // A mod whose files changed since its archives were placed (updated, or removed and
+        // installed again at another version, while the game runs) is forgotten here and so
+        // placed again below, as one installed since launch is; the old archives stay where
+        // the game may still hold them. Its place in the root's order goes too: the root is
+        // written again with it last.
+        if (options.live)
+            for (const auto* mod : placedMods) {
+                const auto found = record.mods.find(mod->name);
+                if (found == record.mods.end() || found->second.fingerprint.empty() ||
+                    found->second.fingerprint == mod_fingerprint(mod->directory))
+                    continue;
+                record.mods.erase(found);
+                std::erase(record.root, mod->name);
+                report.notes.push_back(mod->name + ": its files changed since it was loaded, so it is placed again");
+            }
         for (const auto* mod : placedMods) {
             const bool active = std::find(mods.begin(), mods.end(), mod) != mods.end();
             if (options.live && !active && !record.mods.contains(mod->name)) continue; // installed since launch, still off
@@ -230,6 +245,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                                            std::to_string(spot.offset) + " (added while the game runs)");
                     ++report.archives;
                 }
+                placements[mod].fingerprint = mod_fingerprint(mod->directory);
                 record.mods[mod->name] = placements[mod];
                 continue;
             }
@@ -255,8 +271,8 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                 // Archive 1 stays the patch's own file, never a link to a mod's:
                 // a live apply appends manifests and new mods to it while the
                 // game has it open, and a linked file cannot be swapped for a
-                // private copy then (Windows keeps it in use).
-                claimed.insert(manifestArchive);
+                // private copy then (Windows keeps it in use). Placeholder indexes name no file.
+                claimed.insert({manifestArchive, CasStore::waiting_archive, CasStore::carried_archive});
                 if (number == manifestArchive) {
                     if (const auto free = claim(directory); free) {
                         spot.archive = *free;
@@ -286,6 +302,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                         (active ? "" : " (disabled, ready to enable)"));
                 ++report.archives;
             }
+            placements[mod].fingerprint = mod_fingerprint(mod->directory);
             record.mods[mod->name] = placements[mod];
         }
 
@@ -407,7 +424,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                     for (std::size_t index = 0; index < job.merged.bundles.size(); ++index) {
                         auto region = fb::read_bundle_region(job.merged.bundles[index].region);
                         if (std::ranges::any_of(region.files, [](const fb::BundleFileInfo& file) {
-                                return CasStore::waits(file.location); }))
+                                return CasStore::placeholder(file.location); }))
                             job.held.emplace_back(index, std::move(region));
                     }
             } catch (...) {
@@ -474,9 +491,10 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
             }
             for (auto& chunk : job.merged.chunks) job.store->settled(chunk.location, chunk.offset);
             for (const auto& [installChunk, archive] : job.used)
-                used.emplace(installChunk, archive == CasStore::waiting_archive ? manifestArchive : archive);
+                used.emplace(installChunk, CasStore::placeholder(archive) ? manifestArchive : archive);
             report.mergedBundles += job.report.mergedBundles;
             report.mergedAssets += job.report.mergedAssets;
+            report.unchangedCopies += job.report.unchangedCopies;
             report.notes.insert(report.notes.end(), std::make_move_iterator(job.report.notes.begin()),
                                 std::make_move_iterator(job.report.notes.end()));
             for (auto& [mod, problems] : job.report.problems) {

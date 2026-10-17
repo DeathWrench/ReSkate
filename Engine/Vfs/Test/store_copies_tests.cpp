@@ -391,7 +391,12 @@ void installed_mods(const fs::path& game, const fs::path& folder, const StoreIte
               << found.game_costumes << " of the game's costumes, " << found.items.size() << " copy(ies) of store items in "
               << found.mods.size() << " of them\n";
     for (const auto& source : found.mods)
-        std::cout << "  " << source.mod << ": " << source.count << ", e.g. " << source.example << " is " << source.original << '\n';
+        std::cout << "  " << source.mod << ": " << source.count << ", e.g. " << source.example << " is " << source.original
+                  << (source.by_mesh ? " (by its mesh)" : " (by what its item is fitted on)") << '\n';
+    for (const auto& mesh : found.meshes_seen)
+        std::cout << "  mesh " << mesh.mod << ": " << mesh.mesh << ", " << mesh.points << " points, " << mesh.closest.shared
+                  << " of them only in " << (mesh.closest.key.empty() ? std::string("no store costume") : mesh.closest.key + " (" +
+                         std::to_string(mesh.closest.costume_points) + " points)") << '\n';
     for (const auto& note : notes) std::cout << "  note: " << note << '\n';
 }
 } // namespace

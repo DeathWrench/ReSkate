@@ -16,6 +16,7 @@
 #include "Engine/Core/Console/console_entry.h"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -74,8 +75,10 @@ enum class DebugAction {
     set_first_person_head_roll,
     set_first_person_bob,
     set_first_person_board_only,
+    set_first_person_camera_cycle,
     reset_first_person_arm,
     set_free_camera_fov,  // 0 = the game's own FOV
+    set_drone_follow,     // the drone flies itself behind the skater, and the view is its camera
     // Keep the last action in sync with the bound in request_scheduler.h.
 };
 
@@ -92,12 +95,23 @@ struct FlightInput {
     float look_x = 0, look_y = 0;
 };
 
+// May change what the GAME reads from an XInput pad (never what ReSkate itself reads). `user` is
+// the XInput slot. Called on whatever thread the game polls from, once per poll that returns a
+// pad. The grind exit control's grab and lean guards (grind_exit_control.h).
+struct GamepadValues {
+    std::uint16_t buttons = 0;
+    std::uint8_t left_trigger = 0, right_trigger = 0;
+    std::int16_t left_x = 0, left_y = 0, right_x = 0, right_y = 0;
+};
+using GamepadFilter = void (*)(unsigned user, GamepadValues& pad) noexcept;
+
 struct DebugModel {
     bool available = false;
     bool camera_available = false;
     bool ui_available = false;
     bool free_camera = false;
     bool first_person = false;
+    bool drone_follow = false;  // the drone flies itself behind the skater (Skater/drone_follow.h)
     // Vertical degrees applied to the first-person view; 0 keeps the camera's own.
     float first_person_fov = 0;
     float free_camera_fov = 0;  // 0 = the game's own FOV
@@ -215,6 +229,28 @@ struct RoadRashModel {
     bool available = false, enabled = false, blood = false;
 };
 
+// Board Break's switch (Extension/BoardBreak/board_break.h): started, switched on, and which of
+// its decks is the one in the game (none: no deck pack loads, and no board can break).
+struct BoardBreakModel {
+    bool available = false, enabled = false, has_deck = false;
+    std::string deck = "None";
+    // Its settings (Extension/BoardBreak/board_break_feel.h) and how worn the board is (0 to 1, and
+    // its word).
+    bool always = false, rails = true, wear = true, crack_sounds = true, body_sounds = true;
+    int sensitivity = 100, joined = 50, wear_rate = 100;
+    float worn = 0;
+    std::string condition = "new";
+};
+
+// Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,
+// LT/RT toe/heel (else left/right of travel), and the player's stance (0 not set, 1 regular,
+// 2 goofy).
+struct GrindExitModel {
+    bool available = false, enabled = false, toe_heel = true;
+    int stance = 0;
+    int strength = 100; // pop-out strength, percent (10-100)
+};
+
 struct Model {
     std::string state = "Waiting for native state";
     std::string detail;
@@ -235,9 +271,14 @@ struct Model {
     PlayerCardModel player_card;
     HallOfMeatModel hall_of_meat;
     RoadRashModel road_rash;
+    BoardBreakModel board_break;
+    GrindExitModel grind_exit;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
     float menu_scale = default_menu_scale;
+    float menu_scale_fullscreen = default_menu_scale; // the full screen menu's own size (`ui scalefull`)
+    // The ReSkate menu fills the screen, made for a controller, instead of a window (`ui fullscreen`).
+    bool menu_fullscreen = false;
     // Offline mode: no Steam, so every multiplayer page and control is hidden.
     bool steam_offline = false;
     ControllerBindingsModel bindings;
@@ -288,6 +329,7 @@ void set_multiplayer_queue(MultiplayerQueue) noexcept;
 struct MapDownloadCard {
     int stage{};                // 0 none, 1 asking, 2 downloading, 3 installing, 4 applying, 5 joining
     std::string map, package, author, version, description;
+    std::string have;            // the version installed here, when the host's replaces it
     std::size_t step{}, steps{}; // applying: the merge's steps done of all
     std::string step_name;
     bool server{}, installed{}, moved{}, choice{true};
@@ -301,6 +343,36 @@ void set_map_download_answer(MapDownloadAnswer) noexcept;
 // The card's icon: the package's own picture as PNG bytes, or nothing to show a plain tile.
 // Any thread; decoded here and uploaded when the overlay next draws.
 void set_map_download_icon(const std::string& png) noexcept;
+// The pictures for a dedicated server's vote for the next map (Extension/Assets/map_icons.h):
+// each map's name in the vote and its picture: a mod's icon as PNG bytes, or one of the game's
+// own maps' as pixels (straight-alpha RGBA, a square of `side`). Neither: it has none. Any thread.
+struct MapVoteIcon {
+    std::string name, png;
+    std::vector<unsigned char> rgba;
+    unsigned side{};
+};
+void set_map_vote_icons(const std::vector<MapVoteIcon>& icons) noexcept;
+// The menu's map grid (Map > Travel): the levels it shows ask for their pictures, which
+// Assets/map_icons.cpp finds off the game's thread (MapVoteIcon::name is then the level's asset).
+struct MenuMapWanted {
+    std::string asset, name;
+};
+std::vector<MenuMapWanted> take_menu_map_request() noexcept;
+void set_menu_map_pictures(const std::vector<MapVoteIcon>& pictures) noexcept;
+// That vote's popup (map_download_card.cpp), for the runtime, which reads the controller and
+// holds the game's input while it is up: whether it is, moving the pick, voting for the pick
+// (the popup then closes), and closing it without a vote. Any thread.
+// A message the player has to see and say OK to, in the middle of the screen (message_card.cpp):
+// that they were kicked or banned from a server, and why. One at a time: a new one takes the
+// place of one still up. For the runtime, which reads the controller and holds the game's input
+// while it is up, as for the vote below: whether it is, and closing it. Any thread.
+void show_message(std::string title, std::string text) noexcept;
+bool message_asking() noexcept;
+void message_dismiss() noexcept;
+bool map_vote_asking() noexcept;
+void map_vote_move(int by) noexcept;
+void map_vote_take() noexcept;
+void map_vote_dismiss() noexcept;
 // The session's text chat, read by the chat panel every frame (thread-safe, cheap).
 using ChatFeed = MultiplayerChat (*)();
 void set_chat_feed(ChatFeed) noexcept;
@@ -360,14 +432,16 @@ void set_skate_hud_feed(SkateHudFeed) noexcept;
 struct NametagBubble {
     std::string text, raw;
     float appear{1}, fade{1};
+    bool hint{}; // grey typing discs, not a chat line. text is ".", "..", or "..." for 1, 2, or 3 discs
 };
 struct Nametag {
     std::array<float, 3> position{}; // above the skater's head, world space
     std::string name;
     std::uint32_t color{0xffffffffU}; // R, G, B, A bytes (IM_COL32)
-    std::string tag;                  // role badge before the name ("Dev", "Staff", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
+    std::string tag;                  // role badge before the name ("Dev", "ReSkate Admin", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
     float distance{};                 // metres from the local skater
     bool talking{};
+    bool flying_drone{};              // flying the FPV drone: a FLYING DRONE label above the name
     // Recent chat lines to show as bubbles above the head, oldest first ("" = none).
     std::vector<NametagBubble> bubbles;
     bool self{};                      // the local player: bubbles only, never a name or dot
@@ -428,6 +502,9 @@ struct CallbacksV3 {
 // moving the focus, 7 pressing something, 56 changing tab). Any thread.
 using UiSound = void (*)(std::uint32_t sound) noexcept;
 void set_ui_sound(UiSound) noexcept;
+// One of the game's menu sounds, by its number (UI/NativeMenu/ui_sound.h): 3 moving the focus,
+// 7 pressing, 56 changing tab, as the pause menu's own pages make them.
+void play_ui_sound(std::uint32_t sound) noexcept;
 // What those pages read the game with and act through: callbacks as the overlay's own, with a
 // read_model that takes a snapshot and leaves the console log alone (it is asked a few times a
 // second while a page is drawn).
@@ -462,6 +539,47 @@ extern "C" __declspec(dllexport) bool DingoSDKOverlayStartV2(
 extern "C" __declspec(dllexport) bool DingoSDKOverlayStartV3(
     const dingosdk::overlay::CallbacksV3* callbacks);
 
+namespace dingosdk::overlay {
+// The first Xbox (XInput) or PlayStation (DualShock 4 / DualSense) controller, read directly.
+// Sticks are -1..1 (up and right positive), triggers 0..1; `buttons` is XInput's wButtons bit mask.
+// Used by the FPV drone's controller selection (Skater/drone_radio.h); safe from any thread.
+struct Gamepad {
+    bool valid = false;
+    bool playstation = false;
+    float left_x = 0, left_y = 0, right_x = 0, right_y = 0;
+    float left_trigger = 0, right_trigger = 0;
+    unsigned buttons = 0;
+};
+Gamepad read_gamepad();
+// The full screen menu's page draws its own controls with their own focus (ONLINE: the pause
+// menu's pages): the controller then drives that, not ImGui's navigation.
+inline std::atomic<bool>& menu_page_owns_pad() {
+    static std::atomic<bool> value{false};
+    return value;
+}
+// The controller is in charge of the full screen menu: the pointer is hidden (and points at
+// nothing) until the mouse moves or clicks (overlay_render.cpp sets it, cursor.cpp clears it).
+inline std::atomic<bool>& menu_pad_in_charge() {
+    static std::atomic<bool> value{false};
+    return value;
+}
+// The menu was last drawn full screen (its controller pace, overlay_render.cpp).
+inline std::atomic<bool>& menu_fullscreen_shown() {
+    static std::atomic<bool> value{false};
+    return value;
+}
+// `menu` (and the controller bind for it) asks for the ReSkate menu to open; the overlay takes it.
+inline std::atomic<bool>& menu_open_flag() {
+    static std::atomic<bool> value{false};
+    return value;
+}
+// Reads of a controller between these two calls see the real device even while ReSkate keeps
+// the game from reading it (freecam or drone controller capture). Same thread, paired.
+// The FPV drone reads its controller this way (Skater/drone_radio.h).
+void begin_input_access() noexcept;
+void end_input_access() noexcept;
+}
+
 // Nonblocking. A later Present releases GPU resources after its fence completes.
 // The DLL stays pinned until process exit so no thread can return into unloaded
 // detours. Input is released immediately, even if rendering has stopped.
@@ -480,6 +598,8 @@ extern "C" unsigned DingoSDKOverlayReadPromptKeys();
 // allow_menu is used only by the Binds page while recording. Focus and lifetime
 // gates still apply. Gameplay callers leave it false.
 extern "C" void DingoSDKOverlayReadControllerInput(dingosdk::ControllerInput* input, bool allow_menu = false);
+// Installs (or, with nullptr, removes) the one gamepad filter. Any thread.
+extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter);
 
 // Optional direct integration for a host that already knows its exact pair.
 struct IDXGISwapChain;

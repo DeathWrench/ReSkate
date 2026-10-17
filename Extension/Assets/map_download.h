@@ -9,6 +9,11 @@
 // player is asked; on yes the package is downloaded, installed into Mods and applied as a live
 // mod (live_mods.h). The session stays connected meanwhile and loads the map once it is there;
 // on no, or when the map cannot be had, the session is left.
+// The session waits 30 minutes on its local monotonic clock for the whole of it (checking,
+// confirmation, download, installation, applying and joining); confirmation gets two of them.
+// A download that has begun is not cut short when the session stops waiting: it finishes,
+// installs and is applied, and the player is told to join again. A cancelled worker drains
+// before another attempt can begin.
 //
 // Only maps come in this way. The package has to be listed as a map in ReSkate's Thunderstore
 // community, not deprecated and not rejected by its moderators; what is installed has to be a
@@ -35,6 +40,7 @@ struct View {
     bool server{};              // a dedicated server's map, else a player's lobby
     bool moved{};               // the session changed to it with the player in it (else: joining it)
     bool installed{};           // asking: the mod is here but switched off, so nothing is downloaded
+    std::string have;           // the version installed here, when the host's is another and replaces it
     bool choice{true};          // asking: the answer a controller has picked (true: download)
     std::uint64_t received{}, total{};   // downloading; total 0 when the size is not known
     std::uint32_t yes_bind{}, no_bind{}; // the vote binds, which answer the card
@@ -54,4 +60,7 @@ void tick();
 // The Thunderstore package an enabled mod's level comes from (its folder and manifest), for a
 // host to tell its guests; empty when the level is the game's own or the mod is not a package.
 std::string package_of(std::string_view asset);
+// Reads the table package_of answers from, on a thread of its own, if it has not been (so the
+// first map offer does not wait on the Mods folder). Cheap to call each frame; tick() does.
+void warm_packages() noexcept;
 }
