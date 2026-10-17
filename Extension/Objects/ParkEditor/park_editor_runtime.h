@@ -24,6 +24,8 @@ bool queue_local_park_surface(const EditorSurfaceRequest &);
 bool queue_local_park_preview(const EditorPreviewRequest &);
 bool queue_local_park_selection(const EditorSelectionRequest &);
 bool queue_local_park_paste(const EditorPasteRequest &);
+bool queue_local_park_object_set(const EditorObjectSetRequest &);
+bool queue_local_park_delete(const EditorDeleteRequest &);
 void tick_local_park_editor() noexcept;
 // Invoked through the console's verified game-thread dispatcher. `texts`
 // carries a park mod's name, author, version and description (mod-create:
@@ -41,6 +43,9 @@ void update_park_editor();
 void update_park_editor_moves() noexcept;
 void reset_park_editor();
 bool park_editor_owns_placements();
+// The layout the editor's current edit is applying (null without one). Its new objects are saved
+// only when the whole edit completes, but they are live, linked objects before that.
+const profile::ObjectLayout *park_editor_pending_layout();
 bool park_editor_observe(std::uint64_t entity, const profile::PlacedObject &object);
 void park_editor_external_change();
 } // namespace dingosdk::profile_runtime

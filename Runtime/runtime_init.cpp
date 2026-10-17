@@ -273,6 +273,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         dingosdk::overlay::set_park_preview_queue(dingosdk::queue_local_park_preview);
         dingosdk::overlay::set_park_selection_queue(dingosdk::queue_local_park_selection);
         dingosdk::overlay::set_park_paste_queue(dingosdk::queue_local_park_paste);
+        dingosdk::overlay::set_park_object_set_queue(dingosdk::queue_local_park_object_set);
+        dingosdk::overlay::set_park_delete_queue(dingosdk::queue_local_park_delete);
         if (!DingoSDKOverlayStartV3(&callbacks)) {
             dingosdk::logging::write(dingosdk::logging::Level::error, dingosdk::logging::Channel::graphics, "Overlay startup failed.");
             return FALSE;

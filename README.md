@@ -19,7 +19,8 @@ the launcher, the runtime that loads into the game, and the dedicated server.
 - **In-game menu and console.**
   - Map and fast travel.
   - World: time of day, population, district levels, rotating parks.
-  - The **Park Editor**: place, move and save objects with freecam, snapping and undo.
+  - The **Park Editor**: place, move and save objects with freecam, snapping and undo. Save a selection as a
+    set and place it again anywhere, on any map.
   - Skater options: first person, movement, boosts, noclip.
   - **Hall of Meat** (off by default): bail and see the bones you hurt, with a skate. 3 style Meat card.
   - **Grind exit triggers** (off by default): press LT or RT while grinding to pick the side you pop
