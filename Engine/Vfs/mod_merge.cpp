@@ -47,16 +47,7 @@ constexpr std::array<std::string_view, 2> launch_superbundles{"Win32/globals.toc
 // more than that the mod could not be merged: what was found is not for the
 // mod's author to read. The catalogue is only read once a mod turns out to add
 // an item at all.
-bool store_copy_problems(
-    const Catalog&,
-    MergeReport&,
-    const std::vector<std::string>&,
-    std::size_t,
-    bool)
-{
-    // Store-copy checking disabled.
-    return false;
-}
+
 } // namespace
 
 MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, const MergeOptions& options) noexcept {
@@ -100,11 +91,11 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         // reuse or replace.
         // Threads for the three steps that read many files: as many as there are cores at
         // launch (the player is waiting on nothing else), half of them and fewer while the game runs.
-        const auto cores = std::max(1U, std::thread::hardware_concurrency());
-        const std::size_t readers = std::min<std::size_t>(options.live ? std::max(1U, cores / 2) : cores, options.live ? 6U : 8U);
+        //const auto cores = std::max(1U, std::thread::hardware_concurrency());
+        //const std::size_t readers = std::min<std::size_t>(options.live ? std::max(1U, cores / 2) : cores, options.live ? 6U : 8U);
         //if (storeKnown && store_copy_problems(catalog, report, options.live ? options.checked : std::vector<std::string>{},
-        //                                      readers - 1, options.live)) return report;
-        if (!options.live) fs::remove_all(output, error);
+                                              readers - 1, options.live)) return report;
+        //if (!options.live) fs::remove_all(output, error);
         lap("checking the mods");
 
         // Progress: each mod's archives, the material grid, a live merge's load

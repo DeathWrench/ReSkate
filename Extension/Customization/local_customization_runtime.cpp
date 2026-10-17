@@ -81,6 +81,22 @@ bool reserved_cosmetic_hash(std::uint32_t hash) {
     std::lock_guard lock(reserved_hash_mutex);
     return hash && reserved_hashes.contains(hash);
 }
+bool installed_item_owned(const profile::Snapshot& snapshot, std::string_view key, std::uint32_t hash, bool build_kit) {
+    if (cosmetic_runtime().ownership_unavailable || reserved_cosmetic_hash(hash)) return false;
+    const auto option = snapshot.bool_options.find(build_kit ? profile::unlock_objects_option : profile::unlock_cosmetics_option);
+    if (option != snapshot.bool_options.end() && option->second) return true;
+    const dingosdk::Json* section = &snapshot.customization;
+    if (build_kit) {
+        const auto objects = snapshot.extensions.find("object_dropper");
+        if (objects == snapshot.extensions.end() || !objects->is_object()) return false;
+        section = &*objects;
+    }
+    const auto inventory = section->find("inventory");
+    if (inventory == section->end() || !inventory->is_object()) return false;
+    const auto saved = inventory->find(key);
+    return saved != inventory->end() && saved->is_boolean() && saved->get<bool>();
+}
+
 bool refresh_cosmetic_catalog() {
     auto& s = local_runtime(); auto& c = cosmetic_runtime();
     std::uintptr_t manager{}, vtable{}, buckets{};
@@ -134,36 +150,25 @@ bool refresh_cosmetic_catalog() {
         !read(manager + 0x30, current_buckets) || current_buckets != buckets ||
         !read(manager + 0x3c, current_count) || current_count != count) return false;
     const auto& catalogs = content_cache::catalogs();
-    // ReSkate.UnlockEverything also seeds the items a free source does not
-    // grant (store, premium pass, retired offers). Only ownership changes:
-    // reserved_cosmetic() still judges what other players wear, so a peer's
-    // store item stays blanked here as before.
-    const bool unlock_everything = s.store->bool_option(profile::unlock_everything_option).value_or(false);
     c.ownership_unavailable = !catalogs.available;
-    std::vector<std::string> keys, objects, reserved_keys, reserved_objects;
-    for (const auto& [key, info] : items) {
-        std::string folded = key;
-        for (auto& letter : folded) if (letter >= 'A' && letter <= 'Z') letter = static_cast<char>(letter + ('a' - 'A'));
-        const bool held = !unlock_everything && catalogs.reserved(folded);
-        (info.build_kit ? (held ? reserved_objects : objects) : (held ? reserved_keys : keys)).push_back(key);
-    }
-    if (!c.ownership_unavailable) {
-        s.store->seed_cosmetic_inventory(keys);
-        s.store->seed_object_inventory(objects);
-        s.store->reconcile_inventory(reserved_keys, reserved_objects);
-    }
+    // What is owned is worked out from the items installed (installed_item_owned), not saved item
+    // by item: the rows earlier versions saved go, once.
+    s.store->forget_unlocked_inventory();
+    std::size_t objects{};
     {
         std::set<std::uint32_t> hashes;
-        for (const auto& [key, info] : items)
+        for (const auto& [key, info] : items) {
+            objects += info.build_kit;
             if (reserved_cosmetic(key)) hashes.insert(info.hash);
+        }
         std::lock_guard lock(reserved_hash_mutex);
         reserved_hashes = std::move(hashes);
     }
     c.items = std::move(items); c.item_count = count; c.item_manager = manager;
     ++c.items_generation;
     std::ostringstream event;
-    event << "{\"event\":\"local_cosmetic_catalog\",\"installed\":" << keys.size()
-          << ",\"objects\":" << objects.size() << '}';
+    event << "{\"event\":\"local_cosmetic_catalog\",\"installed\":" << items.size() - objects
+          << ",\"objects\":" << objects << '}';
     dingosdk::logging::event(dingosdk::logging::Channel::customization, event.str().c_str());
     return true;
 }
@@ -349,12 +354,6 @@ bool load_cosmetic_hook(const void* wrapper, void* destination) {
         std::vector<CosmeticBorrowedArray<CosmeticNativeItem>> item_arrays;
         words.reserve(16 * 257); item_arrays.reserve(16);
         std::vector<CosmeticRuntime::HeldSlot> held;
-        // (Looked up once: Json::value returns a copy, and this was asked for every slot, a copy
-        // of the whole inventory each time, in the game's own load call.)
-        static const auto no_inventory = dingosdk::Json::object();
-        const auto inventory_found = snapshot.customization.find("inventory");
-        const auto& inventory = inventory_found != snapshot.customization.end() && inventory_found->is_object()
-            ? *inventory_found : no_inventory;
         for (std::size_t i = 0; i < saved->recipes.size(); ++i) {
             const auto& recipe = saved->recipes[i]; const auto& expected = defaults.recipes[i];
             if (recipe.template_key != expected.template_key || recipe.template_version != expected.template_version ||
@@ -400,7 +399,7 @@ bool load_cosmetic_hook(const void* wrapper, void* destination) {
                         held.push_back({i, *slot, expected.items[j].asset});
                         slot = &expected.items[j];
                     } else {
-                        if (inventory.contains(slot->asset) && !inventory.at(slot->asset).get<bool>())
+                        if (!installed_item_owned(snapshot, slot->asset, found->second.hash, found->second.build_kit))
                             slot = &expected.items[j];
                     }
                 }

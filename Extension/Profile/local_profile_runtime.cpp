@@ -307,6 +307,11 @@ void update_local_customization() noexcept {
             publish_cosmetic_catalog();
             publish_cosmetic_inventory();
         }
+    } catch (const std::exception& failure) {
+        // (Why, in the log: a bare "failed" left a player with no items and nothing to go on.)
+        cosmetic_runtime().catalog_failed = true;
+        const dingosdk::Json event{{"event", "local_cosmetic_catalog_failed"}, {"reason", failure.what()}};
+        dingosdk::logging::event(dingosdk::logging::Channel::profile, event.dump().c_str());
     } catch (...) {
         cosmetic_runtime().catalog_failed = true;
         dingosdk::logging::event(dingosdk::logging::Channel::profile, "{\"event\":\"local_cosmetic_catalog_failed\"}");

@@ -166,13 +166,12 @@ void refresh_catalog() {
     if (e.assets && e.catalog_revision == snapshot.revision && e.catalog_manager == c.item_manager)
         return;
     const auto config = snapshot.extensions.value("object_dropper", Json::object());
-    const auto inventory = config.value("inventory", Json::object());
     const auto catalog = config.value("catalog", Json::object());
     const auto &cache = content_cache::catalogs();
     const auto groups = objects::object_groups(cache);
     auto assets = std::make_shared<std::vector<EditorAsset>>();
     for (const auto &[key, item] : c.items) {
-        if (!item.build_kit || !inventory.value(key, false) || assets->size() >= 4096)
+        if (!item.build_kit || !profile_runtime::installed_item_owned(snapshot, key, item.hash, true) || assets->size() >= 4096)
             continue;
         std::string title = key.starts_with("own_") ? key.substr(4) : key;
         std::replace(title.begin(), title.end(), '_', ' ');

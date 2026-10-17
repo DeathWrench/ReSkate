@@ -161,22 +161,29 @@ CosmeticShared make_cosmetic_catalog(const profile::Snapshot& snapshot) {
     // EASTL's iteration scans past empty buckets until this non-null sentinel.
     owner->buckets.back() = &owner->sentinel;
     owner->map = {owner->buckets.data(), bucket_count, static_cast<std::uint32_t>(items.size())};
-    const auto inventory = snapshot.customization.value("inventory", dingosdk::Json::object());
     const auto catalog = snapshot.customization.value("catalog", dingosdk::Json::object());
     const auto object_dropper = snapshot.extensions.value("object_dropper", dingosdk::Json::object());
-    const auto object_inventory = object_dropper.value("inventory", dingosdk::Json::object());
     const auto object_catalog = object_dropper.value("catalog", dingosdk::Json::object());
     const auto groups = objects::object_groups(content_cache::catalogs());
     std::set<std::uint32_t> hashes;
-    std::size_t index{};
+    std::size_t index{}, left_out{};
+    // One item the catalog cannot hold (two mods' items with one identity, a record the game will not
+    // read) is left out and named in the log; the rest still publish. Failing the whole catalog for
+    // it left a player owning nothing: no items in the customization menu, no playcard.
+    const auto leave_out = [&](const std::string& key, const char* why) {
+        if (++left_out <= 20)
+            dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::customization,
+                "Cosmetic item {} left out of the catalog: {}.", key, why);
+    };
     for (const auto& [key, info] : items) {
-        if (!hashes.insert(info.hash).second) throw std::runtime_error("Ambiguous cosmetic identity");
-        auto& node = owner->nodes[index++];
+        if (!hashes.insert(info.hash).second) {
+            leave_out(key, "another item has the same identity hash");
+            continue;
+        }
+        auto& node = owner->nodes[index];
         node.hash = info.hash;
-        const auto& item_inventory = info.build_kit ? object_inventory : inventory;
         const auto& item_catalog = info.build_kit ? object_catalog : catalog;
-        const auto saved = item_inventory.find(key);
-        const bool owned = !cosmetic_runtime().ownership_unavailable && saved != item_inventory.end() && saved->get<bool>();
+        const bool owned = installed_item_owned(snapshot, key, info.hash, info.build_kit);
         auto metadata = profile::item_display_metadata(key, item_catalog.value(key, dingosdk::Json::object()));
         if (info.build_kit) {
             // The same tile and category the browser layout gives this object.
@@ -184,10 +191,24 @@ CosmeticShared make_cosmetic_catalog(const profile::Snapshot& snapshot) {
             metadata["group"] = placement.group ? placement.group->id : key;
             metadata["browser_category"] = placement.category ? placement.category->id : info.category;
         }
-        node.item = make_cosmetic_message(cosmetic_ownable_message(key, info, owned, metadata));
+        try {
+            node.item = make_cosmetic_message(cosmetic_ownable_message(key, info, owned, metadata));
+        } catch (const std::exception& failure) {
+            node = {};
+            hashes.erase(info.hash);
+            leave_out(key, failure.what());
+            continue;
+        }
+        ++index;
         const auto bucket = info.hash % bucket_count;
         node.next = owner->buckets[bucket]; owner->buckets[bucket] = &node;
     }
+    if (!index) throw std::runtime_error("No cosmetic item could be put in the catalog");
+    if (left_out)
+        dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::customization,
+            "Cosmetic catalog: {} of {} items left out (see above).", left_out, items.size());
+    owner->map.count = static_cast<std::uint32_t>(index);
+    cosmetic_runtime().catalog_items = index;
     CosmeticShared result{&owner->map, owner.get()}; owner.release();
     return result;
 }
@@ -208,7 +229,7 @@ void publish_cosmetic_catalog() {
         CosmeticSharedGuard catalog{make_cosmetic_catalog(*local_runtime().store->shared_snapshot())};
         f.complete(&catalog.value, &manager);
         std::uintptr_t installed{}; std::uint32_t count{};
-        if (!read(manager + 0x28, installed) || !installed || !read(installed + 12, count) || count != c.items.size())
+        if (!read(manager + 0x28, installed) || !installed || !read(installed + 12, count) || count != c.catalog_items)
             throw std::runtime_error("Cosmetic catalog republication did not complete");
         c.published_generation = c.items_generation;
         dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::customization,
@@ -231,7 +252,7 @@ void publish_cosmetic_catalog() {
     dingosdk::logging::event(dingosdk::logging::Channel::customization, "{\"event\":\"local_cosmetic_catalog_manager_created\"}");
     f.complete(&catalog.value, &manager); // Consumes map; publishes both native indexes and UI readiness.
     std::uintptr_t installed{}; std::uint32_t count{};
-    if (!read(manager + 0x28, installed) || !installed || !read(installed + 12, count) || count != c.items.size())
+    if (!read(manager + 0x28, installed) || !installed || !read(installed + 12, count) || count != c.catalog_items)
         throw std::runtime_error("Cosmetic catalog publication did not complete");
     c.published_manager = manager;
     c.published_generation = c.items_generation;
@@ -242,16 +263,8 @@ void publish_cosmetic_catalog() {
 
 std::vector<std::uint32_t> cosmetic_owned_ids(const profile::Snapshot& snapshot) {
     std::vector<std::uint32_t> ids;
-    if (cosmetic_runtime().ownership_unavailable) return ids;
-    const auto inventory = snapshot.customization.value("inventory", dingosdk::Json::object());
-    const auto object_dropper = snapshot.extensions.value("object_dropper", dingosdk::Json::object());
-    const auto object_inventory = object_dropper.value("inventory", dingosdk::Json::object());
-    for (const auto& [key, info] : cosmetic_runtime().items) {
-        const auto& item_inventory = info.build_kit ? object_inventory : inventory;
-        const auto saved = item_inventory.find(key);
-        if (saved != item_inventory.end() && saved->is_boolean() && saved->get<bool>())
-            ids.push_back(info.hash);
-    }
+    for (const auto& [key, info] : cosmetic_runtime().items)
+        if (installed_item_owned(snapshot, key, info.hash, info.build_kit)) ids.push_back(info.hash);
     return ids;
 }
 

@@ -219,6 +219,10 @@ CosmeticRuntime &cosmetic_runtime() {
     static CosmeticRuntime state;
     return state;
 }
+// (No profile here grants an object: nothing is owned, as with the empty inventory this stood in for.)
+bool installed_item_owned(const profile::Snapshot &, std::string_view, std::uint32_t, bool) {
+    return false;
+}
 bool placement_session_ready() {
     return true;
 }
