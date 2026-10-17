@@ -376,8 +376,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
             else if (addition.asset.kind == fb::AssetKind::resource)
                 companions.emplace(std::tuple{bundleName, addition.mod, lower(addition.asset.name)}, &addition);
         }
-    // Where an addition's payload already went in this superbundle's patch
-    // archive, by install chunk: every copy that is given it reads the one.
+    // The carried place each addition got in this superbundle, by install chunk.
     std::map<std::pair<std::uint32_t, const AssetAddition*>, fb::BundleFileInfo> carriedAt;
     // The names any mod changed, to rule the rest out without a copy of each (name_hash).
     std::unordered_set<std::uint64_t> changedNames, scriptNames;
@@ -621,7 +620,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         auto placed = carriedAt.find({installChunk, addition});
                         if (placed == carriedAt.end())
                             placed = carriedAt.emplace(std::pair{installChunk, addition},
-                                store.write(installChunk, manifestArchive, addition->encoded)).first;
+                                store.carry(installChunk, manifestArchive, addition->encoded)).first;
                         additions.push_back({addition->asset, placed->second});
                         addedFrom.insert(addition->mod);
                     } catch (const std::exception& error) {
