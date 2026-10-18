@@ -31,8 +31,20 @@ bool unpack_builtin_pack(std::span<const unsigned char> bytes, const std::filesy
 // like the packs above. Not in mods.json, and no mod list shows them.
 inline constexpr std::string_view official_folder = ".reskate-official";
 inline constexpr std::string_view official_stamp = ".official-version";
-// The official mods in place under `mods_root`, by folder name. Never throws.
-std::vector<BuiltinPack> official_packs(const std::filesystem::path& mods_root) noexcept;
+// The official mods the player turned off (the launcher's OFFICIAL tab): their folder names, one a
+// line, in Mods/.reskate-official/official-off.txt. One that is off stays downloaded and kept up to
+// date, but nothing merges or lists it, and the feature it is made for does not start.
+inline constexpr std::string_view official_off_file = "official-off.txt";
+// The official mods the features are made for, by folder name (Namespace-Name).
+inline constexpr std::string_view board_break_official = "Fourth_Studio-Board_Break_Pack";
+inline constexpr std::string_view road_rash_official = "Fourth_Studio-Road_Rash";
+// The official mods in place under `mods_root`, by folder name; without those turned off unless
+// `with_off`. Never throws.
+std::vector<BuiltinPack> official_packs(const std::filesystem::path& mods_root, bool with_off = false) noexcept;
+// Whether the player turned the official mod `folder` off. Never throws.
+bool official_off(const std::filesystem::path& mods_root, std::string_view folder) noexcept;
+// Turns it off or back on; false when the list could not be written. Never throws.
+bool set_official_off(const std::filesystem::path& mods_root, std::string_view folder, bool off) noexcept;
 // Mods that came before an official one and are retired with it (Fourth Studio's deprecated first
 // Board Break), by folder name; the launcher takes them away and nothing loads them.
 bool retired_mod(std::string_view folder) noexcept;

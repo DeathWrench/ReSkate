@@ -3,6 +3,7 @@
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/memory.h"
 #include "Engine/Game/Build/20260929/no_bail.h"
+#include "Engine/Vfs/builtin_packs.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Multiplayer/Remote/native_pose_layout.h"
@@ -94,7 +95,7 @@ struct Broken {
 };
 struct State {
     // Any thread.
-    std::atomic<bool> ready{}, on{true}, wanted_mend{};
+    std::atomic<bool> ready{}, on{true}, wanted_mend{}, turned_off{};
     std::atomic<std::uintptr_t> base{};
     std::atomic<bool> has_deck{}; // one of Board Break's decks is the one in the game
     std::atomic<int> wanted_snap{-1}; // asked for from another thread, done at the next tick
@@ -956,6 +957,12 @@ void publish(State& s, std::uintptr_t base, std::uintptr_t client, std::uintptr_
 bool start(std::uintptr_t base) noexcept {
     auto& s = state();
     if (s.ready.load(std::memory_order_acquire)) return true;
+    // Its official mod turned off in the launcher: no Board Break this launch, and nothing of it shows.
+    if (mods::official_off(mods::engine_data_root() / mods::mods_folder, mods::board_break_official)) {
+        s.turned_off.store(true, std::memory_order_release);
+        logging::write(logging::Level::info, logging::Channel::skater, "Board Break is off: its official mod is turned off in the launcher.");
+        return false;
+    }
     if (!no_bail_available()) {
         logging::write(logging::Level::warning, logging::Channel::skater,
             "Board Break cannot follow the skater: its slams come through No Bail's hooks, which did not start.");
@@ -1203,6 +1210,7 @@ void on_client_tick(std::uintptr_t client) noexcept {
 }
 
 bool available() noexcept { return state().ready.load(std::memory_order_acquire); }
+bool turned_off() noexcept { return state().turned_off.load(std::memory_order_acquire); }
 bool enabled() noexcept { return available() && state().on.load(std::memory_order_acquire); }
 void set_enabled(bool enabled) noexcept {
     state().on.store(enabled, std::memory_order_release);

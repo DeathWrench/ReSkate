@@ -540,6 +540,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
             report.mergedBundles += job.report.mergedBundles;
             report.mergedAssets += job.report.mergedAssets;
             report.unchangedCopies += job.report.unchangedCopies;
+            for (const auto& [level, bytes] : job.report.map_meshes) report.map_meshes[level] += bytes;
             report.notes.insert(report.notes.end(), std::make_move_iterator(job.report.notes.begin()),
                                 std::make_move_iterator(job.report.notes.end()));
             for (auto& [mod, problems] : job.report.problems) {
@@ -573,6 +574,7 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
                         report.removed_tocs.push_back(previous);
             record.tocs = superbundles;
             write_placements(placementsPath, record);
+            write_map_meshes(output / map_meshes_file, report.map_meshes);
         }
         lap("superbundles");
 

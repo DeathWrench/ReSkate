@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -42,7 +43,17 @@ struct MergeReport {
         std::array<std::byte, 16> widget{}; // WidgetAssetGuid
     };
     std::vector<LoadScreen> load_screens;
+    // Each custom map's own mesh geometry, every level of detail of every mesh in its level
+    // bundles, by level folder (dingolevel_reskate_*). What its mesh streaming pool is sized from.
+    std::map<std::string, std::uint64_t> map_meshes;
 };
+
+// Mods/.reskate/reskate-map-meshes.json: map_meshes as the patch was last built, a level folder to
+// its bytes. A live merge updates the maps it saw and keeps the rest.
+inline constexpr char map_meshes_file[] = "reskate-map-meshes.json";
+// Empty when the file is missing or cannot be read.
+[[nodiscard]] std::map<std::string, std::uint64_t> read_map_meshes(const std::filesystem::path& file);
+void write_map_meshes(const std::filesystem::path& file, const std::map<std::string, std::uint64_t>& meshes);
 
 // How far a merge has got. Only a merge that is really rebuilding reports; an
 // unchanged one is reused without a word.

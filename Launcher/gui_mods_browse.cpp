@@ -487,9 +487,19 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
     const float top_y = ImGui::GetCursorPosY();
 
     const bool trouble = std::any_of(state.mods.begin(), state.mods.end(), [](const auto& mod) { return standing_of(mod).trouble; });
-    page_banner(fonts, "OFFICIAL MODS", "ALWAYS ON",
-        "Mods made for ReSkate's own features. Every player has them, kept at their latest version from Thunderstore: "
-        "they load after your mods and are always on.",
+    // Which are turned off (Engine/Vfs/builtin_packs.h), read again now and then rather than every frame.
+    static std::vector<std::string> off;
+    static double off_read = -1e9;
+    const auto read_off = [&] {
+        off.clear();
+        for (const auto& mod : state.mods)
+            if (mods::official_off(panel.root, mod.full_name)) off.push_back(mod.full_name);
+        off_read = ImGui::GetTime();
+    };
+    if (ImGui::GetTime() - off_read > 2.0) read_off();
+    page_banner(fonts, "OFFICIAL MODS", nullptr,
+        "Mods made for ReSkate's own features, kept at their latest version from Thunderstore. They load after your mods. "
+        "Turn one off and its feature is gone from the game too; the change applies the next time you play.",
         state.syncing ? "CHECKING FOR UPDATES" : trouble ? "NEEDS ATTENTION" : state.mods.empty() ? "NONE RIGHT NOW" : "ALL UP TO DATE",
         state.syncing ? color::blue : trouble ? color::warning : state.mods.empty() ? color::tile_grey : color::good,
         source_text(state));
@@ -508,6 +518,7 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
         ImGui::PushID(mod.full_name.c_str());
         const auto* package = ts::find_package(panel.store.packages, mod.full_name);
         const auto standing = standing_of(mod);
+        bool on = std::find(off.begin(), off.end(), mod.full_name) == off.end();
         const ImVec2 start = ImGui::GetCursorScreenPos();
         const float across = ImGui::GetContentRegionAvail().x;
         const float text_x = start.x + pad + icon + S(18);
@@ -551,6 +562,10 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
         draw->AddText(fonts.body, fonts.body->FontSize, ImVec2(text_x + title_width + S(8), title_y + S(2)), color::muted,
             ("by " + author).c_str());
         float pill_x = text_x;
+        if (!on) {
+            badge(draw, fonts, ImVec2(pill_x, pills_y), "OFF", color::tile_grey, color::text);
+            pill_x += badge_width(fonts, "OFF") + S(8);
+        }
         badge(draw, fonts, ImVec2(pill_x, pills_y), standing.word, standing.fill, color::ink);
         pill_x += badge_width(fonts, standing.word) + S(8);
         if (!version.empty()) badge(draw, fonts, ImVec2(pill_x, pills_y), "v" + version, color::tile_grey, color::text);
@@ -577,6 +592,20 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s", mod.installed.empty() ? "Not downloaded yet" : "Where ReSkate keeps it");
+        // On or off: off, nothing merges it and the game neither starts nor lists its feature.
+        ImGui::SetCursorScreenPos(ImVec2(buttons_x, start.y + pad + S(80) + S(5)));
+        if (toggle("##on", &on)) {
+            if (mods::set_official_off(panel.root, mod.full_name, !on))
+                log(logging::Level::info, std::format("Official mods: {} turned {}", mod.full_name, on ? "on" : "off"));
+            else
+                log(logging::Level::warning, std::format("Official mods: {} could not be turned {}", mod.full_name, on ? "on" : "off"));
+            read_off();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", on ? "On. Turn it off to leave it and its feature out of the game, from the next time you play."
+                                       : "Off: not loaded, and its feature is not in the game. Turn it on for the next time you play.");
+        draw->AddText(fonts.body, fonts.body->FontSize, ImVec2(buttons_x + S(52), start.y + pad + S(80) + S(5) + (S(22) - fonts.body->FontSize) * 0.5f),
+            on ? color::text : color::muted, on ? "On" : "Off");
 
         ImGui::SetCursorScreenPos(ImVec2(start.x, start.y + tall + S(12)));
         ImGui::Dummy(ImVec2(across, 0));

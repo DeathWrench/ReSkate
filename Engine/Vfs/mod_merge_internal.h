@@ -199,6 +199,24 @@ std::optional<Listing> list_bundle(const CasStore& store, const fs::path& root, 
 std::vector<std::byte> read_asset(const CasStore& store, const fs::path& root, const fs::path& baseRoot,
                                   const Listing& listing, std::size_t ebxIndex, const fs::path& gameRoot);
 
+// A map's world textures (texture group Worlds_*) flagged to stream that keep every mip with the
+// bundle, so the game loads them whole (an older Studio built maps that way: 404 MB of PQS
+// Cordoba's, 2026-10-17). Cosmetics are not touched: Studio keeps them whole. Each is made
+// to stream as the game's own world textures do: the bundle keeps the mip tail, from a 64 KB
+// block, and the sharper mips stream from the chunk its TOC (`tocChunks`) lists in full. A
+// texture is changed only when all of it can be: its chunk in this bundle whole, a block at the
+// tail, and its record in the chunk metadata. `manifest` and `files` (the region's, `first` the
+// region index of the manifest's first asset) are changed in place; the texture headers that
+// change are returned encoded, by region index, for the merged patch.
+struct StreamedTextures {
+    std::map<std::size_t, std::vector<std::byte>> headers;
+    std::uint64_t bytes{};   // what no longer stays loaded
+    std::string example;
+};
+StreamedTextures stream_resident_textures(const CasStore& store, const fs::path& root, fb::BinaryBundle& manifest,
+                                          std::vector<fb::BundleFileInfo>& files, std::size_t first,
+                                          const std::set<fb::Guid>& tocChunks, const fs::path& gameRoot);
+
 // The loading screens the mods add (the rows of the game's loading-screen
 // configuration each one appends). Never throws; an unreadable mod is noted.
 std::vector<MergeReport::LoadScreen> read_load_screens(const std::vector<const Mod*>& mods,

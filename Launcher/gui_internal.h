@@ -210,6 +210,8 @@ struct Settings {
     std::string steam_username;   // never the password
     bool steam_remember{true};
     bool steam_prefer_code{};
+    // The versions of the privacy policy and the terms of service the player agreed to (0: none).
+    std::uint64_t accepted_privacy{}, accepted_terms{};
 };
 
 inline constexpr std::array<const char*, 7> log_levels{"trace", "debug", "info", "warning", "error", "critical", "off"};
@@ -348,6 +350,45 @@ struct Changelog {
     }
 };
 
+// The privacy policy and terms of service, from the ReSkate backend (GET /api/v1/legal/<kind>):
+// each fetched on a worker the first time it is shown and kept while the launcher runs.
+// Everything but the worker's hand-over belongs to the UI thread.
+struct Legal {
+    enum Kind { privacy, terms, count };
+    struct Document {
+        std::string title, updated, markdown;   // updated: YYYY-MM-DD
+        std::uint64_t version{};
+    };
+    struct Slot {
+        std::thread worker;
+        std::atomic<bool> loading{};
+        bool arrived{};                         // worker -> UI, under the mutex
+        Document incoming;
+        std::string incoming_error;
+
+        bool loaded{};
+        std::string error;                      // why the last fetch failed
+        Document document;
+        thunderstore::Readme text;
+    };
+    std::mutex mutex;
+    std::array<Slot, count> slots;
+    int open{-1};                               // the Kind shown, or -1 when the window is closed
+
+    // The versions the backend has now (GET /api/v1/legal), looked up once a launch. One newer
+    // than the player agreed to (Settings::accepted_*) puts up the agreement before anything else.
+    std::thread versions_worker;
+    bool versions_started{}, versions_arrived{};   // arrived: worker -> UI, under the mutex
+    std::array<std::uint64_t, count> current{};
+    bool agreement{};                           // the agreement window is up
+
+    ~Legal() {
+        for (auto& slot : slots)
+            if (slot.worker.joinable()) slot.worker.join();
+        if (versions_worker.joinable()) versions_worker.join();
+    }
+};
+
 // Settings > GRAPHICS, AUDIO, CAMERA, CONTROLS, REPLAY: skate.'s own settings, read from its
 // save each time Settings opens (game_settings.h).
 struct GamePages {
@@ -364,6 +405,7 @@ struct Ui {
     GamePages game;
     bool changelog{};
     Changelog notes;
+    Legal legal;
     int settings_tab{};         // GAME, DISPLAY, KEYS, ADVANCED, then the game's own pages
     int binding{};              // 1 = menu key, 2 = console key, while waiting for a press
     std::string key_error;
@@ -614,6 +656,13 @@ void qr_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, const std::v
 void steam_offline_window(const Fonts& fonts, ImVec2 size, Ui& ui);
 // What the newest release changed: its notes on GitHub.
 void changelog_window(const Fonts& fonts, ImVec2 size, Ui& ui);
+// The privacy policy or the terms of service (ui.legal.open), with a switch between them.
+void legal_window(const Fonts& fonts, ImVec2 size, Ui& ui);
+// Each frame: the backend's versions of both, looked up once; a newer one than the player
+// agreed to raises ui.legal.agreement.
+void check_legal_versions(Ui& ui, const Settings& settings);
+// "I agree" to the current versions, or quit.
+void legal_agreement_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, HWND window);
 void settings_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, HWND window);
 void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, ModsPanel& panel, HWND window);
 // Shown instead of launching when the merge left mods out.
