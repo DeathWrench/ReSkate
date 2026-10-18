@@ -503,14 +503,16 @@ bool Launcher::run_mod_merge() {
         // Mods built for another game version say so for themselves, in game
         // and in the mod manager; they do not hold up a launch.
         if (!mod.outdated.empty()) continue;
-        problems.push_back({mod.name, mod.title.empty() ? mod.name : mod.title,
-            mod.problems.empty() ? std::string("it could not be merged cleanly") : mod.problems.front()});
+        const auto reason = mod.problems.empty() ? std::string("it could not be merged cleanly") : mod.problems.front();
+        problems.push_back({mod.name, mod.title.empty() ? mod.name : mod.title, reason, reason.starts_with("conflicts with ")});
     }
     if (problems.empty()) return true;
     std::lock_guard lock(mutex_);
     state_.phase = Phase::mods_broken;
-    state_.status = problems.size() == 1 ? "A mod could not be merged"
-                                         : std::format("{} mods could not be merged", problems.size());
+    const bool conflicts = std::ranges::all_of(problems, &ModProblem::conflict);
+    state_.status = problems.size() == 1 ? (conflicts ? "A mod conflicts with another" : "A mod could not be merged")
+                                         : conflicts ? std::format("{} mods conflict with others", problems.size())
+                                                     : std::format("{} mods could not be merged", problems.size());
     state_.detail.clear();
     state_.progress = -1;
     state_.mod_problems = std::move(problems);

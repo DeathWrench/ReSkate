@@ -317,6 +317,17 @@ AssetOverrides collect_asset_overrides(const std::vector<const Mod*>& mods,
                                        const fs::path& gameRoot, MergeReport& report,
                                        std::size_t threads = 0, bool background = false);
 
+// Of two mods that change one of the game's assets in ways that cannot both be in the game, the
+// one lower in the load order, found from the mods' asset lists before anything is merged: the
+// rule the merge applies as it combines (MergeReport::conflicts), read off the bundles two or
+// more mods ship, so the catalog can leave the losing mods out before the one merge that builds
+// the patch. `mods` highest priority first; `output` is only where the patch would go. Never
+// throws: what cannot be read is left to the merge, which still checks for itself.
+std::vector<MergeReport::Conflict> find_conflicts(const std::vector<const Mod*>& mods,
+                                                  const std::map<const Mod*, RelativeFiles>& modFiles,
+                                                  const fs::path& dataRoot, const fs::path& output,
+                                                  std::size_t threads = 0, bool background = false);
+
 // A bundle's chunk metadata is a list with one record for each of its chunks: the
 // hash of the name of the resource the chunk belongs to ("h64") and what the
 // engine needs before it streams the chunk (a texture's first mip). In the game's

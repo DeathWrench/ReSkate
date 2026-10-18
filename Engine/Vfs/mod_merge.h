@@ -27,6 +27,19 @@ struct MergeReport {
     // be decoded, a copy that had to be left out. Each mod gets a summary line
     // from these, and a level that never finishes loading can name its mod.
     std::map<std::string, std::vector<std::string>> problems;
+    // Two mods changing one asset in ways that cannot both be in the game: the copy of the mod
+    // higher in the load order is kept and the other's changes are not in it. One row per pair of
+    // mods (folder names), with one of the assets and how many. The catalog leaves the losing mod
+    // out whole and merges again, so no mod loads half its changes.
+    struct Conflict {
+        std::string kept;
+        std::string lost;
+        std::string asset;
+        std::size_t assets{};
+    };
+    std::vector<Conflict> conflicts;
+    // Nothing was built: the check before the merge found `conflicts` (MergeOptions::conflicts_first).
+    bool stopped_for_conflicts{};
     // Every superbundle the merged mods' layouts assign to an install chunk,
     // as (superbundle, install chunk name). A live merge registers the ones
     // the game did not know at launch.
@@ -79,6 +92,9 @@ struct MergeOptions {
     // the others against it. Reading every mod's items and meshes again is most of what
     // adding one map would otherwise wait on.
     std::vector<std::string> checked;
+    // Look for mods that conflict (find_conflicts) before building anything, and when some do,
+    // stop there (MergeReport::stopped_for_conflicts) so the caller merges once without them.
+    bool conflicts_first{};
 };
 
 // Combines every enabled mod into one patch under Mods/.reskate: superbundle

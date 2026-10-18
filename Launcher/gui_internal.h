@@ -227,6 +227,7 @@ struct ModProblem {
     std::string name;      // folder under Mods/, so it can be switched off
     std::string title;
     std::string reason;
+    bool conflict{};       // left out for another mod above it that changes the same game files
 };
 
 struct State {

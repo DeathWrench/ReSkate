@@ -98,15 +98,15 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         for (const auto* mod : mods) modFiles[mod] = scan(mod->directory);
 
         // What the store sells comes from the content cache, which the launcher installs.
-        //const bool storeKnown = content_cache::installed();
+        const bool storeKnown = content_cache::installed();
         // Disabled mods count too: their archives and map registration are placed at launch.
-        auto fingerprint = merge_fingerprint(catalog, mods, modFiles);
+        auto fingerprint = merge_fingerprint(catalog, mods, modFiles, storeKnown);
         for (const auto& mod : catalog.inactive)
             fingerprint += " inactive " + mod.name + " " + mod_fingerprint(mod.directory);
         if (options.live) {
             fs::remove(output / stamp_file, error);
         } else if (auto previous = previous_merge(output, fingerprint);
-                   previous && (fs::exists(output / item_sources_file, error))) {
+                   previous && (!storeKnown || fs::exists(output / item_sources_file, error))) {
             // (A patch from before items were traced to their mods is built again, once.)
             return std::move(*previous);
         }
@@ -118,9 +118,28 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         // launch (the player is waiting on nothing else), half of them and fewer while the game runs.
         const auto cores = std::max(1U, std::thread::hardware_concurrency());
         const std::size_t readers = std::min<std::size_t>(options.live ? std::max(1U, cores / 2) : cores, options.live ? 6U : 8U);
+        // The checks before the merge say what they are doing, the bar still at its start.
+        const auto checking = [&](std::string step) {
+            if (observe) try { observe({0, 1, mods.size(), std::move(step)}); } catch (...) {}
+        };
         std::optional<std::vector<StoreCopies::Added>> itemsRead;
-        if (store_copy_problems(catalog, report, options.live ? options.checked : std::vector<std::string>{},
+        if (storeKnown) checking("Checking the mods");
+        if (storeKnown && store_copy_problems(catalog, report, options.live ? options.checked : std::vector<std::string>{},
                                               readers - 1, options.live, itemsRead)) return report;
+        // Mods that conflict, found the same way before anything is built: the catalog leaves the
+        // losing ones out and merges once, where finding them in the merge took a second merge.
+        if (options.conflicts_first && !options.live) {
+            checking("Checking the mods for conflicts");
+            const auto started = Clock::now();
+            report.conflicts = find_conflicts(mods, modFiles, catalog.data_root, output, readers - 1);
+            const auto tenths = (std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count() + 50) / 100;
+            report.notes.push_back("Conflict check: " + std::to_string(report.conflicts.size()) + " conflicting pair(s) in " +
+                                   std::to_string(tenths / 10) + '.' + std::to_string(tenths % 10) + " s");
+            if (!report.conflicts.empty()) {
+                report.stopped_for_conflicts = true;
+                return report;
+            }
+        }
         // Which mod each item is from (mod_item_sources.h): what was just read, and for a mod a
         // live merge did not read again, what the launch's merge found. Read before the patch
         // folder is cleared.
@@ -546,6 +565,12 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
             for (auto& [mod, problems] : job.report.problems) {
                 auto& list = report.problems[mod];
                 list.insert(list.end(), std::make_move_iterator(problems.begin()), std::make_move_iterator(problems.end()));
+            }
+            for (auto& row : job.report.conflicts) {
+                const auto same = std::ranges::find_if(report.conflicts, [&](const MergeReport::Conflict& held) {
+                    return held.kept == row.kept && held.lost == row.lost; });
+                if (same != report.conflicts.end()) same->assets += row.assets;
+                else report.conflicts.push_back(std::move(row));
             }
             auto bytes = fb::write_patch_toc(job.merged.bundles, job.merged.chunks, job.merged.flags);
             // Read the result back before publishing it: a TOC whose perfect
