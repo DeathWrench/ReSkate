@@ -81,7 +81,19 @@ std::string title_of(std::string_view full_name) {
     std::replace(title.begin(), title.end(), '_', ' ');
     return title;
 }
-fs::path official_root(const fs::path& mods_root) { return mods_root / std::string(mods::official_folder); }
+// Where the last list read is kept: the folder official mods were kept in before they were mods like
+// any other (builtin_packs.h).
+fs::path list_root(const fs::path& mods_root) { return mods_root / std::string(mods::official_folder); }
+// Takes `names` out of mods.json, every other row as it was; a malformed one is left for the player to see.
+void forget(const fs::path& mods_root, const std::vector<std::string>& names) {
+    if (names.empty()) return;
+    auto list = mods::scan_mods(mods_root.parent_path());
+    if (!list.issue.empty()) return;
+    std::erase_if(list.entries, [&](const mods::ModEntry& entry) {
+        return std::ranges::find(names, entry.mod.name) != names.end();
+    });
+    mods::save_mod_order(mods_root, list.entries);
+}
 std::string stamp_of(const fs::path& folder) { return trimmed(read_text(folder / std::string(mods::official_stamp))); }
 void write_stamp(const fs::path& folder, const std::string& version) {
     std::ofstream(folder / std::string(mods::official_stamp), std::ios::binary | std::ios::trunc) << (version.empty() ? "0" : version) << '\n';
@@ -115,7 +127,8 @@ void ask_thunderstore(Mod& mod) {
     if (mod.description.empty()) mod.description = latest.value("description", "");
     if (mod.icon.empty()) mod.icon = latest.value("icon", "");
 }
-// Downloads `mod` and puts it in place of the version there, whole or not at all.
+// Downloads `mod` and puts it in place of the version there (Mods/<Namespace-Name>), whole or not
+// at all: in the load order where it was, or at the bottom when it is new there.
 void download(const fs::path& root, const Mod& mod, const std::atomic<bool>& cancel) {
     const auto cache = root / L".reskate-download";
     std::error_code error;
@@ -134,22 +147,25 @@ void download(const fs::path& root, const Mod& mod, const std::atomic<bool>& can
             if (!file) throw std::runtime_error("the download could not be written (is the disk full?)");
         });
     }
-    // Installed beside the one in place, then swapped in.
+    // Installed beside the download (out of the mod list's sight), then swapped in.
     const auto staging = mod.full_name + ".new";
-    fs::remove_all(root / wide(staging), error);
+    fs::remove_all(cache / wide(staging), error);
     launcher_mods::InstallOptions options;
     options.folder = staging;
     options.author = mod.full_name.substr(0, mod.full_name.find('-'));
     options.require_content = true;
-    launcher_mods::install(root, archive, false, {}, cancel, options);
+    launcher_mods::install(cache, archive, false, {}, cancel, options);
     const auto target = root / wide(mod.full_name);
+    const bool fresh = !fs::exists(target, error);
     fs::remove_all(target, error);
-    fs::rename(root / wide(staging), target, error);
+    fs::rename(cache / wide(staging), target, error);
     if (error) {
-        fs::remove_all(root / wide(staging), error);
+        fs::remove_all(cache / wide(staging), error);
         throw std::runtime_error("the new version could not be put in place");
     }
     write_stamp(target, mod.version);
+    // A new one goes at the bottom of the load order, where official mods always loaded.
+    if (fresh) (void)mods::set_mod_enabled(root, mod.full_name, true);
 }
 
 std::string status_of(const Mod& mod) {
@@ -160,7 +176,9 @@ std::string status_of(const Mod& mod) {
 
 void sync(const fs::path& mods_root) {
     auto& s = shared();
-    const auto root = official_root(mods_root);
+    // Official mods kept where they were before they were mods like any other go into the Mods folder.
+    for (const auto& line : mods::move_official_mods(mods_root)) log(logging::Level::info, "Official mods: " + line);
+    const auto root = list_root(mods_root);
     std::error_code error;
     fs::create_directories(root, error);
 
@@ -184,7 +202,7 @@ void sync(const fs::path& mods_root) {
             authoritative = false;
         }
     }
-    for (auto& mod : list) mod.installed = stamp_of(root / wide(mod.full_name));
+    for (auto& mod : list) mod.installed = stamp_of(mods_root / wide(mod.full_name));
     {
         std::lock_guard lock(s.mutex);
         s.state.mods = list;
@@ -197,7 +215,7 @@ void sync(const fs::path& mods_root) {
     // (install()). Only what the latest version is, for that tab.
     for (auto& mod : list) {
         if (s.cancel) break;
-        mod.installed = stamp_of(root / wide(mod.full_name));
+        mod.installed = stamp_of(mods_root / wide(mod.full_name));
         try {
             if (mod.version.empty() || mod.download_url.empty()) ask_thunderstore(mod);
         } catch (const std::exception& failure) {
@@ -212,13 +230,18 @@ void sync(const fs::path& mods_root) {
     if (authoritative && !s.cancel) {
         std::set<std::string> named;
         for (const auto& mod : list) named.insert(mod.full_name);
-        for (fs::directory_iterator at(root, error), end; !error && at != end; at.increment(error)) {
+        std::vector<std::string> gone;
+        for (fs::directory_iterator at(mods_root, error), end; !error && at != end; at.increment(error)) {
             const auto name = utf8(at->path().filename().wstring());
-            if (!at->is_directory(error) || name.starts_with('.') || named.contains(name)) continue;
+            if (!at->is_directory(error) || name.starts_with('.') || named.contains(name) || !mods::official_mod(at->path())) continue;
             std::error_code ignored;
             fs::remove_all(at->path(), ignored);
+            gone.push_back(name);
             log(logging::Level::info, "Official mods: " + name + " is no longer official and was removed");
         }
+        try {
+            forget(mods_root, gone);
+        } catch (...) {}
     }
 }
 } // namespace
@@ -269,32 +292,17 @@ std::vector<Mod> fallback_list() {
 std::vector<std::string> adopt_and_retire(const fs::path& mods_root, const std::vector<Mod>& official) {
     std::vector<std::string> done;
     try {
-        const auto root = official_root(mods_root);
         std::error_code error;
-        fs::create_directories(root, error);
         std::vector<std::string> gone;
         for (const auto& mod : official) {
             const auto copy = mods_root / wide(mod.full_name);
-            if (!fs::is_directory(copy, error)) continue;
-            const auto target = root / wide(mod.full_name);
-            if (stamp_of(target).empty()) {
-                // Installed by the player already: moved over rather than downloaded again.
-                const auto version = manifest_version(copy);
-                fs::remove_all(target, error);
-                fs::rename(copy, target, error);
-                if (!error) {
-                    write_stamp(target, version);
-                    gone.push_back(mod.full_name);
-                    done.push_back(std::format("{} (v{}) moved from the Mods folder", mod.full_name, version.empty() ? "?" : version));
-                    continue;
-                }
-                error.clear();
-            }
-            try {
-                launcher_mods::remove(mods_root, mod.full_name);
-                gone.push_back(mod.full_name);
-                done.push_back(mod.full_name + ": the copy in the Mods folder went to the Recycle Bin");
-            } catch (...) {}
+            if (!fs::is_directory(copy, error) || !stamp_of(copy).empty()) continue;
+            // Installed by the player from Thunderstore: it is the official mod, where it is, rather
+            // than downloaded again.
+            const auto version = manifest_version(copy);
+            write_stamp(copy, version);
+            done.push_back(std::format("{} (v{}), installed from Thunderstore, counts as the official mod", mod.full_name,
+                                       version.empty() ? "?" : version));
         }
         for (fs::directory_iterator at(mods_root, error), end; !error && at != end; at.increment(error)) {
             const auto name = utf8(at->path().filename().wstring());
@@ -362,7 +370,7 @@ void install(const fs::path& mods_root, const std::string& full_name) {
         try {
             if (mod.version.empty() || mod.download_url.empty()) ask_thunderstore(mod);
             const auto was = mod.installed;
-            download(official_root(mods_root), mod, s.cancel);
+            download(mods_root, mod, s.cancel);
             mod.installed = mod.version;
             log(logging::Level::info, std::format("Official mods: {} v{} {}", mod.full_name, mod.version,
                                                   was.empty() ? "installed" : "updated from v" + was));
@@ -397,9 +405,9 @@ void uninstall(const fs::path& mods_root, const std::string& full_name) {
     }
     std::thread([mods_root, full_name] {
         auto& s = shared();
-        const auto folder = official_root(mods_root) / wide(full_name);
+        const auto folder = mods_root / wide(full_name);
         std::error_code error;
-        // The stamp first: a folder without it is no mod to the game, whatever is left of it.
+        // The stamp first: a folder without it is no official mod, whatever is left of it.
         fs::remove(folder / std::string(mods::official_stamp), error);
         const bool gone = !error;
         if (gone) {
@@ -407,7 +415,9 @@ void uninstall(const fs::path& mods_root, const std::string& full_name) {
             if (error)
                 log(logging::Level::warning, std::format("Official mods: some of {} could not be deleted ({}); it is uninstalled all the same",
                                                          full_name, error.message()));
-            (void)mods::set_official_off(mods_root, full_name, false);
+            try {
+                forget(mods_root, {full_name});
+            } catch (...) {}
             log(logging::Level::info, "Official mods: " + full_name + " uninstalled");
         } else {
             log(logging::Level::warning, std::format("Official mods: {} could not be uninstalled: {}", full_name, error.message()));

@@ -355,6 +355,7 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
     const auto root = panel.root;
     panel.worker = std::thread([&panel, root, packages = std::move(packages)] {
         std::string name, error, note;
+        wait_for_conflict_check(panel);   // (it may be reading the mods these replace)
         std::size_t done = 0;
         // One that fails does not stop the ones after it: each is its own download, and the
         // list ends with what could not be installed. Cancelling does stop the rest.
@@ -597,8 +598,12 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
             const float switch_x = pill_x + S(8), switch_y = pills_y + (fonts.caption->FontSize + S(8) - S(22)) * 0.5f;
             ImGui::SetCursorScreenPos(ImVec2(switch_x, switch_y));
             if (toggle("##on", &on)) {
-                if (mods::set_official_off(panel.root, mod.full_name, !on))
+                if (mods::set_official_off(panel.root, mod.full_name, !on)) {
                     log(logging::Level::info, std::format("Official mods: {} turned {}", mod.full_name, on ? "on" : "off"));
+                    // MY MODS holds the list as it read it: kept the same, so saving it there keeps this.
+                    for (auto& entry : panel.list.entries)
+                        if (entry.mod.name == mod.full_name) entry.enabled = on;
+                }
                 else
                     log(logging::Level::warning, std::format("Official mods: {} could not be turned {}", mod.full_name, on ? "on" : "off"));
                 read_off();
@@ -635,7 +640,7 @@ void official_page(const Fonts& fonts, ModsPanel& panel, float height) {
         }
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Its page on Thunderstore");
         if (installed) {
-            const auto folder = panel.root / std::string(mods::official_folder) / wide(mod.full_name);
+            const auto folder = panel.root / wide(mod.full_name);
             ImGui::SetCursorScreenPos(ImVec2(buttons_x, button_y + S(40)));
             if (ImGui::Button("OPEN FOLDER", ImVec2(button, S(32)))) open_path(folder);
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Where ReSkate keeps it");

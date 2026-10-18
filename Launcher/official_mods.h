@@ -10,12 +10,12 @@
 // OFFICIAL tab, where the player installs, updates and turns them off. The ReSkate backend names
 // them (GET /api/v1/official-mods, beside the verified mods), so one is added or dropped without a
 // release; the launcher keeps the last list it read, and has one of its own for a first launch with
-// no network. Installed, they live in Mods/.reskate-official/<Namespace-Name>
-// (Engine/Vfs/builtin_packs.h), which the game merges after every installed mod.
+// no network. Installed, each is a mod like any other in Mods/<Namespace-Name> and mods.json, with a
+// stamp naming its version (Engine/Vfs/builtin_packs.h); a new one goes at the bottom of the load order.
 //
 // As the launcher starts it reads the list and, on a thread of its own, looks up each one's latest
-// version: a copy the player installed from Thunderstore is moved over, and copies left in the
-// Mods folder (and mods retired with an official one) go to the Recycle Bin and out of mods.json.
+// version: a copy the player installed from Thunderstore counts as the official mod where it is,
+// and mods retired with an official one go to the Recycle Bin and out of mods.json.
 // Nothing is downloaded until the player asks (install()). Play waits for that and for downloads
 // under way.
 namespace dingosdk::official_mods {
@@ -57,8 +57,8 @@ std::vector<Mod> parse_list(std::string_view json);
 // The list ReSkate falls back on when it has never read one: Fourth Studio's Board Break pack and
 // Road Rash.
 std::vector<Mod> fallback_list();
-// For each official mod not in place yet, a copy in the Mods folder is moved in (stamped with its
-// manifest's version); the copies left in the Mods folder and retired mods go to the Recycle Bin;
+// Each official mod in the Mods folder without its stamp (installed by the player from Thunderstore)
+// is stamped with its manifest's version, as the official mod; retired mods go to the Recycle Bin;
 // mods.json forgets what went. Returns what was done, a line each. Never throws.
 std::vector<std::string> adopt_and_retire(const std::filesystem::path& mods_root, const std::vector<Mod>& official);
 }

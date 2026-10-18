@@ -408,6 +408,40 @@ ModList scan_mods(const std::filesystem::path& data_root) noexcept {
     return result;
 }
 
+bool mod_disabled(const std::filesystem::path& mods_root, std::string_view name) noexcept {
+    try {
+        std::error_code error;
+        const auto path = mods_root / order_file;
+        if (!fs::is_regular_file(path, error)) return false;
+        for (const auto& [listed, enabled] : read_order(path))
+            if (lower(listed) == lower(name)) return !enabled;
+    } catch (...) {}
+    return false;
+}
+
+bool set_mod_enabled(const std::filesystem::path& mods_root, std::string_view name, bool enabled) noexcept {
+    try {
+        if (!valid_mod_name(name)) return false;
+        std::error_code error;
+        const auto path = mods_root / order_file;
+        auto order = fs::is_regular_file(path, error) ? read_order(path) : std::vector<std::pair<std::string, bool>>{};
+        const auto found = std::ranges::find_if(order, [&](const auto& row) { return lower(row.first) == lower(name); });
+        if (found != order.end()) found->second = enabled;
+        else order.emplace_back(std::string(name), enabled);
+        std::vector<ModEntry> entries;
+        for (const auto& [listed, on] : order) {
+            ModEntry entry;
+            entry.mod.name = listed;
+            entry.enabled = on;
+            entries.push_back(std::move(entry));
+        }
+        save_mod_order(mods_root, entries);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 void save_mod_order(const std::filesystem::path& mods_root, const std::vector<ModEntry>& entries) {
     auto rows = Json::array();
     for (const auto& entry : entries) {

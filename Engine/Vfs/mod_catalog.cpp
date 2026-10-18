@@ -3,6 +3,7 @@
 #include "builtin_packs.h"
 
 #include "mod_merge.h"
+#include "mod_conflicts.h"
 #include "native_db.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Game/Build/supported_build.h"
@@ -147,7 +148,6 @@ std::vector<fs::path> deck_mod_folders() {
     for (fs::directory_iterator at(mods / std::string(builtin_folder), error), end; !error && at != end; at.increment(error))
         if (at->is_directory(error) && at->path().filename().wstring().find(L".unpacking-") == std::wstring::npos)
             found.push_back(at->path());
-    for (auto& official : official_packs(mods)) found.push_back(std::move(official.directory));
     return found;
 }
 // Every deck in the Mods folder with the folder of the mod that brings it, in the menus' order,
@@ -322,6 +322,9 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     // when there is none, so the content loads without any mod installed.
     std::vector<std::string> builtin_notes;
     const auto builtin = unpack_builtin_packs(data_root / mods_folder, builtin_notes);
+    // Official mods kept where they were before they were mods like any other go into the Mods
+    // folder first (builtin_packs.h), should the launcher not have moved them yet.
+    for (auto& note : move_official_mods(data_root / mods_folder)) builtin_notes.push_back("Official mods: " + std::move(note));
     auto list = scan_mods(data_root);
     for (auto& note : builtin_notes) list.notes.push_back(std::move(note));
     result.root = std::move(list.root);
@@ -337,18 +340,15 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     try {
         for (const auto& name : list.missing)
             result.notes.push_back("mods.json names a folder that is not present: " + name);
-        // A mod ReSkate keeps itself (an official mod, or one retired with it: builtin_packs.h) is
-        // left out, should the launcher not have taken it away yet: its content would load twice.
+        // A mod retired with an official one (builtin_packs.h) is left out, should the launcher not
+        // have taken it away yet: the official one replaces it.
         std::erase_if(list.entries, [&](const ModEntry& entry) {
             if (!kept_by_reskate(data_root / mods_folder, entry.mod.name)) return false;
-            result.notes.push_back(entry.mod.name + " is an official mod ReSkate keeps itself; the copy in the Mods folder is left out");
+            result.notes.push_back(entry.mod.name + " is retired with an official mod; it is left out");
             return true;
         });
-        // After every installed mod, so none of theirs is ever shadowed by it; always on. Official
-        // mods (builtin_packs.h) the same way, those installed and not turned off.
+        // After every installed mod, so none of theirs is ever shadowed by it; always on.
         for (const auto& pack : builtin)
-            list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
-        for (const auto& pack : official_packs(data_root / mods_folder))
             list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
         // Board Break: a deck pack holds several decks in one mod folder (mod_catalog.h). Each deck
         // inside becomes a mod of its own for the run, listed after the pack as <folder>#<deck>, so
@@ -533,7 +533,7 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             // without it. Removing one mod cannot break another, but a few rounds
             // are allowed in case two damaged mods hid each other's problems.
             for (int round = 0;; ++round) {
-                // The first looks for conflicts before building anything (find_conflicts).
+                // The first looks for conflicts before building anything (ConflictChecker).
                 merge = merge_mods(result, observe, {.conflicts_first = round == 0});
                 if (!merge.issue.empty() || round == 4) break; // a fifth merge only rebuilds without round four's removals
                 // (What the check before the merge noted, which the merge's own notes below would not carry.)
@@ -544,35 +544,42 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
                 // ways that cannot both be in the game, the one lower in the load order, whole (so
                 // neither loads half its changes). Mods are looked at from the top of the load
                 // order down, so one that lost only to a mod that is itself left out stays in.
-                // ReSkate's own packs, which load below every mod, are never left out for this.
-                const auto official = official_packs(data_root / mods_folder, true);
+                // ReSkate's own packs, which load below every mod, and official mods, which features
+                // of ReSkate's need, are never left out for this.
                 const auto ours = [&](const std::string& name) {
-                    return name.starts_with("reskate-builtin-") || name.find('#') != std::string::npos ||
-                           std::ranges::any_of(official, [&](const BuiltinPack& pack) { return pack.name == name; });
+                    if (name.starts_with("reskate-builtin-") || name.find('#') != std::string::npos) return true;
+                    const auto mod = std::ranges::find_if(result.mods, [&](const Mod& each) { return each.name == name; });
+                    return mod != result.mods.end() && official_mod(mod->directory);
                 };
                 struct Out {
                     std::vector<std::string> problems;
                     std::string winner;   // left out for a conflict with this mod
                 };
                 std::map<std::size_t, Out> out;
-                std::set<std::string> leaving;
+                std::set<std::string, std::less<>> broken;
+                std::vector<std::string> order;
                 for (std::size_t i = 0; i < result.mods.size(); ++i) {
                     const auto& name = result.mods[i].name;
+                    order.push_back(name);
                     if (const auto found = merge.problems.find(name); found != merge.problems.end() && !found->second.empty()) {
                         out[i].problems = found->second;
-                        leaving.insert(name);
-                        continue;
+                        broken.insert(name);
                     }
-                    if (ours(name)) continue;
-                    for (const auto& row : merge.conflicts) {
-                        if (row.lost != name || leaving.contains(row.kept)) continue;
-                        auto& entry = out[i];
-                        if (entry.winner.empty()) entry.winner = row.kept;
-                        entry.problems.push_back("conflicts with " + row.kept + ": both change " + row.asset +
-                            (row.assets > 1 ? " and " + std::to_string(row.assets - 1) + " other asset(s)" : std::string{}) +
-                            ", and " + row.kept + " is higher in the load order");
+                }
+                const auto losses = conflict_losses(order, merge.conflicts, broken, ours);
+                for (std::size_t i = 0; i < result.mods.size(); ++i) {
+                    const auto loss = losses.find(result.mods[i].name);
+                    if (loss == losses.end()) continue;
+                    auto& entry = out[i];
+                    entry.winner = loss->second.winner;
+                    for (const auto* row : loss->second.rows) {
+                        std::string areas;
+                        for (const auto& area : row->areas) areas += (areas.empty() ? "" : ", ") + area;
+                        entry.problems.push_back("conflicts with " + row->kept + ": both change " +
+                            (areas.empty() ? std::string("the same game files") : areas) + " (" + row->asset +
+                            (row->assets > 1 ? " and " + std::to_string(row->assets - 1) + " more" : std::string{}) +
+                            "), and " + row->kept + " is higher in the load order");
                     }
-                    if (out.contains(i)) leaving.insert(name);
                 }
                 const bool removed = !out.empty();
                 if (removed)

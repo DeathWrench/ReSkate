@@ -73,6 +73,7 @@ Settings load_settings(const fs::path& path) {
         settings.steam_prefer_code = json.value("steam_prefer_code", settings.steam_prefer_code);
         settings.accepted_privacy = json.value("accepted_privacy_version", settings.accepted_privacy);
         settings.accepted_terms = json.value("accepted_terms_version", settings.accepted_terms);
+        settings.announcement_hidden = json.value("announcement_hidden", settings.announcement_hidden);
     } catch (const std::exception& exception) {
         logging::log(logging::Level::warning, logging::Channel::launcher, "Ignoring launcher settings: {}", exception.what());
     }
@@ -101,6 +102,7 @@ void save_settings(const fs::path& path, const Settings& settings) {
     json["steam_remember"] = settings.steam_remember;
     json["steam_prefer_code"] = settings.steam_prefer_code;
     json["accepted_privacy_version"] = settings.accepted_privacy;
+    json["announcement_hidden"] = settings.announcement_hidden;
     json["accepted_terms_version"] = settings.accepted_terms;
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output << json.dump(2) << '\n';
@@ -500,19 +502,18 @@ bool Launcher::run_mod_merge() {
     if (!catalog.issue.empty())
         problems.push_back({{}, "The Mods folder", catalog.issue});
     for (const auto& mod : catalog.excluded) {
-        // Mods built for another game version say so for themselves, in game
-        // and in the mod manager; they do not hold up a launch.
+        // Mods built for another game version say so for themselves, in game and in the mod
+        // manager, and a mod left out for a conflict is shown there with the mod it lost to and
+        // what to do about it: neither holds up a launch.
         if (!mod.outdated.empty()) continue;
         const auto reason = mod.problems.empty() ? std::string("it could not be merged cleanly") : mod.problems.front();
-        problems.push_back({mod.name, mod.title.empty() ? mod.name : mod.title, reason, reason.starts_with("conflicts with ")});
+        if (reason.starts_with("conflicts with ")) continue;
+        problems.push_back({mod.name, mod.title.empty() ? mod.name : mod.title, reason});
     }
     if (problems.empty()) return true;
     std::lock_guard lock(mutex_);
     state_.phase = Phase::mods_broken;
-    const bool conflicts = std::ranges::all_of(problems, &ModProblem::conflict);
-    state_.status = problems.size() == 1 ? (conflicts ? "A mod conflicts with another" : "A mod could not be merged")
-                                         : conflicts ? std::format("{} mods conflict with others", problems.size())
-                                                     : std::format("{} mods could not be merged", problems.size());
+    state_.status = problems.size() == 1 ? "A mod could not be merged" : std::format("{} mods could not be merged", problems.size());
     state_.detail.clear();
     state_.progress = -1;
     state_.mod_problems = std::move(problems);

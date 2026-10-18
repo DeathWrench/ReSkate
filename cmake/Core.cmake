@@ -103,6 +103,7 @@ if(WIN32)
         Engine/Vfs/mod_merge_combine.cpp
         Engine/Vfs/mod_merge_overrides.cpp
         Engine/Vfs/mod_merge_conflicts.cpp
+        Engine/Vfs/mod_merge_scan_cache.cpp
         Engine/Vfs/mod_merge_textures.cpp
         Engine/Vfs/mod_merge_grid.cpp
         Engine/Vfs/mod_merge_load_screens.cpp
