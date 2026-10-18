@@ -529,7 +529,10 @@ int main() {
         const auto store = root / L"live" / L"Mods";
         fs::create_directories(store);
         official_mods::start(store);
-        check(official_mods::wait(std::chrono::minutes(5)), "The official mods were put in place in time");
+        check(official_mods::wait(std::chrono::minutes(1)), "The list was read in time");
+        check(mods::official_packs(store).empty(), "Nothing is downloaded until asked");
+        for (const auto& mod : official_mods::snapshot().mods) official_mods::install(store, mod.full_name);
+        check(official_mods::wait(std::chrono::minutes(5)), "The official mods were installed in time");
         const auto state = official_mods::snapshot();
         std::cout << "  official mods from " << state.source << ":\n";
         for (const auto& mod : state.mods)

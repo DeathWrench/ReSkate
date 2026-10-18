@@ -345,7 +345,7 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
             return true;
         });
         // After every installed mod, so none of theirs is ever shadowed by it; always on. Official
-        // mods (builtin_packs.h) the same way.
+        // mods (builtin_packs.h) the same way, those installed and not turned off.
         for (const auto& pack : builtin)
             list.entries.push_back({describe_mod(pack.directory, pack.name, result.notes), true});
         for (const auto& pack : official_packs(data_root / mods_folder))

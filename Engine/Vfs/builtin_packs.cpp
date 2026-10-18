@@ -269,6 +269,16 @@ bool set_official_off(const fs::path& mods_root, std::string_view folder, bool o
     }
 }
 
+bool official_in_use(const fs::path& mods_root, std::string_view folder) noexcept {
+    try {
+        std::error_code error;
+        return !folder.empty() && !official_off(mods_root, folder) &&
+               fs::is_regular_file(mods_root / std::string(official_folder) / std::string(folder) / std::string(official_stamp), error);
+    } catch (...) {
+        return false;
+    }
+}
+
 std::vector<BuiltinPack> official_packs(const fs::path& mods_root, bool with_off) noexcept {
     std::vector<BuiltinPack> packs;
     try {

@@ -629,7 +629,7 @@ void mod_icon(ModsPanel& panel, const thunderstore::Package* package, ImVec2 pos
 void pump_icons(ModsPanel& panel);
 // The GET MODS page body, under the page header.
 void browse_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, float height, bool installing);
-// The official mods (official_mods.h): what every player has, always on, and how each is doing.
+// The official mods (official_mods.h): each to install, update or turn off, and how it is doing.
 void official_page(const Fonts& fonts, ModsPanel& panel, float height);
 // Everything Thunderstore knows about one package, in a popup over the page.
 void package_overview(const Fonts& fonts, ModsPanel& panel, ImVec2 size, bool installing);

@@ -225,10 +225,13 @@ void watch_fall(State& s, const NoBailSkater& skater, std::uint64_t now, bool wi
 bool start(std::uintptr_t base) noexcept {
     auto& s = state();
     if (s.ready.load(std::memory_order_acquire)) return true;
-    // Its official mod turned off in the launcher: no Road Rash this launch, and nothing of it shows.
-    if (mods::official_off(mods::engine_data_root() / mods::mods_folder, mods::road_rash_official)) {
+    // Its official mod not installed, or turned off, in the launcher: no Road Rash this launch, and
+    // nothing of it shows.
+    if (const auto mods_root = mods::engine_data_root() / mods::mods_folder; !mods::official_in_use(mods_root, mods::road_rash_official)) {
         s.turned_off.store(true, std::memory_order_release);
-        logging::write(logging::Level::info, logging::Channel::skater, "Road Rash is off: its official mod is turned off in the launcher.");
+        logging::write(logging::Level::info, logging::Channel::skater,
+            mods::official_off(mods_root, mods::road_rash_official) ? "Road Rash is off: its official mod is turned off in the launcher."
+                                                    : "Road Rash is off: its official mod is not installed (launcher, Mods, OFFICIAL).");
         return false;
     }
     constexpr auto prefix = addr::native_cosmetics::recipe_copy_prefix;

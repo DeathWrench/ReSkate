@@ -957,10 +957,13 @@ void publish(State& s, std::uintptr_t base, std::uintptr_t client, std::uintptr_
 bool start(std::uintptr_t base) noexcept {
     auto& s = state();
     if (s.ready.load(std::memory_order_acquire)) return true;
-    // Its official mod turned off in the launcher: no Board Break this launch, and nothing of it shows.
-    if (mods::official_off(mods::engine_data_root() / mods::mods_folder, mods::board_break_official)) {
+    // Its official mod not installed, or turned off, in the launcher: no Board Break this launch, and
+    // nothing of it shows.
+    if (const auto mods_root = mods::engine_data_root() / mods::mods_folder; !mods::official_in_use(mods_root, mods::board_break_official)) {
         s.turned_off.store(true, std::memory_order_release);
-        logging::write(logging::Level::info, logging::Channel::skater, "Board Break is off: its official mod is turned off in the launcher.");
+        logging::write(logging::Level::info, logging::Channel::skater,
+            mods::official_off(mods_root, mods::board_break_official) ? "Board Break is off: its official mod is turned off in the launcher."
+                                                    : "Board Break is off: its official mod is not installed (launcher, Mods, OFFICIAL).");
         return false;
     }
     if (!no_bail_available()) {
