@@ -98,15 +98,15 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         for (const auto* mod : mods) modFiles[mod] = scan(mod->directory);
 
         // What the store sells comes from the content cache, which the launcher installs.
-        const bool storeKnown = content_cache::installed();
+        //const bool storeKnown = content_cache::installed();
         // Disabled mods count too: their archives and map registration are placed at launch.
-        auto fingerprint = merge_fingerprint(catalog, mods, modFiles, storeKnown);
+        auto fingerprint = merge_fingerprint(catalog, mods, modFiles);
         for (const auto& mod : catalog.inactive)
             fingerprint += " inactive " + mod.name + " " + mod_fingerprint(mod.directory);
         if (options.live) {
             fs::remove(output / stamp_file, error);
         } else if (auto previous = previous_merge(output, fingerprint);
-                   previous && (!storeKnown || fs::exists(output / item_sources_file, error))) {
+                   previous && (fs::exists(output / item_sources_file, error))) {
             // (A patch from before items were traced to their mods is built again, once.)
             return std::move(*previous);
         }
@@ -123,8 +123,8 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
             if (observe) try { observe({0, 1, mods.size(), std::move(step)}); } catch (...) {}
         };
         std::optional<std::vector<StoreCopies::Added>> itemsRead;
-        if (storeKnown) checking("Checking the mods");
-        if (storeKnown && store_copy_problems(catalog, report, options.live ? options.checked : std::vector<std::string>{},
+        checking("Checking the mods");
+        if (store_copy_problems(catalog, report, options.live ? options.checked : std::vector<std::string>{},
                                               readers - 1, options.live, itemsRead)) return report;
         // Mods that conflict, found the same way before anything is built: the catalog leaves the
         // losing ones out and merges once, where finding them in the merge took a second merge.
