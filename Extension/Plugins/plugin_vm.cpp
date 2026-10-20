@@ -1,6 +1,7 @@
 #include "plugin_vm.h"
 #include "plugin_api.h"
 #include "plugin_wire.h"
+#include "plugin_bodies.h"
 #include "lua.h"
 #include "luacode.h"
 #include "lualib.h"
@@ -605,6 +606,60 @@ void Plugin::bailed(std::uint64_t wipeouts, std::optional<SlamNews> slam) {
         }
         return 1;
     });
+}
+
+void Plugin::touch_tick(const std::vector<Body>& list) {
+    if (state_ != State::running || !has("session.skaters") || !touch_reach_) return;
+    const auto tell = [&](std::string_view event, std::uint64_t player, const Contact& c) {
+        fire_with(event, [&](lua_State* L) {
+            lua_createtable(L, 0, 5);
+            const auto id = std::to_string(player);
+            lua_pushlstring(L, id.data(), id.size());
+            lua_setfield(L, -2, "player");
+            lua_pushstring(L, body_part_names[c.part]);
+            lua_setfield(L, -2, "part");
+            lua_pushstring(L, body_part_names[c.their_part]);
+            lua_setfield(L, -2, "their_part");
+            lua_pushnumber(L, std::max(c.gap, 0.f));
+            lua_setfield(L, -2, "distance");
+            lua_pushvector(L, c.at[0], c.at[1], c.at[2]);
+            lua_setfield(L, -2, "position");
+            return 1;
+        });
+    };
+    const Body* mine = nullptr;
+    for (const auto& body : list)
+        if (!body.player) mine = &body;
+    std::set<std::uint64_t> seen;
+    for (const auto& body : list) {
+        if (!body.player || !mine) continue;
+        const auto near = bodies::nearest(*mine, body);
+        if (!near) continue;
+        seen.insert(body.player);
+        const Contact now{near->mine, near->theirs, near->gap, near->at};
+        const auto was = contacts_.find(body.player);
+        if (was == contacts_.end()) {
+            if (near->gap > *touch_reach_ || contacts_.size() >= 64) continue;
+            contacts_[body.player] = now;
+            tell("touch", body.player, now);
+        } else if (near->gap <= *touch_reach_ + 0.1f) {
+            was->second = now;
+        } else {
+            contacts_.erase(was);
+            tell("touch_end", body.player, now);
+        }
+        if (state_ != State::running || !touch_reach_) return; // a handler stopped it, or touching
+    }
+    for (auto it = contacts_.begin(); it != contacts_.end();) {
+        if (seen.contains(it->first)) {
+            ++it;
+            continue;
+        }
+        const auto [player, last] = *it;
+        it = contacts_.erase(it);
+        tell("touch_end", player, last);
+        if (state_ != State::running || !touch_reach_) return;
+    }
 }
 
 void Plugin::chat_line(const ChatLine& line) {

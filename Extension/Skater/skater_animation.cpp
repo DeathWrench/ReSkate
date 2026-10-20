@@ -184,6 +184,19 @@ struct Plan {
     float offsets_weight{1};
     double offsets_until{};
 };
+// The game menu's character room (PR 297's studio room): the spot of the menu's skater, how far from
+// it a rig counts as in the room, and the room's floor (measured 2026-10-10 on Stadium 1 and San
+// Vansterdam, PR 230).
+constexpr std::array<float, 3> room_spot{1.0f, -69.04f, -5.25f};
+constexpr std::array<float, 3> room_reach{2.0f, 2.0f, 2.0f};
+constexpr float room_floor = -69.99f;
+constexpr std::uint16_t ground_joint = 375; // the skater's Ground joint: on the floor he stands or rides on
+std::atomic<bool> room_watch{}, room_shown{};
+std::atomic<double> room_seen_at{-1e9}, room_restore_until{};
+// The menu skater's facing (its placement's rotation): the local skater faces the same way, as the room's camera expects.
+std::mutex room_facing_mutex;
+Quat room_facing{0, 0, 0, 1};
+bool room_facing_valid{};
 // The joints asked for as last evaluated (joint()), for the client thread.
 std::mutex joints_mutex;
 std::vector<std::pair<std::uint16_t, Joint>> joints_now;
@@ -311,7 +324,8 @@ void on_animation(std::uintptr_t component) noexcept {
         const bool reaching = snap->reach && now < snap->reach_until;
         const bool joints_wanted = now < snap->joints_until && !snap->joints_read.empty();
         const bool posing = !snap->offsets.empty() && now < snap->offsets_until;
-        if (!busy && !reaching && !joints_wanted && !posing && (!snap->allowed || (!snap->play && snap->replacements.empty()))) {
+        const bool in_room = room_shown.load(std::memory_order_acquire);
+        if (!busy && !reaching && !joints_wanted && !posing && !in_room && (!snap->allowed || (!snap->play && snap->replacements.empty()))) {
             std::lock_guard lock(pending().mutex);
             pending().bones.clear();
             SetLastError(error);
@@ -344,6 +358,19 @@ void on_animation(std::uintptr_t component) noexcept {
             record_running.store(true, std::memory_order_release);
         }
         if (record_running.load(std::memory_order_acquire)) record_frame(l, at, air);
+        // The character room: the skater drawn on its floor, facing as the menu's skater does, as high
+        // above the floor as he is above his own ground. Everything after this hangs from it.
+        if (in_room) {
+            const auto live_placement = world(l.pose, placement_joint);
+            Joint room = live_placement;
+            {
+                std::lock_guard lock(room_facing_mutex);
+                if (room_facing_valid) room.rotation = room_facing;
+            }
+            const float above = live_placement.position[1] - world(l.pose, ground_joint).position[1];
+            room.position = {room_spot[0], room_floor + above, room_spot[2]};
+            if (const auto local = relative(l.pose[0], room); finite(local)) l.pose[placement_joint] = local;
+        }
 
         const Clip* clip = nullptr;
         float t = -1, weight = 0;
@@ -486,6 +513,11 @@ void on_animation(std::uintptr_t component) noexcept {
             std::lock_guard lock(joints_mutex);
             joints_now.swap(placed);
         }
+        // In the room the placement is written too (it is the room's), and nothing else need change.
+        if (in_room) {
+            if (last > first) first = std::min<std::size_t>(first, placement_joint);
+            else first = placement_joint, last = placement_joint + 1u;
+        }
         if (last > first) {
             for (std::size_t i = first; i < last; ++i)
                 if (!finite(l.pose[i])) throw std::runtime_error("a clip made a broken pose; nothing was written");
@@ -507,12 +539,15 @@ void on_animation(std::uintptr_t component) noexcept {
                 p.bones.assign(l.bones.begin() + static_cast<std::ptrdiff_t>(first), l.bones.begin() + static_cast<std::ptrdiff_t>(last));
                 p.at = at;
             }
+            // Other players are never sent the room: from joint 2 on only.
+            const std::size_t sent_first = std::max<std::size_t>(first, 2);
             auto& sp = sent_pose();
             std::lock_guard sent_lock(sp.mutex);
             sp.component = component;
-            sp.first = static_cast<std::uint32_t>(first);
-            sp.last = static_cast<std::uint32_t>(last);
-            sp.joints.assign(l.pose.begin() + static_cast<std::ptrdiff_t>(first), l.pose.begin() + static_cast<std::ptrdiff_t>(last));
+            sp.first = static_cast<std::uint32_t>(sent_first);
+            sp.last = static_cast<std::uint32_t>(std::max(last, sent_first));
+            sp.joints.assign(l.pose.begin() + static_cast<std::ptrdiff_t>(sent_first),
+                             l.pose.begin() + static_cast<std::ptrdiff_t>(std::max(last, sent_first)));
             sp.at = at;
         } else {
             auto& p = pending();
@@ -546,6 +581,44 @@ void on_send(std::uintptr_t component, std::vector<multiplayer::Transform>& skat
     }
 }
 
+// The room's own skater and board (the menu's): hidden while the local skater shows in the room, given
+// back after it. A skater is hidden by a tiny scale on its placement joint (a move, or scale 0, can move
+// the game's camera or hide the room), a board by scale 0 on every bone. The game does not set the
+// scale again, so it is given back here (PR 297's hide_in_room).
+void hide_in_room(std::uintptr_t animation_interface, bool skater) noexcept {
+    const bool hide = room_shown.load(std::memory_order_acquire), watch = room_watch.load(std::memory_order_acquire);
+    if (!hide && !watch && now_seconds() > room_restore_until.load(std::memory_order_acquire)) return;
+    auto& l = live();
+    const auto holder = animation_interface - 0xc0;
+    const auto layout = multiplayer::read_native_pose_layout(peek, l.base.load(std::memory_order_acquire), holder, 512);
+    if (!layout.buffer || layout.count != (skater ? skeleton_joints : board_bones)) return;
+    std::array<NativeBone, 3> b{};
+    if (!peek(layout.buffer, b.data(), sizeof(b))) return;
+    const auto at = compose(compose(joint_of(b[0]), joint_of(b[1])), skater ? Joint{} : joint_of(b[2])).position;
+    for (std::size_t i = 0; i < 3; ++i)
+        if (!(std::abs(at[i] - room_spot[i]) < room_reach[i])) return;
+    if (skater) {
+        room_seen_at.store(now_seconds(), std::memory_order_release);
+        if (b[1].scale[0] >= 0.01f) {
+            const auto placed = compose(joint_of(b[0]), joint_of(b[1]));
+            std::lock_guard lock(room_facing_mutex);
+            room_facing = placed.rotation;
+            room_facing_valid = finite(placed);
+        }
+        const float scale = hide ? 0.001f : 1.0f;
+        if ((b[1].scale[0] < 0.01f) == hide) return;
+        const std::array<float, 3> s3{scale, scale, scale};
+        (void)poke(layout.buffer + sizeof(NativeBone), s3.data(), sizeof(s3));
+        return;
+    }
+    const float scale = hide ? 0.0f : 1.0f;
+    if ((b[2].scale[0] == 0.0f) == hide) return;
+    for (std::uint32_t i = 0; i < layout.count; ++i) {
+        const std::array<float, 3> s3{scale, scale, scale};
+        (void)poke(layout.buffer + i * sizeof(NativeBone), s3.data(), sizeof(s3));
+    }
+}
+
 // The local skater's pose handed to the renderer: the clip's pose goes in now, over whatever the
 // body physics left there, each joint's own lanes only (each bone's 4th lane stays).
 void on_render(std::uintptr_t animation_interface) noexcept {
@@ -556,6 +629,7 @@ void on_render(std::uintptr_t animation_interface) noexcept {
     try {
         const auto holder = read<std::uintptr_t>(component + 0xa0);
         if (!holder || !*holder || animation_interface != *holder + 0xc0) {
+            hide_in_room(animation_interface, true);
             SetLastError(error);
             return;
         }
@@ -595,6 +669,7 @@ void on_board_render(std::uintptr_t animation_interface, std::uintptr_t /*render
     try {
         const auto bh = l.board_holder.load(std::memory_order_acquire);
         if (!bh || animation_interface != bh + 0xc0) {
+            hide_in_room(animation_interface, false);
             SetLastError(error);
             return;
         }
@@ -638,6 +713,11 @@ std::string failure;
 std::uint64_t serial{};
 }
 
+void watch_room(bool on) noexcept { room_watch.store(on, std::memory_order_release); }
+bool room_skater_seen() noexcept { return now_seconds() - room_seen_at.load(std::memory_order_acquire) < 0.5; }
+void show_in_room(bool on) noexcept {
+    if (room_shown.exchange(on, std::memory_order_acq_rel) && !on) room_restore_until.store(now_seconds() + 3, std::memory_order_release);
+}
 void play(std::optional<Play> clip) {
     plan_draft.play = std::move(clip);
     plan_draft.started = now_seconds();
@@ -769,7 +849,8 @@ void tick(std::uintptr_t base, std::uintptr_t component, bool allowed) {
     const double now = now_seconds();
     const bool wanted = plan_draft.play || !plan_draft.replacements.empty() || recording() ||
                         (plan_draft.reach && now < plan_draft.reach_until) || now < plan_draft.joints_until ||
-                        (!plan_draft.offsets.empty() && now < plan_draft.offsets_until);
+                        (!plan_draft.offsets.empty() && now < plan_draft.offsets_until) || room_watch.load(std::memory_order_acquire) ||
+                        room_shown.load(std::memory_order_acquire) || now < room_restore_until.load(std::memory_order_acquire);
     if (wanted && !hooked && base) {
         std::string detail;
         if (multiplayer::install_entity_hooks(base, detail)) {

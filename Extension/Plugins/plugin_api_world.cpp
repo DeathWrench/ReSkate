@@ -1,5 +1,6 @@
 #include "plugin_api.h"
 #include "plugin_game.h"
+#include "plugin_bodies.h"
 #include "lua.h"
 #include "lualib.h"
 #include <algorithm>
@@ -1201,6 +1202,110 @@ struct WorldApi {
         const auto joint = joint_of(L, 2);
         return push_joint(L, game(plugin).skater_joint(player, joint), joint);
     }
+    // session.touch(on, reach): "touch" and "touch_end" events while on, for contact within `reach`
+    // metres (0 to 1, 0.05 when not given) between the local skater's body and another player's.
+    static int session_touch(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "session.skaters", "reskate.session.touch");
+        if (!lua_isnone(L, 1) && !lua_toboolean(L, 1)) {
+            plugin.touch_reach_.reset();
+            plugin.contacts_.clear();
+            return 0;
+        }
+        const double reach = luaL_optnumber(L, 2, 0.05);
+        if (!(reach >= 0 && reach <= 1)) luaL_argerror(L, 2, "a reach is 0 to 1 m");
+        plugin.touch_reach_ = static_cast<float>(reach);
+        (void)game(plugin).bodies(); // they are read from now on
+        return 0;
+    }
+    static void push_part(lua_State* L, std::uint8_t part, const char* field) {
+        lua_pushstring(L, body_part_names[part]);
+        lua_setfield(L, -2, field);
+    }
+    // session.touching(): the players touched now, {player, part, their_part, distance, position} each.
+    static int session_touching(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "session.skaters", "reskate.session.touching");
+        lua_createtable(L, static_cast<int>(plugin.contacts_.size()), 0);
+        int n = 0;
+        for (const auto& [player, c] : plugin.contacts_) {
+            lua_createtable(L, 0, 5);
+            const auto id = std::to_string(player);
+            lua_pushlstring(L, id.data(), id.size());
+            lua_setfield(L, -2, "player");
+            push_part(L, c.part, "part");
+            push_part(L, c.their_part, "their_part");
+            lua_pushnumber(L, std::max(c.gap, 0.f));
+            lua_setfield(L, -2, "distance");
+            push_position(L, c.at);
+            lua_setfield(L, -2, "position");
+            lua_rawseti(L, -2, ++n);
+        }
+        return 1;
+    }
+    // session.hide(player, hidden): that player's skater not drawn on this screen (true or nothing), or
+    // drawn again (false).
+    static int session_hide(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "session.skaters", "reskate.session.hide");
+        const auto player = player_of(L, 1);
+        return result(L, game(plugin).hide_player(plugin.id(), player, lua_isnone(L, 2) || lua_toboolean(L, 2)));
+    }
+    static int session_hidden(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "session.skaters", "reskate.session.hidden");
+        const auto list = game(plugin).hidden_players(plugin.id());
+        lua_createtable(L, static_cast<int>(list.size()), 0);
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            const auto id = std::to_string(list[i]);
+            lua_pushlstring(L, id.data(), id.size());
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        return 1;
+    }
+    // session.raycast(from, to, {world = true}): the first other player's body the ray enters,
+    // {player, part, position, distance}, or nil; with `world`, nil when the world is in the way.
+    static int session_raycast(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "session.skaters", "reskate.session.raycast");
+        const auto from = position_of(L, 1, "the ray's start");
+        const auto to = position_of(L, 2, "the ray's end");
+        bool world = true;
+        if (!lua_isnoneornil(L, 3)) {
+            luaL_checktype(L, 3, LUA_TTABLE);
+            lua_getfield(L, 3, "world");
+            if (!lua_isnil(L, -1)) world = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        const float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+        if (std::sqrt(dx * dx + dy * dy + dz * dz) > plugin.limits_.raycast_metres)
+            luaL_error(L, "a ray is at most %d m long", static_cast<int>(plugin.limits_.raycast_metres));
+        if (++plugin.raycasts_ > plugin.limits_.raycasts_per_tick)
+            luaL_error(L, "more than %d raycasts in one tick", plugin.limits_.raycasts_per_tick);
+        const auto hit = bodies::ray_hit(game(plugin).bodies(), from, to);
+        // The world in the way: anything it hits more than 0.4 m before the player (their own
+        // collision capsule, when players are solid, stands about that far out from their body).
+        bool blocked = false;
+        if (hit && world)
+            if (const auto wall = plugin.services_.raycast(from, hit->position)) {
+                const float wx = (*wall)[0] - from[0], wy = (*wall)[1] - from[1], wz = (*wall)[2] - from[2];
+                blocked = std::sqrt(wx * wx + wy * wy + wz * wz) < hit->distance - 0.4f;
+            }
+        if (!hit || blocked) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 4);
+        const auto id = std::to_string(hit->player);
+        lua_pushlstring(L, id.data(), id.size());
+        lua_setfield(L, -2, "player");
+        push_part(L, hit->part, "part");
+        push_position(L, hit->position);
+        lua_setfield(L, -2, "position");
+        lua_pushnumber(L, hit->distance);
+        lua_setfield(L, -2, "distance");
+        return 1;
+    }
     // skater.hand(side): {position, rotation} of that hand joint in the world as last drawn, or nil.
     static int hand(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -2102,6 +2207,41 @@ struct WorldApi {
         lua_pop(L, 1);
         return 0;
     }
+    // input.text(capture): what was typed since the last call while this plugin's screen is open; with
+    // capture, the typing stays the plugin's (and Esc with it) for 300 ms more.
+    static int input_text(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "input", "reskate.input.text");
+        const bool capture = lua_isnone(L, 1) || lua_toboolean(L, 1) != 0;
+        const auto typed = plugin.open_screen_.empty() ? game(plugin).typed_text(false) : game(plugin).typed_text(capture);
+        if (plugin.open_screen_.empty()) {
+            lua_pushliteral(L, "");
+            return 1;
+        }
+        lua_pushlstring(L, typed.data(), typed.size());
+        return 1;
+    }
+    // room.open(), leave(), state(): the game menu's character room, the local skater shown in it.
+    static int room_open(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "room", "reskate.room.open");
+        return result(L, game(plugin).room_open(plugin.id()));
+    }
+    static int room_leave(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "room", "reskate.room.leave");
+        game(plugin).room_leave(plugin.id());
+        return 0;
+    }
+    static int room_state(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "room", "reskate.room.state");
+        const auto s = game(plugin).room_state(plugin.id());
+        lua_pushlstring(L, s.state.data(), s.state.size());
+        if (s.why.empty()) return 1;
+        lua_pushlstring(L, s.why.data(), s.why.size());
+        return 2;
+    }
     // input.cursor(): the mouse over the game window while this plugin's screen is open, or nil.
     static int input_cursor(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -2179,7 +2319,9 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
     add_functions(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
     add_functions(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
-    add_functions(L, "session", {{"skaters", skaters}, {"tag", tag}, {"joint", session_joint}});
+    add_functions(L, "session", {{"skaters", skaters}, {"tag", tag}, {"joint", session_joint}, {"touch", session_touch},
+                                 {"touching", session_touching}, {"hide", session_hide}, {"hidden", session_hidden},
+                                 {"raycast", session_raycast}});
     add_functions(L, "voice", {{"set_volume", voice_volume}});
     add_functions(L, "chat", {{"send", chat_send}, {"notice", chat_local}});
     add_functions(L, "animation", {{"play", animation_play}, {"stop", animation_stop}, {"playing", animation_playing}, {"replace", animation_replace},
@@ -2198,7 +2340,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "progression", {{"get", progress}});
     add_functions(L, "settings", {{"game", setting}, {"names", setting_names}, {"set", setting_set}});
     add_functions(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
-                               {"hide", input_hide}, {"cursor", input_cursor}});
+                               {"hide", input_hide}, {"cursor", input_cursor}, {"text", input_text}});
+    add_functions(L, "room", {{"open", room_open}, {"leave", room_leave}, {"state", room_state}});
     add_functions(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
     add_functions(L, "screen", {{"look", screen_look}, {"slap", screen_slap}});
 }

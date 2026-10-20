@@ -2,6 +2,7 @@
 #include "overlay_internal.h"
 #include "input_capture.h"
 #include "held_input.h"
+#include "scripted_pad.h"
 #include "Extension/Throwdowns/throwdown_kit.h"
 #include "Engine/Game/Input/playstation_report.h"
 #include "Engine/Game/Input/owned_menu_input.h"
@@ -381,6 +382,8 @@ DWORD WINAPI captured_front(DWORD user, XINPUT_STATE* output) {
         OverlayInputAccess access;
         result = original<DWORD(WINAPI*)(DWORD, XINPUT_STATE*)>(input_hooks().xinput_front[I])(user, output);
     }
+    // Only the game gets a scripted pad (the character room's walk): ReSkate's own reads get the real one.
+    if (outer && output && scripted_pad(user, *output)) return ERROR_SUCCESS;
     if (result == ERROR_SUCCESS && output && capture) {
         output->Gamepad = {};
         output->dwPacketNumber ^= 0x80000000u;
@@ -701,6 +704,8 @@ DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
         OverlayInputAccess access;
         result = original<DWORD(WINAPI*)(DWORD, XINPUT_STATE*)>(hook)(user, output);
     }
+    // Only the game gets a scripted pad (the character room's walk): ReSkate's own reads get the real one.
+    if (outer && output && scripted_pad(user, *output)) return ERROR_SUCCESS;
     if (result == ERROR_SUCCESS && output && capture) {
         output->Gamepad = {};
         // The game must notice a neutral state even if the physical packet did

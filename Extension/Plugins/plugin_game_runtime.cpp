@@ -58,6 +58,8 @@
 #include <filesystem>
 #include "Extension/UI/Overlay/overlay.h"
 #include "Extension/UI/Overlay/screen_look.h"
+#include "Extension/UI/Overlay/scripted_pad.h"
+#include "Extension/World/character_room.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -321,6 +323,19 @@ public:
         }
         return result;
     }
+    std::vector<Body> bodies() override {
+        std::vector<Body> result;
+        for (const auto& b : plugin_feed::latest_bodies()) {
+            Body body{b.player, {}};
+            for (const auto& c : b.capsules) body.capsules.push_back({c.part, c.a, c.b, c.radius});
+            result.push_back(std::move(body));
+        }
+        return result;
+    }
+    std::string hide_player(std::string_view plugin, std::uint64_t player, bool hidden) override {
+        return plugin_feed::hide(std::string(plugin), player, hidden) ? std::string{} : "at most 256 players are hidden";
+    }
+    std::vector<std::uint64_t> hidden_players(std::string_view plugin) override { return plugin_feed::hidden_by(std::string(plugin)); }
     void set_nametag(std::string_view plugin, std::uint64_t player, std::string text, std::uint32_t colour) override {
         plugin_feed::set_tag(std::string(plugin), player, std::move(text), colour);
     }
@@ -983,7 +998,13 @@ public:
         outfit_overlay::tick();
         board_pose::tick(base, local_skater_component(base, client));
         const bool allowed = !multiplayer::local_throwdown_active();
-        skater_animation::tick(base, local_skater_component(base, client), allowed);
+        const auto component = local_skater_component(base, client);
+        skater_animation::tick(base, component, allowed);
+        // The character room's walk: its scripted pad moves on by game ticks; once there, the skater shows in it.
+        overlay::pad_tick();
+        character_room::tick(base, component, component != 0, false);
+        const auto room = character_room::phase();
+        skater_animation::show_in_room(!room_owner_.empty() && room == character_room::Phase::arrived);
     }
     // ---- general services for a game layer in Lua ------------------------------------------------------
     std::optional<SkaterTelemetry> skater_telemetry(std::string_view plugin) override {
@@ -1026,6 +1047,34 @@ public:
     int mouse_wheel() override { return overlay::take_mouse_wheel(); }
     // One read of the overlay's mouse a call, shared out: every plugin that read it in the last two
     // seconds gets the movement, so two plugins never take it from each other.
+    std::string typed_text(bool capture) override { return overlay::take_plugin_text(capture); }
+    std::string room_open(std::string_view plugin) override {
+        if (!room_owner_.empty() && room_owner_ != plugin) return room_owner_ + " has the character room";
+        if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
+        const auto phase = character_room::phase();
+        if (room_owner_ == plugin && (phase == character_room::Phase::opening || phase == character_room::Phase::arrived)) return {};
+        room_owner_ = plugin;
+        character_room::open();
+        return {};
+    }
+    void room_leave(std::string_view plugin) override {
+        if (room_owner_ != plugin) return;
+        room_owner_.clear();
+        skater_animation::show_in_room(false);
+        character_room::leave();
+    }
+    RoomState room_state(std::string_view plugin) override {
+        using P = character_room::Phase;
+        const auto phase = character_room::phase();
+        if (room_owner_ != plugin) return {phase == P::leaving ? "leaving" : "idle", {}};
+        switch (phase) {
+        case P::opening: return {"opening", {}};
+        case P::arrived: return {"open", {}};
+        case P::leaving: return {"leaving", {}};
+        case P::failed: return {"failed", character_room::failure()};
+        default: return {"idle", {}};
+        }
+    }
     std::optional<Cursor> cursor() override {
         overlay::PluginCursor c;
         if (!overlay::read_plugin_cursor(c)) return std::nullopt;
@@ -1290,6 +1339,7 @@ public:
     bool frozen() const noexcept { return !freezers_.empty(); }
     void release(std::string_view plugin) override {
         if (hold_owner_ == plugin) (void)skater_hold(plugin, false);
+        plugin_feed::release_hidden(std::string(plugin));
         world_entities::clear(plugin);
         throwdown_flag_leave(plugin);
         dialog_close(plugin, {});
@@ -1336,6 +1386,7 @@ public:
             skater_animation::pose({}, 1);
             poser_.clear();
         }
+        if (room_owner_ == plugin) room_leave(plugin);
         if (const auto seen = telemetry_seen_.find(plugin); seen != telemetry_seen_.end()) telemetry_seen_.erase(seen);
         plugin_feed::release_tags(std::string(plugin));
         if (std::erase_if(binds_, [&](const auto& item) { return item.first.first == plugin; })) publish_binds();
@@ -1368,6 +1419,7 @@ private:
     std::vector<EnabledMod> enabled_mods_;
     std::string reacher_; // the plugin holding the skater's arm (skater_reach)
     std::string poser_;   // the plugin turning the skater's joints (skater_pose)
+    std::string room_owner_; // the plugin in the character room (room_open)
     std::uint64_t pose_at_{};
     std::string looker_;  // the plugin whose look is on the screen (screen_look)
     std::uint64_t look_at_{};

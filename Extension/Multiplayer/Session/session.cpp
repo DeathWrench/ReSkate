@@ -616,6 +616,8 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
                              nearest_distance(p, local, view) <= s.player_distance * (p.visible ? 1.15f : 1.f);
         }
     }
+    // Hidden on this screen: by the running throwdown's match, or by a plugin (reskate.session.hide).
+    const auto hidden_here = [](std::uint64_t id) { return throwdowns::kit::hidden(id) || plugin_feed::hidden(id); };
     each_active_peer(s, [&](Peer &p) {
         // A dedicated server has no skater to show.
         if (!p.member.id || (dedicated_host(s) && p.member.id == s.host_id))
@@ -629,9 +631,9 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
             update_developer_board(s.base, remote_board_entity(), developer_id(p), remote_skater_generation(), p.developer_board,
                                    mark_styles(p));
             present_audio(p);
-            update_party_position(throwdowns::kit::hidden(p.member.id)?nullptr:&p.render_pose);
-            if(throwdowns::kit::hidden(p.member.id)) {update_player_ui(s.base,nullptr,{});p.ui_visible=false;}
-            if (labels && !throwdowns::kit::hidden(p.member.id)) label(p);
+            update_party_position(hidden_here(p.member.id)?nullptr:&p.render_pose);
+            if(hidden_here(p.member.id)) {update_player_ui(s.base,nullptr,{});p.ui_visible=false;}
+            if (labels && !hidden_here(p.member.id)) label(p);
             return;
         }
         p.visible = false;
@@ -656,7 +658,7 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
                     native_pass = true;
                     p.applied_cosmetics = 0; // the new actor wears no recipe yet
                 }
-                const bool hidden = throwdown_relay_hides(p.member.id) || throwdowns::kit::hidden(p.member.id);
+                const bool hidden = throwdown_relay_hides(p.member.id) || hidden_here(p.member.id);
                 const auto spot = hidden ? std::nullopt
                                          : throwdown_relay_celebration_offset(p.member.id, p.render_pose.root.position);
                 p.visible = show_remote(s.base, client, local,
@@ -691,9 +693,9 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
                     apply_cosmetics(p, spawning);
                     // The spectate camera follows this every frame; the map and
                     // indicators below only need network-rate updates.
-                    update_party_position(throwdowns::kit::hidden(p.member.id)?nullptr:&p.render_pose);
-                    if (labels && !throwdowns::kit::hidden(p.member.id)) label(p);
-                    if(throwdowns::kit::hidden(p.member.id)) {
+                    update_party_position(hidden_here(p.member.id)?nullptr:&p.render_pose);
+                    if (labels && !hidden_here(p.member.id)) label(p);
+                    if(hidden_here(p.member.id)) {
                         update_player_ui(s.base,nullptr,{});p.ui_visible=false;
                     } else if (!p.ui_visible || now >= p.next_ui_update) {
                         update_player_ui(s.base, &p.render_pose, p.member.name);
@@ -714,8 +716,8 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
                                                   : "Waiting for player poses.";
                 // No skater for them, but still their name or dot where they are, and where the
                 // Social menu's teleport and spectate find them.
-                if (!p.shown_wanted && sampled) update_party_position(&p.render_pose);
-                if (!p.shown_wanted && sampled && labels) label(p);
+                if (!p.shown_wanted && sampled && !hidden_here(p.member.id)) update_party_position(&p.render_pose);
+                if (!p.shown_wanted && sampled && labels && !hidden_here(p.member.id)) label(p);
             }
         }
         update_developer_hoodie(s.base, p.visible ? remote_skater_entity() : 0, developer_id(p),
@@ -773,6 +775,48 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
             }
         }
         plugin_feed::publish_joints(std::move(joints));
+        // Everyone's body as drawn, while a plugin reads them (touching, reskate.session.raycast). The
+        // local skater's skeleton is read only when a pose is sent: between those, its body moves with
+        // its root.
+        static std::optional<plugin_feed::Body> local_body;
+        static std::array<float, 3> local_body_root{};
+        if (plugin_feed::bodies_wanted()) {
+            std::vector<plugin_feed::Body> bodies;
+            std::vector<anim_studio::Joint> pose;
+            const auto body = [&](std::uint64_t player, const Pose &from) {
+                pose.clear();
+                for (const auto &t : from.skater) pose.push_back({t.scale, t.rotation, t.position});
+                const auto place = [&](std::uint16_t joint) -> std::optional<std::array<float, 3>> {
+                    if (joint >= pose.size()) return std::nullopt;
+                    const auto w = anim_studio::world(pose, joint);
+                    if (!anim_studio::finite(w)) return std::nullopt;
+                    return w.position;
+                };
+                std::optional<std::pair<std::array<float, 3>, std::array<float, 4>>> board;
+                if (!from.board.empty()) board = std::pair{from.board.front().position, from.board.front().rotation};
+                return plugin_feed::body_of(player, place, board);
+            };
+            for (const auto &p : active_peers(s))
+                if (p.member.id && p.placed && !p.render_pose.skater.empty() &&
+                    !(dedicated_host(s) && p.member.id == s.host_id))
+                    bodies.push_back(body(p.member.id, p.render_pose));
+            if (!local.ready) local_body.reset();
+            else if (!local.pose.skater.empty()) {
+                local_body = body(0, local.pose);
+                local_body_root = local.pose.root.position;
+            }
+            if (local_body) {
+                auto moved = *local_body;
+                for (auto &c : moved.capsules)
+                    for (std::size_t i = 0; i < 3; ++i) {
+                        const float d = local.pose.root.position[i] - local_body_root[i];
+                        c.a[i] += d;
+                        c.b[i] += d;
+                    }
+                bodies.push_back(std::move(moved));
+            }
+            plugin_feed::publish_bodies(std::move(bodies));
+        } else local_body.reset();
     }
     if (labels)
         publish_custom_nametags(s.base, std::move(nametags),

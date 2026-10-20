@@ -220,6 +220,17 @@ public:
     // A game event with plain data (board_landed, body_hit, bail_end), to a plugin with `permission`.
     void game_event(std::string_view event, std::string_view permission, const Json& data);
     void chat_line(const ChatLine& line);
+    // session.skaters: touching (reskate.session.touch). How near counts as touching while it is on,
+    // and the players its skater touches now; touch_tick fires "touch" as one comes within reach and
+    // "touch_end" once the two are 10 cm further apart than that (or the player is gone).
+    struct Contact {
+        std::uint8_t part{}, their_part{};
+        float gap{};
+        Vec3 at{};
+    };
+    std::optional<float> touch_reach() const noexcept { return touch_reach_; }
+    const std::map<std::uint64_t, Contact>& contacts() const noexcept { return contacts_; }
+    void touch_tick(const std::vector<Body>& bodies);
     void track_changed(const Track& track);
     void throwdown_phase(const char* phase);
     void action(const std::string& name);
@@ -303,6 +314,8 @@ private:
     double log_second_{};
     int log_lines_{};
     int raycasts_{};                    // since the last tick
+    std::optional<float> touch_reach_;
+    std::map<std::uint64_t, Contact> contacts_;
     double teleport_second_{};
     int teleports_{};
     std::vector<plugin_ui::Shape> shapes_;

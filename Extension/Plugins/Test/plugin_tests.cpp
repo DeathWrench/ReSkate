@@ -3,6 +3,7 @@
 #include "Extension/Plugins/plugin_discovery.h"
 #include "Extension/Plugins/plugin_host.h"
 #include "Extension/Plugins/plugin_manifest.h"
+#include "Extension/Plugins/plugin_session_feed.h"
 #include "Extension/Plugins/plugin_wire.h"
 #include "Extension/Throwdowns/challenge_registry.h"
 #include "Extension/Throwdowns/custom_modes.h"
@@ -153,6 +154,19 @@ struct FakeGame final : Game {
         calls.push_back(text);
         return {};
     }
+    std::string typed = "";
+    std::string typed_text(bool capture) override { return capture ? std::exchange(typed, {}) : std::string{}; }
+    std::string room_phase = "idle";
+    std::string room_open(std::string_view plugin) override {
+        calls.push_back("room open " + std::string(plugin));
+        room_phase = "open";
+        return {};
+    }
+    void room_leave(std::string_view plugin) override {
+        calls.push_back("room leave " + std::string(plugin));
+        room_phase = "idle";
+    }
+    RoomState room_state(std::string_view) override { return {room_phase, {}}; }
     std::string set_setting(std::string_view plugin, std::string_view name, std::optional<std::string> value) override {
         calls.push_back(std::format("setting {} {} {}", plugin, name, value ? *value : std::string("none")));
         return {};
@@ -252,6 +266,21 @@ struct FakeGame final : Game {
     std::string ai(std::string_view op, int count) override { calls.push_back(std::format("ai {} {}", op, count)); return {}; }
     int ai_count() override { return 3; }
     std::vector<PeerSkater> peer_skaters() override { return {{7, {1, 2, 3}, 0.5f, 40}}; }
+    std::vector<Body> body_list; // what bodies() reads
+    std::set<std::pair<std::string, std::uint64_t>> hidden_list;
+    std::vector<Body> bodies() override { return body_list; }
+    std::string hide_player(std::string_view plugin, std::uint64_t player, bool hidden) override {
+        calls.push_back(std::format("hide {} {} {}", plugin, player, hidden ? "on" : "off"));
+        if (hidden) hidden_list.insert({std::string(plugin), player});
+        else hidden_list.erase({std::string(plugin), player});
+        return {};
+    }
+    std::vector<std::uint64_t> hidden_players(std::string_view plugin) override {
+        std::vector<std::uint64_t> out;
+        for (const auto& [owner, who] : hidden_list)
+            if (owner == plugin) out.push_back(who);
+        return out;
+    }
     void set_nametag(std::string_view plugin, std::uint64_t player, std::string text, std::uint32_t colour) override {
         calls.push_back(std::format("tag {} {} {} {:08x}", plugin, player, text, colour));
     }
@@ -1159,6 +1188,114 @@ void plugins_read_joints_and_tune_physics() {
     )"}})});
     ticks(host, environment, 1);
     check(environment.logged("[sneaky] false false false"), "skater.control, session.skaters and settings.write are needed\n" + environment.all());
+}
+
+// Touching another player, hiding one on this screen, and a ray at players.
+void plugins_touch_hide_and_ray_at_players() {
+    // A body from its joints: the limbs between theirs, the head on from the neck, the board along its Z.
+    const auto body = dingosdk::plugin_feed::body_of(9, [](std::uint16_t joint) -> std::optional<std::array<float, 3>> {
+        if (joint == 103) return std::array<float, 3>{0, 1.6f, 0};
+        if (joint == 101) return std::array<float, 3>{0, 1.5f, 0};
+        return std::array<float, 3>{0, static_cast<float>(joint) / 1000, 0};
+    }, std::pair{std::array<float, 3>{0, 0, 0}, std::array<float, 4>{0, 0.7071068f, 0, 0.7071068f}});
+    const auto head = std::find_if(body.capsules.begin(), body.capsules.end(), [](const auto& c) { return c.part == 0; });
+    const auto deck = std::find_if(body.capsules.begin(), body.capsules.end(), [](const auto& c) { return c.part == 6; });
+    check(body.capsules.size() == 11 && head != body.capsules.end() && std::abs(head->b[1] - 1.76f) < 1e-4f && deck != body.capsules.end() &&
+              std::abs(deck->a[0] + 0.3f) < 1e-4f && std::abs(deck->b[0] - 0.3f) < 1e-4f && std::abs(deck->a[1] - 0.08f) < 1e-4f,
+          "A body: nine limb capsules, the head 16 cm on from the neck, the deck along its length turned 90 degrees");
+    const auto gone = dingosdk::plugin_feed::body_of(9, [](std::uint16_t) -> std::optional<std::array<float, 3>> { return std::array<float, 3>{0, NAN, 0}; },
+                                           std::nullopt);
+    check(gone.capsules.empty(), "No body from a pose that is not finite");
+
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const auto upright = [](std::uint64_t player, float x, float y) {
+        return Body{player, {{1, {x, y, 0}, {x, y + 1, 0}, 0.16f}, {6, {x, y, -0.3f}, {x, y, 0.3f}, 0.12f}}};
+    };
+    game.body_list = {upright(0, 0, 0), upright(9, 1, 0), upright(12, 5, 0.5f), upright(13, 8, -3)};
+    const std::string main = R"(
+        local hit = reskate.session.raycast(vector.create(0, 1, 0), vector.create(10, 1, 0))
+        assert(hit and hit.player == "9" and hit.part == "body" and math.abs(hit.distance - 0.84) < 1e-4 and math.abs(hit.position.x - 0.84) < 1e-4,
+            "the nearest player, at their body's surface: " .. tostring(hit and hit.distance))
+        assert(reskate.session.raycast(vector.create(0, 3, 2), vector.create(10, 3, 2)) == nil, "over everyone")
+        assert(reskate.session.raycast(vector.create(8, 3, 0), vector.create(8, -5, 0)) == nil, "the ground in the way")
+        local under = reskate.session.raycast(vector.create(8, 3, 0), vector.create(8, -5, 0), {world = false})
+        assert(under and under.player == "13", "through the world")
+        assert(not pcall(reskate.session.raycast, vector.create(0, 0, 0), vector.create(2000, 0, 0)), "too long")
+        assert(reskate.session.hide("12") and reskate.session.hidden()[1] == "12")
+        assert(reskate.session.hide({id = "12"}, false) and #reskate.session.hidden() == 0)
+        assert(not pcall(reskate.session.touch, true, 2), "a reach is 0 to 1 m")
+        reskate.session.touch(true)
+        reskate.on("touch", function(e)
+            reskate.log(string.format("touch %s %s %s %.2f %d", e.player, e.part, e.their_part, e.distance, #reskate.session.touching()))
+        end)
+        reskate.on("touch_end", function(e) reskate.log("apart " .. e.player .. " " .. #reskate.session.touching()) end)
+        reskate.log("rayed")
+    )";
+    host.apply({package("tag", {{manifest_file, manifest(R"("session.skaters")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 2);
+    running(host, "tag", environment);
+    check(environment.logged("[tag] rayed") && game.called("hide tag 12 on") && game.called("hide tag 12 off"),
+          "Rays at players and a player hidden and shown\n" + environment.all());
+    check(!environment.logged("[tag] touch "), "Nobody within reach\n" + environment.all());
+    const auto count = [&](std::string_view part) {
+        return std::count_if(environment.logs.begin(), environment.logs.end(), [&](const auto& line) { return line.find(part) != std::string::npos; });
+    };
+    game.body_list[1] = upright(9, 0.3f, 0);
+    ticks(host, environment, 2);
+    check(environment.logged("[tag] touch 9 body body 0.00 1") && count("[tag] touch ") == 1, "Touching: once, as they come into contact\n" + environment.all());
+    game.body_list[1] = upright(9, 0.4f, 0);
+    ticks(host, environment, 2);
+    check(count("[tag] touch ") == 1 && !environment.logged("[tag] apart"), "Still touching a little further apart\n" + environment.all());
+    game.body_list[1] = upright(9, 0.6f, 0);
+    ticks(host, environment, 1);
+    check(environment.logged("[tag] apart 9 0"), "Apart once 10 cm further than the reach\n" + environment.all());
+    game.body_list[1] = upright(9, 0.3f, 0);
+    ticks(host, environment, 1);
+    game.body_list.erase(game.body_list.begin() + 1);
+    ticks(host, environment, 1);
+    check(count("[tag] touch ") == 2 && count("[tag] apart 9") == 2, "Touching again, and apart when they leave\n" + environment.all());
+    host.apply({package("sneaky", {{manifest_file, manifest(R"("skater.read")")}, {"plugin/main.lua", R"(
+        reskate.log(tostring(pcall(reskate.session.touch, true)) .. " " .. tostring(pcall(reskate.session.hide, "9")) .. " " ..
+            tostring(pcall(reskate.session.raycast, vector.create(0, 1, 0), vector.create(1, 1, 0))) .. " " ..
+            tostring(pcall(reskate.on, "touch", function() end)))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false false false false"), "session.skaters is needed\n" + environment.all());
+}
+
+// Typing into a field a plugin draws (only while its screen is open), and the character room.
+void plugins_type_and_use_the_room() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        reskate.ui.screen("Editor", function() end, {panel = false})
+        assert(not pcall(reskate.ui.screen, "Docked", function() end, {panel = false, dock = "left"}), "no panel, no dock")
+        assert(reskate.input.text(true) == "", "nothing without its screen open")
+        reskate.ui.open("Editor")
+        local typed = reskate.input.text(true)
+        assert(typed == "ab", "what was typed: " .. typed)
+        assert(reskate.input.text(true) == "", "once")
+        assert(reskate.room.state() == "idle")
+        assert(reskate.room.open())
+        assert(reskate.room.state() == "open")
+        reskate.room.leave()
+        assert(reskate.room.state() == "idle")
+        reskate.log("typed")
+    )";
+    game.typed = "ab";
+    host.apply({package("editor", {{manifest_file, manifest(R"("ui.screen", "input", "room")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    running(host, "editor", environment);
+    check(environment.logged("[editor] typed"), "A plugin takes typing and the room\n" + environment.all());
+    check(game.called("room open editor") && game.called("room leave editor"), "The room is walked to and from\n" + environment.all());
+    host.apply({package("sneaky", {{manifest_file, manifest(R"("input")")}, {"plugin/main.lua", R"(
+        reskate.log(tostring(pcall(reskate.room.open)) .. " " .. tostring(pcall(reskate.room.state)))
+    )"}})});
+    ticks(host, environment, 1);
+    check(environment.logged("[sneaky] false false"), "room is needed\n" + environment.all());
 }
 
 // A clip read, sampled, cut, keyed, saved and read back from the data folder, and played held.
@@ -2153,7 +2290,7 @@ void animator_studio_records_and_saves() {
     ticks(host, environment, 2);
     check(game.called("play animator-studio 3 frames 1.0 0.00 true at 0.00 paused"), "held on the skater\n" + environment.all());
     // Past its loading screen, the studio's screen is drawn every frame, within the plugin's time.
-    ticks(host, environment, 120);
+    ticks(host, environment, 300); // past the loading screen over the walk to the room
     std::size_t tiles = 0, texts = 0;
     for (const auto& layer : environment.layers)
         for (const auto& shape : layer.shapes) {
@@ -2184,6 +2321,13 @@ void animator_studio_records_and_saves() {
     check(game.files.contains("animator-studio/anims/Kick One.fas") && game.files.contains("animator-studio/anims/Kick One.json"),
           "a clip file and its keys in the data folder\n" + environment.all());
     check(game.called("replace animator-studio kickflip any clip"), "and plays in game\n" + environment.all());
+    // It opened in the character room, and walks back from it as it closes.
+    check(game.called("room open animator-studio"), "The studio opens in the character room\n" + environment.all());
+    check(host.run_console("studio close") && game.called("room leave animator-studio"), "and leaves it as it closes\n" + environment.all());
+    // Typed into its card (the trick's name here): what is typed goes into the field, Enter keeps it.
+    check(host.run_console("studio open"), "studio open");
+    ticks(host, environment, 260); // past the walk's loading screen
+    running(host, "animator-studio", environment);
     // Started again, it puts it back in game.
     game.calls.clear();
     host.apply({});
@@ -2993,6 +3137,8 @@ int main() {
         plugins_place_world_entities();
         plugins_reach_cruise_and_read_the_mouse();
         plugins_read_joints_and_tune_physics();
+        plugins_type_and_use_the_room();
+        plugins_touch_hide_and_ray_at_players();
         plugins_edit_clips();
         animator_studio_records_and_saves();
         plugins_server_copies_are_the_authority();

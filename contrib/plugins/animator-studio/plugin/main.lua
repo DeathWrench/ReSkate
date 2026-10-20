@@ -19,8 +19,10 @@
 --     (anims/<name>.fas and .json). With Custom tricks in game on, each plays on its trick and pop.
 --   - The game's own tricks, made with tools/make_trick_library.py into library/ in the data folder,
 --     are listed in TRICKS to start from.
--- The PR's studio room (the game menu's character room) is not here: the studio opens where the
--- skater is.
+--   - The studio opens in its room, the character room of the game menu's Skaters page
+--     (reskate.room walks the game's menu there and shows the skater in it), or where the skater is
+--     with the Studio room setting off or when the walk fails.
+--   - The card's NAME, TRICK and numbers are typed into in place (reskate.input.text).
 local title = "Animator Studio"
 local fps = 30
 local joints = reskate.animation.joints() -- {joint, label, moves}, the board first
@@ -111,11 +113,13 @@ local anim = {
     tracks = {},
 }
 local info = nil -- reskate.animation.info(anim.source)
-local settings = {in_game = true}
+local settings = {in_game = true, room = true}
 local studio = {open = false, time = 0, playing = false, dirty = false, status = "", failure = "", confirm_close = false}
 local undo_stack, redo_stack = {}, {}
 local orbit = {yaw = 0.6, pitch = 0.18, distance = 3.4, pan = {0, 0, 0}, focus = nil}
-local anchor = nil        -- the skater's middle, where the studio opened
+local anchor = nil        -- the skater's middle, where the studio opened (before his pose is read)
+local in_room, room_walk = false, false -- the studio shows in the character room; the walk there goes on
+local face_skater = false -- the orbit turns to face the skater once his placement is read
 local camera = nil        -- {position, forward, right, up, fov} as last set
 local recording = nil     -- {trick, air, status} while a recording is going on
 local stale_recording = false -- a recording given up on: its clip is let go when it comes
@@ -340,7 +344,10 @@ end
 local function save_settings() reskate.files.write("studio.json", reskate.json.encode(settings)) end
 do
     local ok, s = pcall(reskate.json.decode, reskate.files.read("studio.json") or "")
-    if ok and type(s) == "table" and s.in_game ~= nil then settings.in_game = s.in_game == true end
+    if ok and type(s) == "table" then
+        if s.in_game ~= nil then settings.in_game = s.in_game == true end
+        if s.room ~= nil then settings.room = s.room == true end
+    end
 end
 local library_cache, library_at = {}, -1e9
 local function library()
@@ -480,12 +487,25 @@ end
 
 -- ---- the camera: an orbit round the skater, placed in the free space beside the menu --------------------
 local view_shift = {0, 0} -- the view's middle from the screen's, as shares of its height (right, up)
+-- Where the skater is drawn (in the room, when it shows there): over his placement, at the height of his
+-- hips, so a trick's rise stays in the picture. Eased, as the PR's camera is.
+local eased = nil
 local function focus_point()
+    local place, hips = reskate.skater.joint(1), reskate.skater.joint(7)
+    local centre = if place and hips then {place.position.x, hips.position.y + 0.05, place.position.z} else anchor
+    if not centre then return nil end
+    if face_skater and place then
+        local f = rotate(place.rotation, {0, 0, 1})
+        orbit.yaw = math.atan2(f[1], f[3]) + 0.6
+        face_skater = false
+    end
     if orbit.focus ~= nil then
         local at = reskate.skater.joint(orbit.focus)
-        if at then return v3(at.position) end
+        if at then centre = v3(at.position) end
     end
-    return anchor
+    if not eased or math.abs(eased[1] - centre[1]) + math.abs(eased[3] - centre[3]) > 5 then eased = {centre[1], centre[2], centre[3]} end
+    for i = 1, 3 do eased[i] += (centre[i] - eased[i]) * 0.12 end
+    return eased
 end
 local function update_camera()
     local centre = focus_point()
@@ -508,6 +528,7 @@ end
 
 -- ---- open, close, record ------------------------------------------------------------------------------
 local ui -- the screen's state, below
+local typing_field -- the field being typed into, drawn (below)
 local function finish_close()
     studio.open = false
     studio.confirm_close = false
@@ -520,6 +541,21 @@ local function finish_close()
     reskate.camera.release()
     reskate.hud.hide(false)
     reskate.skater.freeze(false)
+    if in_room or room_walk then
+        reskate.room.leave()
+        in_room, room_walk = false, false
+    end
+end
+-- Closing: the loading screen over the walk back from the room, then the studio goes.
+local function begin_leave()
+    local t = now()
+    if in_room or room_walk then
+        reskate.room.leave()
+        in_room, room_walk = false, false
+        loading = {what = "leaving", since = t, until_ = t + 1.2, close = true}
+    else
+        loading = {what = "leaving", since = t, until_ = t + 0.8, close = true}
+    end
 end
 local function open_studio()
     if studio.open then return end
@@ -530,20 +566,34 @@ local function open_studio()
     end
     anchor = {s.position.x, s.position.y + 0.9, s.position.z}
     orbit.yaw = s.heading + 0.6
+    eased, face_skater = nil, true
     reskate.skater.freeze(true)
-    reskate.hud.hide(true)
     reskate.ui.open(title)
     studio.open = true
     studio.playing = false
     preview_due = true
-    loading = {what = "opening", since = now(), until_ = now() + 1.2}
+    local t = now()
+    loading = {what = "opening", since = t, until_ = t + 1.2}
+    -- To the room first: the studio shows there once the walk has got there.
+    if settings.room then
+        local ok, why = reskate.room.open()
+        if ok then
+            room_walk = true
+            loading.until_ = t + 1.5
+        else
+            studio.status = "The character room did not open: " .. tostring(why) .. ". The studio opens where you are."
+        end
+    end
+    -- The game's HUD (and its menu's pages) goes once the menu is where the studio wants it: the walk
+    -- goes through the menu as the player would, under the loading screen.
+    if not room_walk then reskate.hud.hide(true) end
 end
 local function request_close()
     if studio.dirty and anim.source then
         studio.confirm_close = true
         return
     end
-    loading = {what = "leaving", since = now(), until_ = now() + 0.8, close = true}
+    begin_leave()
 end
 local function record_next_trick()
     local ok, why = reskate.animation.record(10)
@@ -769,7 +819,7 @@ local keys_down, keys_pressed, keys_repeat = {}, {}, {}
 local key_codes = {space = 0x20, left = 0x25, up = 0x26, right = 0x27, down = 0x28, enter = 0x0D, q = 0x51, e = 0x45, home = 0x24, ["end"] = 0x23,
     z = 0x5A, y = 0x59, c = 0x43, v = 0x56, s = 0x53, a = 0x41, plus = 0xBB, numplus = 0x6B, minus = 0xBD, numminus = 0x6D, f = 0x46,
     k = 0x4B, delete = 0x2E, x = 0x58, r = 0x52, g = 0x47, l = 0x4C, tab = 0x09, one = 0x31, two = 0x32, three = 0x33, four = 0x34,
-    five = 0x35, zero = 0x30, ctrl = 0x11, shift = 0x10, alt = 0x12}
+    five = 0x35, zero = 0x30, ctrl = 0x11, shift = 0x10, alt = 0x12, backspace = 0x08, escape = 0x1B}
 local function read_keys(t)
     for name, code in key_codes do
         local down = reskate.input.key(code)
@@ -837,6 +887,67 @@ local function repeats(name, t)
     return false
 end
 local function held_for(name, t) return if pad_down[name] then t - (ui.held_since[name] or t) else 0 end
+
+-- ---- typing into the card's fields (reskate.input.text: Esc is the field's while it types) -----------------
+-- The byte after `chars` characters of `text`.
+local function byte_at(text_value, chars)
+    if chars <= 0 then return 0 end
+    local at = utf8.offset(text_value, chars + 1)
+    return (at or (#text_value + 1)) - 1
+end
+local function length_of(text_value) return utf8.len(text_value) or #text_value end
+-- A field starts typing with all of it chosen: what is typed replaces it.
+local function edit_start(id, value, max, apply)
+    ui.editing = {id = id, text = value, caret = length_of(value), all = true, max = max, apply = apply}
+    ui.blink_from = now()
+end
+local function edit_stop(commit)
+    local e = ui.editing
+    ui.editing = nil
+    reskate.input.text(false)
+    if commit and e then e.apply(e.text) end
+end
+-- What was typed and pressed this frame, into the field.
+local function edit_keys(typed)
+    local e = ui.editing
+    if not e then return end
+    local function clear_chosen()
+        if e.all then e.text, e.caret, e.all = "", 0, false end
+    end
+    if typed ~= "" then
+        clear_chosen()
+        local room = e.max - length_of(e.text)
+        if room > 0 then
+            local add = typed
+            if length_of(add) > room then add = string.sub(add, 1, byte_at(add, room)) end
+            local at = byte_at(e.text, e.caret)
+            e.text = string.sub(e.text, 1, at) .. add .. string.sub(e.text, at + 1)
+            e.caret += length_of(add)
+            ui.blink_from = now()
+        end
+    end
+    if keys_repeat.backspace then
+        if e.all then clear_chosen()
+        elseif e.caret > 0 then
+            e.text = string.sub(e.text, 1, byte_at(e.text, e.caret - 1)) .. string.sub(e.text, byte_at(e.text, e.caret) + 1)
+            e.caret -= 1
+        end
+        ui.blink_from = now()
+    end
+    if keys_repeat.delete then
+        if e.all then clear_chosen()
+        elseif e.caret < length_of(e.text) then
+            e.text = string.sub(e.text, 1, byte_at(e.text, e.caret)) .. string.sub(e.text, byte_at(e.text, e.caret + 1) + 1)
+        end
+    end
+    if keys_repeat.left then e.caret, e.all = math.max(0, if e.all then 0 else e.caret - 1), false end
+    if keys_repeat.right then e.caret, e.all = math.min(length_of(e.text), e.caret + 1), false end
+    if keys_pressed.home then e.caret, e.all = 0, false end
+    if keys_pressed["end"] then e.caret, e.all = length_of(e.text), false end
+    if keys_down.ctrl and keys_pressed.a then e.all = true end
+    if keys_pressed.enter then edit_stop(true)
+    elseif keys_pressed.escape then edit_stop(false) end
+end
 
 -- ---- controller glyphs and prompts -----------------------------------------------------------------------
 local function glyph(x, y, g)
@@ -979,10 +1090,6 @@ end
 -- ---- the menu: skate.'s own list menu (Trick List), with tabs -----------------------------------------------
 local tab_names = {"TRICKS", "SAVED", "JOINTS", "KEYS", "PLAYBACK"}
 local record_about = "Skate and land the trick you want: you are back in the studio with it, the board where the game had it. Esc: back without one."
-local function open_dialog(id, dialog_title, value, max)
-    ui.dialog = id
-    reskate.ui.dialog(id, {title = dialog_title, field = {text = value, max = max or 40}, buttons = {{id = "ok", label = "OK"}, "Cancel"}})
-end
 local function rows_of(tab)
     local rows = {}
     local function row(label, value, about, act, enabled, on, saved)
@@ -1102,6 +1209,14 @@ local function rows_of(tab)
             studio.dirty = true
             preview_due = true
         end)
+        row("Studio room", if settings.room then "on" else "off",
+            "On: the studio opens in the game's own lit studio room, as skate.'s Skaters page shows it. Off: it opens where you are. Takes effect the next time it opens.",
+            function()
+                settings.room = not settings.room
+                save_settings()
+                studio.status = if settings.room then "From the next time it opens, the studio opens in its room."
+                    else "From the next time it opens, the studio opens where you are."
+            end)
         row("Custom tricks in game", if settings.in_game then "on" else "off",
             "On: when you do a trick you saved an animation for (its TRICK, as ollie or kickflip), yours plays instead of the game's.", function()
                 settings.in_game = not settings.in_game
@@ -1359,19 +1474,49 @@ local function list(x0, y0, w, h)
         fill(bar_x - 4 * k, y, bar_x + 7 * k, y + bh, rgba(235, 235, 240), 2 * k)
     end
 end
+-- The field being typed into, drawn: its text (all of it chosen, at first), the caret blinking after
+-- the last character typed. A click outside it ends the typing and keeps what was typed.
+typing_field = function(id, ax, ay, w, h, px, ink, over, align)
+    local k = K
+    local e = ui.editing
+    e.seen = true
+    fill(ax, ay, ax + w, ay + h, rgba(215, 230, 250), 2 * k)
+    outline(ax, ay, ax + w, ay + h, blue, 1.6 * k)
+    D:clip(vector.create(ax, ay, 0), vector.create(ax + w - 4 * k, ay + h, 0))
+    local full = text_size("bold", px, e.text)
+    local x = if align == "centre" then ax + (w - full.x) * 0.5 else ax + 8 * k
+    local y = ay + (h - px) * 0.5 - 1 * k
+    if e.all and e.text ~= "" then fill(x - 2 * k, y, x + full.x + 2 * k, y + px + 2 * k, blue_dim) end
+    text("bold", px, x, y, ink, e.text)
+    if not e.all and math.floor((now() - (ui.blink_from or 0)) * 2) % 2 == 0 then
+        local before = text_size("bold", px, string.sub(e.text, 1, byte_at(e.text, e.caret))).x
+        line(x + before + 1 * k, y, x + before + 1 * k, y + px + 2 * k, ink, 1.6 * k)
+    end
+    D:clip()
+    if mouse.pressed[1] and not over then edit_stop(true) end
+end
 -- A labelled number that drags left and right, and takes typing on a double click.
 local function number(id, x, y, w, label, value, speed, format, ink, on_change)
     local k = K
     text("bold", 14 * k, x, y + 4 * k, ink, label)
     local ax, ay, bx, by = x + 22 * k, y, x + 22 * k + w, y + 26 * k
     local _, over = hit(ax, ay, bx, by)
+    if ui.editing and ui.editing.id == id then
+        typing_field(id, ax, ay, bx - ax, by - ay, 14 * k, ink, over, "centre")
+        return
+    end
     local active = ui.number_drag ~= nil and ui.number_drag.id == id
     fill(ax, ay, bx, by, if active then rgba(150, 200, 255) elseif over then rgba(190, 192, 196) else rgba(205, 205, 204), 2 * k)
     text("bold", 14 * k, (ax + bx) * 0.5, ay + 5 * k, ink, string.format(format, value), "centre")
     if over and mouse.double then
         ui.number_drag = nil
-        ui.typing = {apply = on_change}
-        open_dialog("number", upper(label), string.format(format, value), 16)
+        edit_start(id, string.format(format, value), 16, function(typed)
+            local n = tonumber(typed)
+            if n then
+                begin_change()
+                on_change(n)
+            end
+        end)
         return
     end
     if over and mouse.pressed[1] then ui.number_drag = {id = id, start = mouse.x, value = value} end
@@ -1453,18 +1598,37 @@ local function card(x, y0, w, h)
         return
     end
     if ui.tab == 2 then
-        -- The name and trick of the one being edited: a click types them.
+        -- The name and trick of the one being edited, typed here.
         local fw = (w - 60 * k) / 2
         text("bold", 13 * k, x + 22 * k, y, ink_soft, "NAME")
         text("bold", 13 * k, x + 38 * k + fw, y, ink_soft, "TRICK")
-        for i, field in {{x + 22 * k, anim.name, "name", "NAME"}, {x + 38 * k + fw, anim.trick, "trick", "TRICK"}} do
+        local fields = {
+            {x + 22 * k, anim.name, "name", 40, function(v)
+                if v ~= anim.name then
+                    anim.name = v
+                    studio.dirty = true
+                end
+            end},
+            {x + 38 * k + fw, anim.trick, "trick", 48, function(v)
+                v = string.lower(v)
+                if v ~= anim.trick then
+                    anim.trick = v
+                    studio.dirty = true
+                end
+            end},
+        }
+        for _, field in fields do
             local ax, ay = field[1], y + 18 * k
             local clicked, over = hit(ax, ay, ax + fw, ay + 30 * k)
-            fill(ax, ay, ax + fw, ay + 30 * k, if over then rgba(195, 197, 200) else rgba(205, 205, 204), 2 * k)
-            D:clip(vector.create(ax, ay, 0), vector.create(ax + fw - 6 * k, ay + 30 * k, 0))
-            text("bold", 16 * k, ax + 8 * k, ay + 6 * k, ink, field[2])
-            D:clip()
-            if clicked then open_dialog(field[3], field[4], field[2], if i == 1 then 40 else 48) end
+            if ui.editing and ui.editing.id == field[3] then
+                typing_field(field[3], ax, ay, fw, 30 * k, 16 * k, ink, over)
+            else
+                fill(ax, ay, ax + fw, ay + 30 * k, if over then rgba(195, 197, 200) else rgba(205, 205, 204), 2 * k)
+                D:clip(vector.create(ax, ay, 0), vector.create(ax + fw - 6 * k, ay + 30 * k, 0))
+                text("bold", 16 * k, ax + 8 * k, ay + 6 * k, ink, field[2])
+                D:clip()
+                if clicked then edit_start(field[3], field[2], field[4], field[5]) end
+            end
         end
         y += 62 * k
     end
@@ -1775,7 +1939,7 @@ local function viewport(vx0, vy0, vx1, vy1, t)
     if over and mouse.wheel ~= 0 then orbit.distance *= if mouse.wheel > 0 then 0.9 else 1.1 end
 end
 local function keyboard()
-    if ui.dialog then return end
+    if ui.editing then return end
     local ctrl = keys_down.ctrl
     local any = false
     local function pressed(name, repeat_too)
@@ -1905,7 +2069,7 @@ local function close_warning(dx, dy, t)
     if pad_pressed.right then ui.warning_choice = math.min(3, ui.warning_choice + 1) end
     if pad_pressed.a then taken = ui.warning_choice end
     if pad_pressed.b then taken = 3 end
-    if not ui.dialog then
+    if not ui.editing then
         if keys_pressed.left then ui.warning_choice = math.max(1, ui.warning_choice - 1) end
         if keys_pressed.right then ui.warning_choice = math.min(3, ui.warning_choice + 1) end
         if keys_pressed.enter or keys_pressed.space then taken = ui.warning_choice end
@@ -1919,10 +2083,10 @@ local function close_warning(dx, dy, t)
         studio.confirm_close = false
         if taken == 1 then
             save_now()
-            loading = {what = "leaving", since = t, until_ = t + 0.8, close = true}
+            begin_leave()
         elseif taken == 2 then
             studio.dirty = false
-            loading = {what = "leaving", since = t, until_ = t + 0.8, close = true}
+            begin_leave()
         end
     end
 end
@@ -2046,6 +2210,11 @@ reskate.on("draw", function(d)
     read_mouse(t)
     read_keys(t)
     local pad = read_pad(t)
+    -- A field being typed into takes what was typed (and its keys) first.
+    if ui.editing then
+        edit_keys(reskate.input.text(true))
+        if ui.editing then ui.editing.seen = false end
+    end
     -- Laid out on a 1920 x 1080 page, scaled to fit the height and the game's menu frame (the whole width
     -- up to 21:9, a 21:9 frame in the middle of anything wider).
     local frame_w = math.min(dx, dy * 21 / 9)
@@ -2092,6 +2261,8 @@ reskate.on("draw", function(d)
     end
     prompts(vx1, vy1)
     if studio.confirm_close then close_warning(dx, dy, t) else keyboard() end
+    -- A field no longer drawn (another tab, the menu hidden) keeps what was typed into it.
+    if ui.editing and not ui.editing.seen then edit_stop(true) end
     if loading then draw_loading(dx, dy, t) end -- fading out
     ui.hovered_any = hovered_this
 end)
@@ -2122,10 +2293,32 @@ reskate.on("tick", function()
         if clip then recording_done(clip) end
         return
     end
+    -- The walk to the room: the loading screen stays up while it goes on, then 3 s more while the board
+    -- settles there; if it fails, the studio opens where the skater is.
+    if room_walk then
+        local state, why = reskate.room.state()
+        if state == "open" then
+            room_walk, in_room = false, true
+            eased, face_skater = nil, true
+            reskate.hud.hide(true)
+            if loading then loading.until_ = t + 3.8 end
+        elseif state == "failed" or state == "idle" then
+            room_walk = false
+            reskate.hud.hide(true)
+            studio.status = (why or "The character room did not open.") .. " The studio opens where you are."
+            if loading then loading.until_ = t + 0.3 end
+        elseif loading then
+            loading.until_ = math.max(loading.until_, t + 0.5)
+        end
+    end
     if loading and loading.close and t >= loading.until_ then
-        loading = nil
-        finish_close()
-        return
+        if reskate.room.state() == "leaving" then
+            loading.until_ = t + 0.3 -- still walking back
+        else
+            loading = nil
+            finish_close()
+            return
+        end
     end
     if loading and t >= loading.until_ + 0.3 then loading = nil end
     if not studio.open then return end
@@ -2141,7 +2334,8 @@ end)
 reskate.on("screen_closed", function(screen)
     if screen ~= title or not studio.open then return end
     -- Esc: lets go of chosen keys first, asks first with unsaved changes, and the close card's Esc stays.
-    if ui.dialog then
+    if ui.editing then
+        edit_stop(false)
         reskate.ui.open(title)
         return
     end
@@ -2161,28 +2355,6 @@ reskate.on("screen_closed", function(screen)
         return
     end
     finish_close()
-end)
-reskate.on("throwdown_ui", function(e)
-    if e.action ~= "dialog" then return end
-    local id, button_id, value = e.args[1], e.args[2], e.args[3]
-    if id ~= "name" and id ~= "trick" and id ~= "number" then return end
-    reskate.ui.close_dialog(id)
-    ui.dialog = nil
-    if button_id ~= "ok" then return end
-    if id == "name" then
-        anim.name = value
-        studio.dirty = true
-    elseif id == "trick" then
-        anim.trick = string.lower(value)
-        studio.dirty = true
-    elseif id == "number" and ui.typing then
-        local n = tonumber(value)
-        if n then
-            begin_change()
-            ui.typing.apply(n)
-        end
-        ui.typing = nil
-    end
 end)
 
 -- ---- at start: what plays in game, how to open it ----------------------------------------------------------
@@ -2312,6 +2484,39 @@ local function self_test()
     baked, baked_clip = {}, nil
     undo_stack, redo_stack, ui.picked = {}, {}, {}
     changed_all()
+    -- Typing into a field: all of it chosen at first, then a caret that moves, a length it stops at,
+    -- characters of more than a byte, Enter keeping it and Esc not.
+    do
+        local kept = nil
+        local function press(name, value)
+            keys_repeat[name], keys_pressed[name] = value, value
+        end
+        edit_start("test", "Kick", 6, function(v) kept = v end)
+        check(ui.editing.all, "a field starts with all of it chosen")
+        edit_keys("Heel")
+        check(ui.editing.text == "Heel" and ui.editing.caret == 4, "what is typed replaces it")
+        press("backspace", true)
+        edit_keys("")
+        press("backspace", false)
+        check(ui.editing.text == "Hee", "Backspace takes one off")
+        press("left", true)
+        edit_keys("")
+        press("left", false)
+        edit_keys("l")
+        check(ui.editing.text == "Hele" and ui.editing.caret == 3, "the caret moves and typing goes in at it")
+        edit_keys("\u{e9}xyz")
+        check(ui.editing.text == "Hel\u{e9}xe" and length_of(ui.editing.text) == 6, "up to its length, a two-byte letter as one")
+        press("enter", true)
+        edit_keys("")
+        press("enter", false)
+        check(kept == "Hel\u{e9}xe" and ui.editing == nil, "Enter keeps it")
+        edit_start("test", "Kick", 6, function(v) kept = v end)
+        edit_keys("Grab")
+        press("escape", true)
+        edit_keys("")
+        press("escape", false)
+        check(kept == "Hel\u{e9}xe" and ui.editing == nil, "Esc does not")
+    end
     -- Every screen drawn: each tab with the keyboard's prompts and the pad's, the menu hidden, the close card.
     test_frames = {}
     for tab = 1, 5 do

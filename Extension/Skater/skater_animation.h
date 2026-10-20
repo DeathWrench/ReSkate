@@ -68,6 +68,15 @@ void pose(std::vector<PoseOffset> offsets, float weight);
 std::optional<anim_studio::Joint> joint(std::uint16_t index);
 // The hand joint's (joint()).
 std::optional<arm_reach::Placed> hand(arm_reach::Hand side);
+// The game menu's character room (Extension/World/character_room.h). While the walk looks for it,
+// watch_room has the room's own skater (the menu's) looked for; room_skater_seen says it was drawn in
+// the room just now. show_in_room draws the local skater (and its board, under a clip that has one) on
+// the room's floor, facing as the menu's skater did, as high above the floor as he is above his own
+// ground; the room's own skater and board are hidden meanwhile and come back after. Only what is
+// drawn moves: the skater stays where he is, and other players are not sent the room. Any thread.
+void watch_room(bool on) noexcept;
+bool room_skater_seen() noexcept;
+void show_in_room(bool on) noexcept;
 // The game's name for the trick the skater is doing now, or empty.
 std::string current_trick() noexcept;
 // Each client tick: the local skater's animation component (0 for none), and whether clips may be

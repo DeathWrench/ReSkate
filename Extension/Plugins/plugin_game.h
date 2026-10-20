@@ -165,6 +165,17 @@ struct LevelInfo {
     std::string asset, name;
     bool can_load{};
 };
+// A skater's body as capsules: `part` indexes body_part_names; a and b are its ends in the world.
+struct BodyCapsule {
+    std::uint8_t part{};
+    Vec3 a{}, b{};
+    float radius{};
+};
+struct Body {
+    std::uint64_t player{}; // 0: the local skater
+    std::vector<BodyCapsule> capsules;
+};
+inline constexpr std::array<const char*, 7> body_part_names{"head", "body", "left_arm", "right_arm", "left_leg", "right_leg", "board"};
 // Another player's skater as the session last heard it.
 struct PeerSkater {
     std::uint64_t id{};
@@ -295,6 +306,14 @@ public:
     virtual int ai_count() { return 0; }
     // ---- the session ----------------------------------------------------------------------------
     virtual std::vector<PeerSkater> peer_skaters() { return {}; }
+    // Every skater's body in the session as this game drew it last (plugin_session_feed.h body_of):
+    // the other players' (hidden ones too) and the local skater's, as player 0. Asking keeps them read
+    // for two seconds, so the first ask comes back empty.
+    virtual std::vector<Body> bodies() { return {}; }
+    // Another player's skater, board, sound, nametag and map marker not shown on this screen while
+    // any plugin hides them (at most 256 between them).
+    virtual std::string hide_player(std::string_view /*plugin*/, std::uint64_t, bool /*hidden*/) { return unavailable; }
+    virtual std::vector<std::uint64_t> hidden_players(std::string_view /*plugin*/) { return {}; }
     // A short tag beside a player's nametag, the plugin's own (empty text takes it away).
     virtual void set_nametag(std::string_view /*plugin*/, std::uint64_t, std::string, std::uint32_t) {}
     // 0 mutes, 1 is as heard, up to 10. The local player's ears only.
@@ -347,6 +366,18 @@ public:
         bool left{}, right{}, middle{}, over_screen{};
     };
     virtual std::optional<Cursor> cursor() { return std::nullopt; }
+    // What was typed since the last call while a plugin's screen is open (reskate.input.text);
+    // `capture` keeps the typing the plugin's for 300 ms more.
+    virtual std::string typed_text(bool /*capture*/) { return {}; }
+    // The game menu's character room (Extension/World/character_room.h; reskate.room): walked to, the
+    // local skater shown in it once there, and walked back from. One plugin at a time. state: "idle",
+    // "opening", "open", "leaving" or "failed" (with why).
+    virtual std::string room_open(std::string_view /*plugin*/) { return unavailable; }
+    virtual void room_leave(std::string_view /*plugin*/) {}
+    struct RoomState {
+        std::string state, why;
+    };
+    virtual RoomState room_state(std::string_view /*plugin*/) { return {"idle", {}}; }
     // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
     // and all game input paused for half a second at a time.
     virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}

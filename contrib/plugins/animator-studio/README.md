@@ -6,7 +6,7 @@ trick in game plays your version. Every other trick stays the game's own, and no
 changed.
 
 The screen is the pull request's, drawn by the plugin: the skater in the middle on the studio's own
-camera, skate.'s Trick List menu on the left with its tabs and white card, a timeline of the body's
+camera, in the game's own lit studio room (the character room of the menu's Skaters page), skate.'s Trick List menu on the left with its tabs and white card, a timeline of the body's
 joints along the bottom, the controls and KEY / SAVE in the lower right, the unsaved-changes card, the
 recording strip and the loading screen with skate.'s own kickflipping board. It works from the
 keyboard and mouse or from a controller; the prompts follow whichever was used last.
@@ -14,7 +14,9 @@ keyboard and mouse or from a controller; the prompts follow whichever was used l
 ## How to use it
 
 1. Press **F8** (or hold **L3 + R3** on a controller), or open it from its page in the menu's PLUGINS
-   section, or type `studio`. A loading screen, then the studio, the skater held where he stands.
+   section, or type `studio`. A loading screen while the game's menu is walked to the Skaters page,
+   then the studio in its room, the skater on the room's floor. With **Studio room** off (PLAYBACK),
+   or when the walk fails, it opens where the skater is.
 2. **TRICKS > Record a trick**: the studio steps out (a strip across the top shows it records). Skate
    and land the trick: you are back in the studio with it, cut from a little before its takeoff to a
    little after its landing. It records again until a trick is landed; Esc / Back goes back without
@@ -22,15 +24,15 @@ keyboard and mouse or from a controller; the prompts follow whichever was used l
 3. **JOINTS**: pick a joint (or **Board**) in the list or on the skater and turn it by dragging (the
    left stick on a controller). **G** moves the hips or the board, **R** turns again; **X / Y / Z**
    lock an axis, **L** switches between the joint's axes and the world's. The card's numbers drag
-   left and right, and a double click types one.
+   left and right, and a double click types one in place.
 4. Move along the timeline (**Left / Right**, **RT / LT**, or drag the playhead) and key with **K**
    (**A** on a controller). **Ctrl+A** chooses every key, **Shift+click** adds one, drag one to move
    them all, **Delete** takes them off. **KEYS** has the rest: blend into the next key (smooth, linear,
    step), copy and paste a pose, hide or lock a joint's keys, follow a joint with the camera.
 5. **SAVE** (Ctrl+S). With **Custom tricks in game** on (PLAYBACK), doing the trick plays it, and keeps
    doing so every time the game starts. **PLAYBACK** also has the pop it is for (any, low, mid,
-   high), *Copy to low, mid and high pop*, the speed and loop. **SAVED** opens a saved one again, and
-   names it and its trick.
+   high), *Copy to low, mid and high pop*, the speed and loop. **SAVED** opens a saved one again; its
+   card's NAME and TRICK are typed into in place (Enter keeps it, Esc does not).
 
 The camera: hold the right mouse button and drag to turn round the skater, the middle button to pan,
 the wheel to come closer; 1 to 5 are set views and 0 the first; Tab hides the menu. On a controller
@@ -67,7 +69,11 @@ It is built on general plugin APIs, so another plugin can do the same:
 - The screen is a `reskate.ui.screen` with no panel: the plugin draws it all in its draw handler
   (`d:rough_rect`, `d:halftone`, `d:scribble`, `d:clip`, `d:measure`, `d:game_image` for the loading
   screen's grain, tape, tiles and `loading_board`), reading `reskate.input.cursor`, the keys and the
-  pad. The joints' dots and the drag come from `reskate.skater.joint` (with each joint's parent).
+  pad; its fields take typing with `reskate.input.text`. The joints' dots and the drag come from
+  `reskate.skater.joint` (with each joint's parent).
+- The room is `reskate.room`: ReSkate walks the game's menu to the Skaters page (its own navigation
+  events, and RB on a pad of its own, as the pull request did), draws the skater on the room's floor
+  and hides the room's own skater and board; other players still see the skater where he is.
 - A saved animation is its recording as a clip file and its keys as JSON, in the plugin's data folder
   (`Mods/.reskate_plugin_data/animator-studio/anims/<name>.fas` and `.json`), saved with
   `reskate.animation.save` and read back as `"data:anims/<name>.fas"`. Playing in game is
@@ -79,13 +85,6 @@ It is built on general plugin APIs, so another plugin can do the same:
 
 Copy this folder into the game's `Mods` folder.
 
-## Not here from the pull request
-
-- The studio room: the PR walks the game menu to the Skaters page's lit character room (with a scripted
-  pad) and draws the skater there. That needs plugins to drive the game's menus, which they cannot;
-  the studio opens where the skater is, and its loading screen shows over the opening and closing.
-- Typing a name, a trick or a number straight into the card: here a click (or a double click on a
-  number) opens a small dialog to type it in.
 
 ## Limits
 

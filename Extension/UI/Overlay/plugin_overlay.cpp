@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <imgui_internal.h>
 #include <memory>
+#include <chrono>
 #include <mutex>
+#include <string>
 
 namespace dingosdk::overlay {
 namespace {
@@ -68,6 +70,55 @@ bool read_plugin_cursor(PluginCursor& out) noexcept {
     out = c.now;
     c.now.wheel = 0;
     return true;
+}
+// Typing a plugin takes (take_plugin_text): until when, and what came.
+struct Typing {
+    std::mutex mutex;
+    std::string text;
+    std::chrono::steady_clock::time_point until{};
+};
+static Typing& typing() {
+    static auto* value = new Typing;
+    return *value;
+}
+static bool typing_taken() {
+    auto& t = typing();
+    std::lock_guard lock(t.mutex);
+    return std::chrono::steady_clock::now() < t.until;
+}
+std::string take_plugin_text(bool capture) noexcept {
+    try {
+        auto& t = typing();
+        std::lock_guard lock(t.mutex);
+        const auto now = std::chrono::steady_clock::now();
+        if (capture) t.until = now + std::chrono::milliseconds(300);
+        else t.until = {};
+        return std::exchange(t.text, {});
+    } catch (...) {
+        return {};
+    }
+}
+// Render thread, while a plugin's screen is open: the characters typed this frame, kept for it.
+static void note_typing() {
+    if (!typing_taken()) return;
+    std::string typed;
+    for (const ImWchar c : ImGui::GetIO().InputQueueCharacters) {
+        const auto u = static_cast<unsigned>(c);
+        if (u < 0x20 || u == 0x7f || (u >= 0x80 && u < 0xa0)) continue;
+        if (u < 0x80) typed += static_cast<char>(u);
+        else if (u < 0x800) {
+            typed += static_cast<char>(0xc0 | (u >> 6));
+            typed += static_cast<char>(0x80 | (u & 0x3f));
+        } else {
+            typed += static_cast<char>(0xe0 | (u >> 12));
+            typed += static_cast<char>(0x80 | ((u >> 6) & 0x3f));
+            typed += static_cast<char>(0x80 | (u & 0x3f));
+        }
+    }
+    if (typed.empty()) return;
+    auto& t = typing();
+    std::lock_guard lock(t.mutex);
+    if (t.text.size() + typed.size() <= 1024) t.text += typed;
 }
 static void note_cursor(bool open, bool over_screen) {
     auto& c = cursor_state();
@@ -128,9 +179,10 @@ void draw_plugin_screen() {
     const float k = std::max(1.0f, display.y / 1080.0f);
     auto& s = detail::state();
     // No panel: the input is the plugin's, which draws its screen itself; Esc still closes it.
+    note_typing();
     if (screen->dock == 3) {
         note_cursor(true, false);
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput && !typing_taken()) {
             plugin_ui::act({screen->plugin, screen->title, plugin_ui::close_widget});
             closed_screen() = screen->plugin + '\n' + screen->title;
             s.plugin_screen_visible.store(false);
@@ -234,7 +286,7 @@ void draw_plugin_screen() {
             ImGui::PopID();
         }
         // Esc closes it at once here; its plugin hears screen_closed.
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !ImGui::GetIO().WantTextInput && !typing_taken()) {
             plugin_ui::act({screen->plugin, screen->title, plugin_ui::close_widget});
             closed_screen() = screen->plugin + '\n' + screen->title;
             s.plugin_screen_visible.store(false);

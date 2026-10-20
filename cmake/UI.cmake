@@ -26,6 +26,7 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/skate_menu_addons.cpp
     Extension/UI/Overlay/plugins_page.cpp
     Extension/UI/Overlay/plugin_overlay.cpp
+    Extension/UI/Overlay/scripted_pad.cpp
     Extension/UI/Overlay/game_images.cpp
     Extension/UI/Overlay/xray_overlay.cpp
     Extension/UI/Overlay/plugin_images.cpp

@@ -327,6 +327,15 @@ void Host::follow_game() {
                 plugin.game_event("grind_exit", "events.skater", data);
             }
         });
+    // Touching (reskate.session.touch): the bodies read once for every plugin that has it on.
+    {
+        std::optional<std::vector<Body>> list;
+        each([&](Plugin& plugin, const std::string&) {
+            if (!plugin.touch_reach()) return;
+            if (!list) list = game.bodies();
+            plugin.touch_tick(*list);
+        });
+    }
     if (wants("chat.read")) {
         auto lines = game.chat_since(chat_seen_);
         // Lines from before the first plugin listened are not news.

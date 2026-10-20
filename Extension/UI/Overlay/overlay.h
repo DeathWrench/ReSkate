@@ -54,6 +54,10 @@ struct PluginCursor {
     bool left{}, right{}, middle{}, over_screen{};
 };
 bool read_plugin_cursor(PluginCursor& cursor) noexcept;
+// What was typed (UTF-8, printable characters only) while a plugin's screen is open and it takes the
+// typing, since the last call; `capture` keeps it taking the typing for the next 300 ms, during which
+// Esc is the plugin's instead of closing the screen.
+std::string take_plugin_text(bool capture) noexcept;
 // reskate.ui.dialog (plugin_dialog.cpp): one dialog at a time over the game, input captured while it
 // is open. The same plugin and id again updates it and keeps what was typed. Empty when shown, else
 // why not. Answers reach the plugin as throwdown kit events (action "dialog", throwdown_kit.h).
