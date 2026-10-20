@@ -736,6 +736,17 @@ void apply_handling(std::uintptr_t base, std::uintptr_t entity, const Handling& 
     t.wrote = true;
     if (change) (void)physics_tuning::write_live(base, entity, live);
 }
+} // namespace
+
+std::optional<float> handling_value(std::uint16_t offset) noexcept {
+    const auto& t = tuned();
+    if (!t.known || !t.wrote) return {};
+    for (std::size_t k = 0; k < t.offset.size(); ++k)
+        if (t.offset[k] == offset) return t.written[k];
+    return {};
+}
+
+namespace {
 
 // ---- the board's axes, for the physics thread -------------------------------------------------------
 void note_axes(State& s, std::uintptr_t base, std::uintptr_t holder) {

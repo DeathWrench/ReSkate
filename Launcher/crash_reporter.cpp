@@ -9,6 +9,7 @@
 #include "Engine/Vfs/mod_list.h"
 #include "Engine/Game/Build/supported_build.h"
 #include "crash_report_config.h"
+#include "reskate_version.h"
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
@@ -87,6 +88,12 @@ bool publish_dump(HANDLE process, const std::filesystem::path& temporary, const 
     attributes["application"] = "ReSkate";
     attributes["process"] = utf8(report.application.data());
     attributes["version"] = build_version;
+    // A modified build says so, so ReSkate's maintainers can tell its crashes from their own.
+    if (reskate_modified_build) {
+        attributes["build.modified"] = true;
+        attributes["build.mod"] = std::string(reskate_mod_id);
+        attributes["build.mod_version"] = std::string(reskate_mod_version);
+    }
 #ifdef _DEBUG
     attributes["build.configuration"] = "Debug";
 #else

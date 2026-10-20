@@ -1,6 +1,7 @@
 #pragma once
 #include "board_break_feel.h"
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -76,6 +77,10 @@ bool set_setting(std::string_view name, int value) noexcept;
 // Its scratches are the game's own board wear (Mod Options > Board wear), reset with it.
 float wear() noexcept;
 void set_wear(float wear) noexcept;
+// Client thread: what wear has set the game's physics tuning value at `offset` (in the tuning
+// asset) to, when it is one of the four handling values wear changes and wear has written it; for
+// the trainer, which hands such a value back to wear while the player has not changed it.
+std::optional<float> handling_value(std::uint16_t offset) noexcept;
 // Metal: the level's materials a board breaking on them sounds like metal on. They are learned
 // from the contacts while grinding (`boardbreak metal mark` marks what the board is on now as
 // metal), and a pack can bring a list (sounds/metal/materials.txt). For the console.
