@@ -132,7 +132,7 @@ Layout layout(const ServerConfig &c) {
     players.set("sync_effects", c.sync_effects);
     players.set("announce_throwdowns", c.announce_throwdowns);
     auto locks = Json::array();
-    for (const auto bit : {lock_noclip, lock_nobail, lock_boosts, lock_tuning})
+    for (const auto bit : {lock_noclip, lock_nobail, lock_boosts, lock_tuning, lock_ollies})
         if (c.throwdown_locks & bit) locks.push_back(lock_tools_text(bit));
     players.set("throwdown_locks", std::move(locks));
 
@@ -716,6 +716,8 @@ std::optional<std::uint8_t> parse_lock_tools(std::string_view text) {
         else if (lower == "nobail") tools |= lock_nobail;
         else if (lower == "boosts") tools |= lock_boosts;
         else if (lower == "tuning") tools |= lock_tuning;
+        else if (lower == "ollies") tools |= lock_ollies;
+        else if (lower == "objects") tools |= lock_objects;
         else if (lower == "all") tools |= lock_all;
         else return std::nullopt;
     }
@@ -725,7 +727,8 @@ std::optional<std::uint8_t> parse_lock_tools(std::string_view text) {
 std::string lock_tools_text(std::uint8_t tools) {
     std::string text;
     for (const auto &[bit, name] : {std::pair{lock_noclip, "noclip"}, std::pair{lock_nobail, "nobail"},
-                                    std::pair{lock_boosts, "boosts"}, std::pair{lock_tuning, "tuning"}})
+                                    std::pair{lock_boosts, "boosts"}, std::pair{lock_tuning, "tuning"},
+                                    std::pair{lock_ollies, "ollies"}, std::pair{lock_objects, "objects"}})
         if (tools & bit) text += (text.empty() ? "" : ", ") + std::string(name);
     return text.empty() ? "none" : text;
 }

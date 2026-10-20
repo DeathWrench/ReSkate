@@ -319,7 +319,8 @@ public:
     virtual throwdowns::kit::flag::State throwdown_flag_state() { return {}; }
     virtual void throwdown_flag_leave(std::string_view /*plugin*/) {}
     // ---- general services for a game layer in Lua (plugin_api_services.cpp) ----------------------
-    virtual std::optional<SkaterTelemetry> skater_telemetry() { return std::nullopt; }
+    // `plugin`: whose read it is (slam and struck are news since that plugin's last read).
+    virtual std::optional<SkaterTelemetry> skater_telemetry(std::string_view /*plugin*/) { return std::nullopt; }
     // The pad's XInput button bits, LT 0x10000 and RT 0x20000 (empty: no pad). `menu`: read while
     // ReSkate's menu is open too.
     virtual std::optional<std::uint32_t> pad_bits(bool /*menu*/) { return std::nullopt; }
@@ -412,6 +413,16 @@ public:
     virtual std::string announce(std::string_view /*plugin*/, std::string_view) { return unavailable; }
     virtual std::string tell(std::string_view /*plugin*/, std::uint64_t, std::string_view) { return unavailable; }
     virtual std::string move_player(std::uint64_t, const Vec3&) { return unavailable; }
+    // Bans a player by SteamID64, connected or not (a dedicated server's only); lifts a ban.
+    virtual std::string ban(std::uint64_t) { return unavailable; }
+    virtual std::string unban(std::uint64_t) { return unavailable; }
+    // A player's permissions, true where they may: what the server holds for them now, or nothing
+    // for one it cannot hold any for. Applying makes them exactly these.
+    struct Permissions {
+        bool noclip = true, nobail = true, boosts = true, tuning = true, objects = true, ollies = true;
+    };
+    virtual std::optional<Permissions> permissions(std::uint64_t) { return std::nullopt; }
+    virtual std::string apply_permissions(std::string_view /*plugin*/, std::uint64_t, const Permissions&) { return unavailable; }
     // ---- skater.animation: clips on the local skater's body (Extension/Skater/skater_animation.h) ------
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.

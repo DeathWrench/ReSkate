@@ -6,7 +6,8 @@ events. ReSkate shows the documents with skate.'s own native widgets: the Throwd
 setup page, the start flag, the waiting card, the in-game HUD and the match panel. A new mode needs
 no change to ReSkate.
 
-Two plugins use it:
+The full reference, with every field's limits, is on the docs site's throwdowns page
+(plugins/api/throwdowns in the docs repo). Two plugins use it:
 
 - [throwdown-modes-test](plugins/throwdown-modes-test): two modes through the whole native flow
   (card, setup page, flag, waiting card) and no match. The smallest example.
@@ -107,7 +108,7 @@ hud = {
     countdown = Clock,                -- 3-2-1-GO
     banner = {title, subtitle, art, serial, ms},  -- a new serial shows it again
     callout = {text, style, serial, ms},
-    warning = {text, art, serial, ms},
+    warning = {text, art},            -- shown while text is not empty
     card = {caption, title, image},   -- a trick card; image is a texture path
     list = {caption, items = {"KICKFLIP", ...}},
     position = {place = 1, medal = "gold", art = ""},   -- "gold" | "silver" | "bronze" | "white"
@@ -136,7 +137,9 @@ The native details page the pause menu opens during a match.
 panel = {title, description, art, score_caption = "SCORE", quit = "Quit",
          settings = {{icon = "players", caption = "Players", value = "4"}, ...},  -- at most 3;
                                                     -- icon "players" | "timer" | "rounds" | a texture
-         prompts = {{input = "UI_ShoulderL", caption = "Spectate", command = "spectate"}, ...},
+         prompts = {{input = "UI_DpadUp", caption = "Spectate", command = "spectate"}, ...},
+                                                    -- 3 are drawn; a press sends panel_command only for
+                                                    -- UI_DpadUp/Down/Left/Right, UI_L3Click and UI_R3Click
          players = {{id = "7656...", name, value, rank, outcome, portrait = "steam", self = true}, ...}}
 ```
 

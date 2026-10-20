@@ -13,14 +13,6 @@
 // permission and its arguments; the game (plugin_game.h) does the rest.
 namespace dingosdk::plugins {
 namespace {
-Plugin& plugin_of(lua_State* L) {
-    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
-    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
-    return plugin;
-}
-void need(lua_State* L, Plugin& plugin, const char* permission, const char* what) {
-    if (!plugin.has(permission)) luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
-}
 int result(lua_State* L, const std::string& why) {
     lua_pushboolean(L, why.empty());
     if (why.empty()) return 1;
@@ -39,12 +31,6 @@ bool within(double now, double& second, int& count, int most) {
         count = 0;
     }
     return ++count <= most;
-}
-std::string checked_text(lua_State* L, int index, std::size_t most, const char* what) {
-    std::size_t length = 0;
-    const char* text = luaL_checklstring(L, index, &length);
-    if (length > most) luaL_error(L, "%s is longer than %d characters", what, static_cast<int>(most));
-    return std::string(text, length);
 }
 // A string field of the table at `table` (nil: empty), at most `most` long.
 std::string text_field(lua_State* L, int table, const char* name, std::size_t most) {
@@ -134,7 +120,7 @@ struct KitApi {
         if (!lua_isnoneornil(L, 3)) {
             luaL_checktype(L, 3, LUA_TTABLE);
             options.players = static_cast<unsigned>(number_field(L, 3, "players", options.players, 1, 10));
-            options.seconds = static_cast<unsigned>(number_field(L, 3, "seconds", options.seconds, 0, 3600));
+            options.seconds = static_cast<unsigned>(number_field(L, 3, "seconds", options.seconds, 1, 3600));
             options.setup_page = bool_field(L, 3, "setup_page", options.setup_page);
             options.cursor_height = static_cast<float>(number_field(L, 3, "cursor_height", options.cursor_height, 0, 100000));
         }
@@ -366,37 +352,14 @@ struct KitApi {
 
 void install_kit_api(Plugin& plugin, lua_State* L) { KitApi::install(plugin, L); }
 
-namespace {
-// Adds the functions to the table at `field` of the table on top of the stack, making it when
-// there is none yet (a table made read-only earlier in the install is opened for this).
-void into(lua_State* L, const char* field, std::initializer_list<std::pair<const char*, lua_CFunction>> functions) {
-    lua_getfield(L, -1, field);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_createtable(L, 0, static_cast<int>(functions.size()));
-        lua_pushvalue(L, -1);
-        const bool locked = lua_getreadonly(L, -3) != 0;
-        lua_setreadonly(L, -3, false);
-        lua_setfield(L, -3, field);
-        lua_setreadonly(L, -2, locked);
-    }
-    lua_setreadonly(L, -1, false);
-    for (const auto& [name, function] : functions) {
-        lua_pushcfunction(L, function, name);
-        lua_setfield(L, -2, name);
-    }
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-}
-} // namespace
 
 void KitApi::install(Plugin&, lua_State* L) {
-    into(L, "throwdowns", {{"ui", ui}});
+    add_functions(L, "throwdowns", {{"ui", ui}});
     lua_getfield(L, -1, "throwdowns");
-    into(L, "flag", {{"begin", flag_begin}, {"state", flag_state}, {"leave", flag_leave}});
+    add_functions(L, "flag", {{"begin", flag_begin}, {"state", flag_state}, {"leave", flag_leave}});
     lua_pop(L, 1);
-    into(L, "files", {{"list", files_list}, {"read", files_read}, {"write", files_write}, {"remove", files_remove}});
-    into(L, "ui", {{"dialog", dialog}, {"close_dialog", close_dialog}});
-    into(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}});
+    add_functions(L, "files", {{"list", files_list}, {"read", files_read}, {"write", files_write}, {"remove", files_remove}});
+    add_functions(L, "ui", {{"dialog", dialog}, {"close_dialog", close_dialog}});
+    add_functions(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}});
 }
 }

@@ -516,6 +516,12 @@ Match match() noexcept {
     }
     return out;
 }
+bool allows_teleports(std::string_view plugin, bool flag_mine) noexcept {
+    auto& s = store();
+    std::lock_guard lock(s.mutex);
+    const auto entry = s.plugins.find(plugin);
+    return entry != s.plugins.end() && entry->second.documents.match.teleports && (entry->second.documents.hud.active || flag_mine);
+}
 bool hidden(std::uint64_t player) noexcept {
     if (!player) return false;
     auto& s = store();

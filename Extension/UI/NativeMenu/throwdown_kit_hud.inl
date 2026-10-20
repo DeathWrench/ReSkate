@@ -1138,8 +1138,12 @@ void kit_hud(const Context& c) {
     auto& s=state();auto& h=s.kit_hud;const auto now=GetTickCount64();
     const auto docs=kit::active();
     const auto generation=docs && docs->hud.active?std::hash<std::string>{}(docs->plugin)|1:0;
-    // A match that ended or another plugin's: everything goes, including a pending GO.
-    if(h.generation!=generation) {kit_hud_publish(c,{});h.generation=generation;h.go_until=0;h.was_counting=false;}
+    // A match that ended or another plugin's: everything goes, including a pending GO, and a banner
+    // or callout of the new one shows whatever serial it starts from.
+    if(h.generation!=generation) {
+        kit_hud_publish(c,{});h.generation=generation;h.go_until=0;h.was_counting=false;
+        h.callout_serial=h.banner_serial=~0ULL;h.callout_until=h.banner_until=0;
+    }
     if(!generation) {s.hud_doc.reset();kit_hud_publish(c,{});s.hud_ready.store(false);return;}
     const auto& hud=docs->hud;
     s.hud_doc=hud;
@@ -1199,15 +1203,16 @@ void kit_hud(const Context& c) {
             if(hud.list.present && !hud.list.items.empty())piece("list",[&]{kit_list(c,hud,styled);append(h.list_item);});
         }
         if(!hud.warning.text.empty())piece("warning",[&]{kit_warning(c,hud);append(h.warning_item);});
-        // A callout and a banner each show for their time after a new serial.
-        if(hud.callout.serial!=h.callout_serial) {
+        // A callout and a banner each show for their time after a new serial. A document without the
+        // slot leaves the serial as it was: the same one coming back is not news.
+        if(!hud.callout.text.empty() && hud.callout.serial!=h.callout_serial) {
             h.callout_serial=hud.callout.serial;
-            if(!hud.callout.text.empty())h.callout_until=now+(hud.callout.ms?hud.callout.ms:2500),h.callout_text=hud.callout.text;
+            h.callout_until=now+(hud.callout.ms?hud.callout.ms:2500);h.callout_text=hud.callout.text;
         }
         if(now<h.callout_until)piece("callout",[&]{kit_callout(c,hud);append(h.callout_item);});
-        if(hud.banner.serial!=h.banner_serial) {
+        if(!hud.banner.text.empty() && hud.banner.serial!=h.banner_serial) {
             h.banner_serial=hud.banner.serial;
-            if(!hud.banner.text.empty())h.banner_until=now+(hud.banner.ms?hud.banner.ms:3000);
+            h.banner_until=now+(hud.banner.ms?hud.banner.ms:3000);
         }
         if(now<h.banner_until && !hud.banner.text.empty())piece("banner",[&]{kit_banner(c,hud);append(h.banner_item);});
         if(editor)piece("editor",[&] {

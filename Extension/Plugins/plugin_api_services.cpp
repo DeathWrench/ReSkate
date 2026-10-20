@@ -17,11 +17,6 @@ struct ServicesApi {
 };
 namespace {
 Game& game_of(Plugin& plugin) { return ServicesApi::game(plugin); }
-Plugin& plugin_of(lua_State* L) {
-    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
-    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
-    return plugin;
-}
 Plugin& allowed(lua_State* L, const char* permission, const char* what) {
     auto& plugin = plugin_of(L);
     if (!plugin.has(permission)) luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
@@ -61,7 +56,7 @@ void field_vec(lua_State* L, const char* name, const Vec3& v) {
 // skater.telemetry(): the trainer's telemetry, its last jump, the physics watch and the bail's body.
 int telemetry(lua_State* L) {
     auto& plugin = allowed(L, "skater.read", "reskate.skater.telemetry");
-    const auto t = game_of(plugin).skater_telemetry();
+    const auto t = game_of(plugin).skater_telemetry(plugin.id());
     if (!t) {
         lua_pushnil(L);
         return 1;
@@ -279,31 +274,14 @@ int gesture(lua_State* L) {
     return 1;
 }
 
-// Adds the functions to reskate.<table> (on top of the stack), making the table when there is none.
-void into_table(lua_State* L, const char* table, std::initializer_list<std::pair<const char*, lua_CFunction>> functions) {
-    lua_getfield(L, -1, table);
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        lua_createtable(L, 0, static_cast<int>(functions.size()));
-        lua_pushvalue(L, -1);
-        lua_setfield(L, -3, table);
-    }
-    lua_setreadonly(L, -1, false);
-    for (const auto& [name, f] : functions) {
-        lua_pushcfunction(L, f, name);
-        lua_setfield(L, -2, name);
-    }
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-}
 } // namespace
 
 void install_services_api(Plugin&, lua_State* L) {
-    into_table(L, "skater", {{"telemetry", telemetry}, {"goofy", goofy}, {"bone_cam", bone_cam}});
-    into_table(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
-    into_table(L, "session", {{"spectate", spectate}, {"world", world}});
-    into_table(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
-    into_table(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}});
-    into_table(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}});
+    add_functions(L, "skater", {{"telemetry", telemetry}, {"goofy", goofy}, {"bone_cam", bone_cam}});
+    add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
+    add_functions(L, "session", {{"spectate", spectate}, {"world", world}});
+    add_functions(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
+    add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}});
+    add_functions(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}});
 }
 } // namespace dingosdk::plugins

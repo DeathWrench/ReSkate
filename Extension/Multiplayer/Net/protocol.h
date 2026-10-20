@@ -27,7 +27,7 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 52;
+constexpr std::uint16_t protocol_version = 53;
 // How long a receiver keeps typing dots after the last "still typing" notice. The sender
 // clears them after three seconds without input; this only covers a lost "stopped" packet.
 constexpr std::uint64_t typing_hold_us = 4000000;
@@ -349,8 +349,9 @@ struct Packet {
     std::string text;
     float voice_range = default_voice_range; // roster: how far the host forwards proximity voice
     // roster: whether guests may use noclip (and teleport) / No Bail / the forward and up boosts
-    // (the host and a dedicated server's admins always may)
-    bool guest_noclip = true, guest_no_bail = true, guest_boosts = true;
+    // (the host and a dedicated server's admins always may); and ollies, which only a dedicated
+    // server's lock takes away
+    bool guest_noclip = true, guest_no_bail = true, guest_boosts = true, guest_ollies = true;
     // roster: guests skate with the host's physics tuning (a dedicated server's: the game's own)
     bool enforce_tuning = true;
     // roster: the votes a dedicated server lets players start (server_vote_* bits)

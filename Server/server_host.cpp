@@ -814,10 +814,10 @@ void Host::send_roster() {
     // locked tools is told those are off for them. Everyone else gets the same roster; players
     // whose roster differs in the same way share one.
     struct Variant {
-        bool noclip{}, no_bail{}, boosts{}, enforce_tuning{}, announcement{};
+        bool noclip{}, no_bail{}, boosts{}, ollies{}, enforce_tuning{}, announcement{};
         auto operator<=>(const Variant &) const = default;
     };
-    const Variant common{config_.noclip, config_.no_bail, config_.boosts, config_.enforce_tuning, !announcement_for_};
+    const Variant common{config_.noclip, config_.no_bail, config_.boosts, true, config_.enforce_tuning, !announcement_for_};
     std::map<Variant, std::set<std::uint64_t>> variants;
     std::set<std::uint64_t> others;
     for (const auto &[id, guest] : guests_) {
@@ -831,6 +831,7 @@ void Host::send_roster() {
                 variant.noclip = !(locks & lock_noclip) && (config_.noclip || movement);
                 variant.no_bail = !(locks & lock_nobail) && (config_.no_bail || movement);
                 variant.boosts = !(locks & lock_boosts) && (config_.boosts || movement);
+                variant.ollies = !(locks & lock_ollies); // no setting turns ollies off: only a lock
             }
             variant.enforce_tuning = config_.enforce_tuning || (locks & lock_tuning);
         }
@@ -845,6 +846,7 @@ void Host::send_roster() {
         p.guest_noclip = variant.noclip;
         p.guest_no_bail = variant.no_bail;
         p.guest_boosts = variant.boosts;
+        p.guest_ollies = variant.ollies;
         p.enforce_tuning = variant.enforce_tuning;
         p.announcement = variant.announcement ? shown : multiplayer::ServerAnnouncement{};
         broadcast(p, true, false, 0, &players);
@@ -1524,7 +1526,7 @@ void Host::sync_objects() {
     // Guests upload their layouts; the server alone decides what everyone else
     // sees, and freezes the layouts of players who may not build right now.
     for (auto &[id, guest] : guests_)
-        if (guest->handshaken && guest->objects.revision() != guest->shared_from && now_ >= guest->objects_held_until &&
+        if (guest->handshaken && !(locks_of(id) & lock_objects) && guest->objects.revision() != guest->shared_from && now_ >= guest->objects_held_until &&
             (config_.object_placement == ObjectPlacement::everyone ||
              (config_.object_placement == ObjectPlacement::host_only && has(id, multiplayer::role_objects)))) {
             auto layout = guest->objects.layout();

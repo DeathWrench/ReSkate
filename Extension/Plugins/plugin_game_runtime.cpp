@@ -568,9 +568,12 @@ public:
     void dialog_close(std::string_view plugin, std::string_view id) override { overlay::close_plugin_dialog(plugin, id); }
     // ---- skater.push / hold --------------------------------------------------------------------------
     // A velocity the next on-board physics step writes (Extension/Skater/skater_push.h), and a hold
-    // that keeps the board still.
+    // that keeps the board still. Both are written on the game's stock physics only (client_noclip.cpp):
+    // without it they would be dropped unseen, so they say so.
+    static constexpr char needs_stock_physics[] = "needs the game's stock physics: reskate.physics.competition(true) first";
     std::string skater_push(std::string_view, const Vec3& velocity) override {
         if (!::dingosdk::skater_push::valid(velocity)) return "a push is horizontal (y 0) and at most 120 m/s";
+        if (!competition_stock_physics()) return std::string("a push ") + needs_stock_physics;
         ::dingosdk::skater_push::request(velocity);
         return {};
     }
@@ -583,6 +586,7 @@ public:
         return {};
     }
     std::string skater_hold(std::string_view plugin, bool on) override {
+        if (on && !competition_stock_physics()) return std::string("a hold ") + needs_stock_physics;
         if (on) hold_owner_ = plugin;
         else if (hold_owner_ != plugin) return {};
         else hold_owner_.clear();
@@ -738,7 +742,7 @@ public:
         skater_animation::tick(base, local_skater_component(base, client), allowed);
     }
     // ---- general services for a game layer in Lua ------------------------------------------------------
-    std::optional<SkaterTelemetry> skater_telemetry() override {
+    std::optional<SkaterTelemetry> skater_telemetry(std::string_view plugin) override {
         const auto t = trainer::telemetry();
         const auto w = watched_physics_state();
         SkaterTelemetry m;
@@ -757,8 +761,14 @@ public:
                   j.spin, j.spin_rate, j.flip, j.board_turn, j.state, j.takeoff, j.landing};
         m.watch = {w.valid, w.ragdoll_known, w.ragdoll, w.state, w.previous, w.previous_seconds, w.changes, w.wipeouts, w.runouts};
         m.teleport_pending = local_skater_teleport_pending();
-        m.slam = bonecam::bone_cam_slam();
-        m.struck = bonecam::bone_cam_struck();
+        // Each plugin hears of a slam or a strike once, whoever else reads the telemetry; its first
+        // read only takes its place.
+        const auto slams = bonecam::bone_cam_slams(), strikes = bonecam::bone_cam_strikes();
+        auto seen = telemetry_seen_.find(plugin);
+        if (seen == telemetry_seen_.end()) seen = telemetry_seen_.emplace(std::string(plugin), std::pair{slams, strikes}).first;
+        m.slam = slams != seen->second.first;
+        m.struck = strikes != seen->second.second;
+        seen->second = {slams, strikes};
         m.body = bonecam::bail_body_position();
         return m;
     }
@@ -967,6 +977,7 @@ public:
         hud_corner::release(plugin);
         game_speed::ask(plugin, 1.0f);
         grind_exit::release(plugin);
+        if (const auto seen = telemetry_seen_.find(plugin); seen != telemetry_seen_.end()) telemetry_seen_.erase(seen);
         plugin_feed::release_tags(std::string(plugin));
         if (std::erase_if(binds_, [&](const auto& item) { return item.first.first == plugin; })) publish_binds();
     }
@@ -995,6 +1006,8 @@ private:
         std::vector<std::string> installed;
     };
     std::map<std::string, VariantRead, std::less<>> variant_reads_;
+    // The Bone Cam's slam and strike counts each plugin last read with its telemetry.
+    std::map<std::string, std::pair<std::uint64_t, std::uint64_t>, std::less<>> telemetry_seen_;
     using BindKey = std::pair<std::string, std::string>;
     struct Bind {
         std::uint32_t own{};

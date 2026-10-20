@@ -252,11 +252,14 @@ void mode_open(const std::string& id) {
     options.players=static_cast<unsigned>(std::max(1,d->players));
     options.setup_page=true;
     options.cursor_height=d->cursor_height; // the registration's, e.g. a flag that may stand on anything
+    // The native registration's limit is 1 s to an hour. A mode's timer of 0 (none) or past an hour
+    // keeps its card working: the plugin runs its own clock.
     if(const auto setup=current_setup(d->id);setup && setup->timer.present)
-        options.seconds=static_cast<unsigned>(std::max(0.f,setup->timer.value));
+        options.seconds=static_cast<unsigned>(std::clamp(std::round(setup->timer.value),1.f,3600.f));
     kit::set_current(d->id);
     if(!kit::flag::begin(d->id,game,options)) {
-        logging::log(logging::Level::info,logging::Channel::ui,"Throwdowns: {} not opened, another flag is busy.",d->id);
+        logging::log(logging::Level::info,logging::Channel::ui,
+            "Throwdowns: {} not opened: there is no world yet, or another flag is being placed or waits.",d->id);
         return;
     }
     kit::post(d->id,"open",{std::to_string(game)});

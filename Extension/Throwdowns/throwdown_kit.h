@@ -222,6 +222,10 @@ std::optional<Documents> documents_for(std::string_view mode);
 std::optional<Documents> active();
 // What every running match asks, merged (any plugin's `true` holds).
 Match match() noexcept;
+// Whether `plugin`'s own match lets its teleports through where the session turned noclip off: its
+// `match.teleports`, while that match runs (its HUD is up, or `flag_mine`: the native flag is one of
+// its modes, which the caller knows from flag::state()).
+bool allows_teleports(std::string_view plugin, bool flag_mine) noexcept;
 bool hidden(std::uint64_t player) noexcept;
 
 // ---- events -----------------------------------------------------------------------------------

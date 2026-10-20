@@ -135,11 +135,11 @@ struct State {
     // The hips' recent speeds, to notice the body stopping dead (the ground, a pole, a wall).
     std::array<std::pair<std::uint64_t, float>, 24> hips_speeds{};
     std::size_t hips_next{};
-    std::atomic<bool> slam_seen{};
+    std::atomic<std::uint64_t> slams{};
     std::uint64_t slam_time{};
     // The head, chest, shoulders or hips striking an object at speed (bone_cam_struck), and when
     // any part last did.
-    std::atomic<bool> struck_seen{};
+    std::atomic<std::uint64_t> strikes{};
     std::uint64_t struck_time{};
     std::array<std::uint8_t, watch_count> level{};
     std::array<std::uint8_t, static_cast<std::size_t>(BoneSprite::count)> hurt{};
@@ -336,7 +336,7 @@ void find_impacts(State &s, std::uint64_t now, bool injuring = true) {
                 // the body hit something. Once in a while at most: on foot the measured speed
                 // jitters, and one slam must not be counted thirty times.
                 if (fastest >= 8.0f && speed < 2.5f && body_stopped && now - s.slam_time > 1500) {
-                    s.slam_seen.store(true);
+                    s.slams.fetch_add(1);
                     s.slam_time = now;
                 }
                 s.hips_speeds[s.hips_next++ % s.hips_speeds.size()] = {now, speed};
@@ -360,7 +360,7 @@ void find_impacts(State &s, std::uint64_t now, bool injuring = true) {
                 // only counts once a bail is on).
                 const auto j = watches[w].joint;
                 const bool body = j == joint::head || j == joint::spine2 || j == joint::hips || j == joint::right_arm || j == joint::left_arm;
-                if (body && now - s.struck_time > 1000) s.struck_seen.store(true);
+                if (body && now - s.struck_time > 1000) s.strikes.fetch_add(1);
                 s.struck_time = now;
             }
             const bool touching = on_ground || against || struck;
@@ -606,9 +606,9 @@ void tick_bone_cam(std::uintptr_t base, std::uintptr_t client, bool playing) noe
 
 void bone_cam_bail() noexcept { state().bail_pending.store(true); }
 
-bool bone_cam_slam() noexcept { return state().slam_seen.exchange(false); }
+std::uint64_t bone_cam_slams() noexcept { return state().slams.load(); }
 
-bool bone_cam_struck() noexcept { return state().struck_seen.exchange(false); }
+std::uint64_t bone_cam_strikes() noexcept { return state().strikes.load(); }
 
 std::string bone_cam_setting() {
     switch (state().setting) {

@@ -173,6 +173,7 @@ struct Session {
     bool sync_effects{true};   // the dedicated server has players see each other's skater effects
     // What guests may use: the host's choice, or the host's roster for a guest.
     bool guest_noclip = true, guest_no_bail = true, guest_boosts = true;
+    bool guest_ollies = true; // a dedicated server's lock only: a lobby host has no such choice
     // Host: guests skate with its physics tuning. Guest: the host's roster says so (a
     // dedicated server's guests skate with the game's own).
     bool enforce_tuning = true;
@@ -588,7 +589,7 @@ void apply_object_limit(Session &s, unsigned limit);
 void apply_object_scaling(Session &s, bool allowed);
 // Stores what guests may use and applies it to the local player (the host and a dedicated
 // server's admins are exempt).
-void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts);
+void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts, bool ollies = true);
 // Shows the chosen nametags: ReSkate's (and none of the game's nametags or compass
 // arrows), the game's own, or none.
 void apply_nametags(const Session &s);

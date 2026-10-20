@@ -766,7 +766,7 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         w.integer(static_cast<std::uint16_t>(std::lround(p.voice_range)), 2);
         if (p.server_votes > 7) throw std::invalid_argument("Invalid server votes");
         w.integer((p.guest_noclip ? 1U : 0U) | (p.guest_no_bail ? 2U : 0U) | (p.guest_boosts ? 4U : 0U) |
-                      (static_cast<unsigned>(p.server_votes) << 3) | (p.enforce_tuning ? 64U : 0U), 1);
+                      (static_cast<unsigned>(p.server_votes) << 3) | (p.enforce_tuning ? 64U : 0U) | (p.guest_ollies ? 128U : 0U), 1);
         if (p.server_polls > static_cast<std::uint8_t>(ServerPolls::everyone) || p.server_custom_votes.size() > server_custom_vote_limit ||
             !std::all_of(p.server_custom_votes.begin(), p.server_custom_votes.end(), [](const auto &v) { return valid_server_custom_vote(v); }))
             throw std::invalid_argument("Invalid server votes");
@@ -1223,12 +1223,12 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             p.voice_range = static_cast<float>(r.integer(2));
             if (!valid_voice_range(p.voice_range)) return {};
             const auto tools = r.integer(1);
-            if (tools > 127) return {};
             p.guest_noclip = (tools & 1) != 0;
             p.guest_no_bail = (tools & 2) != 0;
             p.guest_boosts = (tools & 4) != 0;
             p.server_votes = static_cast<std::uint8_t>((tools >> 3) & 7);
             p.enforce_tuning = (tools & 64) != 0;
+            p.guest_ollies = (tools & 128) != 0;
             const auto polls = r.integer(1), custom = r.integer(1);
             if (polls > static_cast<std::uint8_t>(ServerPolls::everyone) || custom > server_custom_vote_limit) return {};
             p.server_polls = static_cast<std::uint8_t>(polls);

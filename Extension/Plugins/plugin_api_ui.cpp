@@ -13,24 +13,6 @@
 // plugin_api.cpp, every value is checked before it leaves the VM.
 namespace dingosdk::plugins {
 namespace {
-Plugin& plugin_of(lua_State* L) {
-    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
-    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
-    return plugin;
-}
-void need(lua_State* L, Plugin& plugin, const char* permission, const char* what) {
-    if (!plugin.has(permission)) luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
-}
-void set_function(lua_State* L, const char* name, lua_CFunction function) {
-    lua_pushcfunction(L, function, name);
-    lua_setfield(L, -2, name);
-}
-std::string checked_text(lua_State* L, int index, std::size_t most, const char* what) {
-    std::size_t length = 0;
-    const char* text = luaL_checklstring(L, index, &length);
-    if (length > most) luaL_error(L, "%s is longer than %d characters", what, static_cast<int>(most));
-    return std::string(text, length);
-}
 float finite(lua_State* L, int index, const char* what) {
     const double value = luaL_checknumber(L, index);
     if (!std::isfinite(value) || std::fabs(value) > 1e6) luaL_error(L, "%s must be a finite number", what);
@@ -646,82 +628,25 @@ void install_ui_api(Plugin& plugin, lua_State* L) { UiApi::install(plugin, L); }
 
 void UiApi::install(Plugin& plugin, lua_State* L) {
     // The reskate table is on top of the stack.
-    const auto readonly = [&] { lua_setreadonly(L, -1, true); };
-
-    lua_createtable(L, 0, 10);
-    set_function(L, "text", UiApi::text);
-    set_function(L, "rect", UiApi::rect);
-    set_function(L, "line", UiApi::line);
-    set_function(L, "circle", UiApi::circle);
-    set_function(L, "poly", UiApi::poly);
-    set_function(L, "world_text", UiApi::world_text);
-    set_function(L, "world_line", UiApi::world_line);
-    set_function(L, "world_circle", UiApi::world_circle);
-    set_function(L, "image", UiApi::image);
-    set_function(L, "world_image", UiApi::world_image);
-    set_function(L, "game_image", UiApi::game_image);
-    set_function(L, "gradient", UiApi::gradient);
-    set_function(L, "skeleton", UiApi::skeleton);
-    set_function(L, "size", UiApi::size);
-    set_function(L, "world_to_screen", UiApi::world_to_screen);
-    readonly();
+    using F = UiApi;
+    push_functions(L, {{"text", F::text}, {"rect", F::rect}, {"line", F::line}, {"circle", F::circle}, {"poly", F::poly},
+                       {"world_text", F::world_text}, {"world_line", F::world_line}, {"world_circle", F::world_circle},
+                       {"image", F::image}, {"world_image", F::world_image}, {"game_image", F::game_image},
+                       {"gradient", F::gradient}, {"skeleton", F::skeleton}, {"size", F::size}, {"world_to_screen", F::world_to_screen}});
     plugin.draw_table_ = lua_ref(L, -1);
     lua_pop(L, 1);
 
-    lua_createtable(L, 0, 8);
-    set_function(L, "heading", UiApi::heading);
-    set_function(L, "label", UiApi::label);
-    set_function(L, "separator", UiApi::separator);
-    set_function(L, "button", UiApi::button);
-    set_function(L, "toggle", UiApi::toggle);
-    set_function(L, "slider", UiApi::slider);
-    set_function(L, "dropdown", UiApi::dropdown);
-    set_function(L, "bar", UiApi::bar);
-    set_function(L, "card", UiApi::card);
-    set_function(L, "note", UiApi::note);
-    set_function(L, "warn", UiApi::warn);
-    set_function(L, "info", UiApi::info);
-    set_function(L, "tabs", UiApi::tabs);
-    readonly();
+    push_functions(L, {{"heading", F::heading}, {"label", F::label}, {"separator", F::separator}, {"button", F::button},
+                       {"toggle", F::toggle}, {"slider", F::slider}, {"dropdown", F::dropdown}, {"bar", F::bar}, {"card", F::card},
+                       {"note", F::note}, {"warn", F::warn}, {"info", F::info}, {"tabs", F::tabs}});
     plugin.ui_table_ = lua_ref(L, -1);
     lua_pop(L, 1);
 
-    lua_createtable(L, 0, 1);
-    set_function(L, "toast", UiApi::toast);
-    readonly();
-    lua_setfield(L, -2, "ui");
-
-    lua_createtable(L, 0, 1);
-    set_function(L, "panel", UiApi::panel);
-    set_function(L, "page", UiApi::page);
-    readonly();
-    lua_setfield(L, -2, "menu");
-
-    lua_createtable(L, 0, 1);
-    set_function(L, "play_ui", UiApi::play_ui);
-    readonly();
-    lua_setfield(L, -2, "audio");
-
-    lua_createtable(L, 0, 2);
-    set_function(L, "installed", UiApi::installed);
-    lua_pushcfunction(L, UiApi::mods_list, "list");
-    lua_setfield(L, -2, "list");
-    readonly();
-    lua_setfield(L, -2, "mods");
-
-    lua_createtable(L, 0, 5);
-    set_function(L, "active", UiApi::active);
-    lua_pushcfunction(L, UiApi::dedicated, "is_dedicated");
-    lua_setfield(L, -2, "is_dedicated");
-    set_function(L, "players", UiApi::players);
-    set_function(L, "me", UiApi::me);
-    set_function(L, "host", UiApi::host);
-    readonly();
-    lua_setfield(L, -2, "session");
-
-    lua_createtable(L, 0, 1);
-    set_function(L, "send", UiApi::send);
-    readonly();
-    lua_setfield(L, -2, "net");
+    add_functions(L, "ui", {{"toast", F::toast}});
+    add_functions(L, "menu", {{"panel", F::panel}, {"page", F::page}});
+    add_functions(L, "audio", {{"play_ui", F::play_ui}});
+    add_functions(L, "mods", {{"installed", F::installed}, {"list", F::mods_list}});
+    add_functions(L, "session", {{"active", F::active}, {"is_dedicated", F::dedicated}, {"players", F::players}, {"me", F::me}, {"host", F::host}});
+    add_functions(L, "net", {{"send", F::send}});
 }
 }

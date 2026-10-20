@@ -31,18 +31,12 @@ constexpr std::size_t maximum_key = 128;
 constexpr std::size_t maximum_command = 48;
 constexpr std::size_t maximum_listing = 1000;
 
-// A plugin that caught its own memory or time error in a pcall gets no further: nothing it asks
-// for is done, and the next safe point stops it.
-Plugin& plugin_of(lua_State* L) {
-    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
-    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
-    return plugin;
-}
-
 // The table being filled is on top of the stack.
-void set_function(lua_State* L, const char* name, lua_CFunction function) {
-    lua_pushcfunction(L, function, name);
-    lua_setfield(L, -2, name);
+void set_functions(lua_State* L, std::initializer_list<ApiFunction> functions) {
+    for (const auto& [name, function] : functions) {
+        lua_pushcfunction(L, function, name);
+        lua_setfield(L, -2, name);
+    }
 }
 
 std::string text_of(lua_State* L, int index) {
@@ -155,11 +149,6 @@ void push_json_value(lua_State* L, const Json& value, int depth) {
     }
 }
 
-void need(lua_State* L, Plugin& plugin, const char* permission, const char* what) {
-    if (!plugin.has(permission))
-        luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
-}
-
 std::string key_of(lua_State* L, int index) {
     std::size_t length = 0;
     const char* key = luaL_checklstring(L, index, &length);
@@ -182,8 +171,50 @@ std::filesystem::path package_path(lua_State* L, Plugin& plugin, std::string_vie
     if (code || (!relative.empty() && (inside.empty() || *inside.begin() == ".."))) luaL_error(L, "that path leads outside the package");
     return full;
 }
+}
 
-// A position a plugin passes: a vector, finite and within 100 km of the map's centre.
+void add_functions(lua_State* L, const char* field, std::initializer_list<ApiFunction> functions) {
+    lua_getfield(L, -1, field);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_createtable(L, 0, static_cast<int>(functions.size()));
+        lua_pushvalue(L, -1);
+        // The parent may be a read-only table itself (reskate.throwdowns, for its flag).
+        const bool locked = lua_getreadonly(L, -3) != 0;
+        lua_setreadonly(L, -3, false);
+        lua_setfield(L, -3, field);
+        lua_setreadonly(L, -2, locked);
+    }
+    // A table made read-only earlier in the install is opened for this, and closed again.
+    lua_setreadonly(L, -1, false);
+    set_functions(L, functions);
+    lua_setreadonly(L, -1, true);
+    lua_pop(L, 1);
+}
+void add_functions(lua_State* L, std::initializer_list<ApiFunction> functions) { set_functions(L, functions); }
+void push_functions(lua_State* L, std::initializer_list<ApiFunction> functions) {
+    lua_createtable(L, 0, static_cast<int>(functions.size()));
+    set_functions(L, functions);
+    lua_setreadonly(L, -1, true);
+}
+
+// A plugin that caught its own memory or time error in a pcall gets no further: nothing it asks
+// for is done, and the next safe point stops it.
+Plugin& plugin_of(lua_State* L) {
+    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
+    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
+    return plugin;
+}
+void need(lua_State* L, Plugin& plugin, const char* permission, const char* what) {
+    if (!plugin.has(permission))
+        luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
+}
+std::string checked_text(lua_State* L, int index, std::size_t most, const char* what) {
+    std::size_t length = 0;
+    const char* text = luaL_checklstring(L, index, &length);
+    if (length > most) luaL_error(L, "%s is longer than %d characters", what, static_cast<int>(most));
+    return std::string(text, length);
+}
 Vec3 position_of(lua_State* L, int index, const char* what) {
     const float* v = luaL_checkvector(L, index);
     for (int i = 0; i < 3; ++i)
@@ -191,7 +222,6 @@ Vec3 position_of(lua_State* L, int index, const char* what) {
     return {v[0], v[1], v[2]};
 }
 void push_position(lua_State* L, const Vec3& v) { lua_pushvector(L, v[0], v[1], v[2]); }
-}
 
 std::filesystem::path package_file(lua_State* L, Plugin& plugin, std::string_view path) { return package_path(L, plugin, path, false); }
 
@@ -526,7 +556,7 @@ struct ApiFunctions {
         }
         const char* refusal = nullptr;
         if (++plugin.teleports_ > plugin.limits_.teleports_per_second) refusal = "asked more than twice in a second";
-        else switch (plugin.services_.teleport(at, heading)) {
+        else switch (plugin.services_.teleport(plugin.id(), at, heading)) {
         case Teleport::sent: break;
         case Teleport::forbidden: refusal = "the host has turned teleporting off"; break;
         case Teleport::unavailable: refusal = "teleporting is unavailable now (no skater, or a load)"; break;
@@ -643,80 +673,37 @@ void Api::install(Plugin& plugin, lua_State* L) {
     // "client" for the copy on a player's game, "server" for the session authority's copy.
     lua_pushstring(L, plugin.services_.authority() ? "server" : "client");
     lua_setfield(L, -2, "side");
-    set_function(L, "log", ApiFunctions::log);
-    set_function(L, "on", ApiFunctions::on);
-
-    lua_createtable(L, 0, 4);
-    set_function(L, "now", ApiFunctions::now);
-    set_function(L, "after", ApiFunctions::after);
-    set_function(L, "every", ApiFunctions::every);
-    set_function(L, "cancel", ApiFunctions::cancel);
-    readonly();
-    lua_setfield(L, -2, "time");
-
-    lua_createtable(L, 0, 1);
-    set_function(L, "current", ApiFunctions::level);
-    readonly();
-    lua_setfield(L, -2, "level");
-
-    lua_createtable(L, 0, 5);
-    set_function(L, "read", ApiFunctions::read);
-    set_function(L, "read_json", ApiFunctions::read_json);
-    set_function(L, "list", ApiFunctions::list);
-    set_function(L, "variants", ApiFunctions::variants);
-    set_function(L, "choose", ApiFunctions::choose);
-    readonly();
-    lua_setfield(L, -2, "package");
-
+    // Named constants, read-only and built from the C++ lists so they cannot drift:
+    // reskate.Enums.Side.server is "server", reskate.Enums.Event.tick is "tick". Plain strings still work.
     lua_createtable(L, 0, 2);
-    set_function(L, "encode", ApiFunctions::encode);
-    set_function(L, "decode", ApiFunctions::decode);
+    lua_createtable(L, 0, 3);
+    for (const auto side : {Side::client, Side::server, Side::both}) {
+        lua_pushstring(L, side_name(side));
+        lua_setfield(L, -2, side_name(side));
+    }
     readonly();
-    lua_setfield(L, -2, "json");
-
-    lua_createtable(L, 0, 2);
-    set_function(L, "command", ApiFunctions::command);
-    lua_pushcfunction(L, ApiFunctions::console_print, "print");
-    lua_setfield(L, -2, "print");
+    lua_setfield(L, -2, "Side");
+    lua_createtable(L, 0, static_cast<int>(events.size()));
+    for (const auto& event : events) {
+        lua_pushlstring(L, event.name.data(), event.name.size());
+        lua_setfield(L, -2, std::string(event.name).c_str());
+    }
     readonly();
-    lua_setfield(L, -2, "console");
-
-    lua_createtable(L, 0, 4);
-    lua_pushcfunction(L, ApiFunctions::storage_get, "get");
-    lua_setfield(L, -2, "get");
-    lua_pushcfunction(L, ApiFunctions::storage_set, "set");
-    lua_setfield(L, -2, "set");
-    lua_pushcfunction(L, ApiFunctions::storage_add, "add");
-    lua_setfield(L, -2, "add");
-    lua_pushcfunction(L, ApiFunctions::storage_keys, "keys");
-    lua_setfield(L, -2, "keys");
+    lua_setfield(L, -2, "Event");
     readonly();
-    lua_setfield(L, -2, "storage");
-
-    lua_createtable(L, 0, 6);
-    set_function(L, "get", ApiFunctions::skater_get);
-    lua_pushcfunction(L, ApiFunctions::skater_position, "position");
-    lua_setfield(L, -2, "position");
-    lua_pushcfunction(L, ApiFunctions::skater_heading, "heading");
-    lua_setfield(L, -2, "heading");
-    lua_pushcfunction(L, ApiFunctions::skater_speed, "speed");
-    lua_setfield(L, -2, "speed");
-    lua_pushcfunction(L, ApiFunctions::skater_on_ground, "on_ground");
-    lua_setfield(L, -2, "on_ground");
-    lua_pushcfunction(L, ApiFunctions::skater_teleport, "teleport");
-    lua_setfield(L, -2, "teleport");
-    readonly();
-    lua_setfield(L, -2, "skater");
-
-    lua_createtable(L, 0, 1);
-    set_function(L, "current", ApiFunctions::score);
-    readonly();
-    lua_setfield(L, -2, "score");
-
-    lua_createtable(L, 0, 1);
-    set_function(L, "raycast", ApiFunctions::raycast);
-    readonly();
-    lua_setfield(L, -2, "world");
+    lua_setfield(L, -2, "Enums");
+    using F = ApiFunctions;
+    add_functions(L, {{"log", F::log}, {"on", F::on}});
+    add_functions(L, "time", {{"now", F::now}, {"after", F::after}, {"every", F::every}, {"cancel", F::cancel}});
+    add_functions(L, "level", {{"current", F::level}});
+    add_functions(L, "package", {{"read", F::read}, {"read_json", F::read_json}, {"list", F::list}, {"variants", F::variants}, {"choose", F::choose}});
+    add_functions(L, "json", {{"encode", F::encode}, {"decode", F::decode}});
+    add_functions(L, "console", {{"command", F::command}, {"print", F::console_print}});
+    add_functions(L, "storage", {{"get", F::storage_get}, {"set", F::storage_set}, {"add", F::storage_add}, {"keys", F::storage_keys}});
+    add_functions(L, "skater", {{"get", F::skater_get}, {"position", F::skater_position}, {"heading", F::skater_heading},
+                                {"speed", F::skater_speed}, {"on_ground", F::skater_on_ground}, {"teleport", F::skater_teleport}});
+    add_functions(L, "score", {{"current", F::score}});
+    add_functions(L, "world", {{"raycast", F::raycast}});
 
     install_ui_api(plugin, L);
     install_more_api(plugin, L);
@@ -744,5 +731,7 @@ void push_player(lua_State* L, const SessionPlayer& player) {
     lua_setfield(L, -2, "host");
     lua_pushboolean(L, player.server);
     lua_setfield(L, -2, "server");
+    lua_getfield(L, LUA_REGISTRYINDEX, "reskate.player"); // its permissions (plugin_api_world.cpp)
+    lua_setmetatable(L, -2);
 }
 }

@@ -46,7 +46,7 @@ std::string fingerprint_of(const std::filesystem::path &directory) {
 // The server's game, for plugins: its players and what the server does to them.
 class ServerGame final : public Game {
   public:
-    explicit ServerGame(Host &host) : host_(host) {}
+    ServerGame(Host &host, ServerPlugins::Log log) : host_(host), log_(std::move(log)) {}
     std::string kick(std::uint64_t player, std::string_view why) override {
         if (!present(player)) return "that player is not on the server";
         host_.drop(player, why.empty() ? std::string("Removed from the server.") : "Removed from the server: " + std::string(why),
@@ -65,6 +65,33 @@ class ServerGame final : public Game {
     std::string move_player(std::uint64_t player, const Vec3 &at) override {
         return host_.teleport_player(player, at[0], at[1], at[2]) ? std::string{} : "that player is not on the server";
     }
+    // Permissions are the player's locks turned around; any SteamID64, here or not, as `lock` takes.
+    std::optional<Permissions> permissions(std::uint64_t player) override {
+        if (!multiplayer::individual_steam_id(player)) return std::nullopt;
+        const auto locks = host_.player_locks(player);
+        return Permissions{!(locks & lock_noclip), !(locks & lock_nobail), !(locks & lock_boosts), !(locks & lock_tuning),
+                           !(locks & lock_objects), !(locks & lock_ollies)};
+    }
+    std::string apply_permissions(std::string_view plugin, std::uint64_t player, const Permissions &p) override {
+        if (!multiplayer::individual_steam_id(player)) return "not a player's SteamID64";
+        const auto locks = static_cast<std::uint8_t>((p.noclip ? 0 : lock_noclip) | (p.nobail ? 0 : lock_nobail) | (p.boosts ? 0 : lock_boosts) |
+                                                     (p.tuning ? 0 : lock_tuning) | (p.objects ? 0 : lock_objects) | (p.ollies ? 0 : lock_ollies));
+        host_.set_locks(player, locks, "plugin " + std::string(plugin));
+        return {};
+    }
+    // Through the console's own ban and unban, so they keep its checks and save the bans file.
+    std::string ban(std::uint64_t player) override {
+        const auto answer = host_.command("ban " + std::to_string(player));
+        if (!host_.is_banned(player)) return answer;
+        log_("[Plugins] " + answer); // the console's ban leaves logging to the console
+        return {};
+    }
+    std::string unban(std::uint64_t player) override {
+        const auto answer = host_.command("unban " + std::to_string(player));
+        if (host_.is_banned(player)) return answer;
+        log_("[Plugins] " + answer);
+        return {};
+    }
 
   private:
     bool present(std::uint64_t player) const {
@@ -73,12 +100,13 @@ class ServerGame final : public Game {
         return false;
     }
     Host &host_;
+    ServerPlugins::Log log_;
 };
 
 class ServerEnvironment final : public Environment {
   public:
     ServerEnvironment(Host &host, std::filesystem::path storage, ServerPlugins::Log log)
-        : host_(host), storage_(std::move(storage)), log_(std::move(log)), game_(host) {}
+        : host_(host), storage_(std::move(storage)), log_(log), game_(host, log) {}
     void log(LogLevel level, std::string_view text) override {
         log_(std::string(level == LogLevel::error ? "[Plugins] error: " : level == LogLevel::warn ? "[Plugins] warning: " : "[Plugins] ") +
              std::string(text));

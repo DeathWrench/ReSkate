@@ -106,7 +106,7 @@ void stop(Session &s, std::string reason) {
     s.server_map_rotation = 0;
     set_lobby_object_placement_allowed(true);
     set_lobby_object_scaling_allowed(true);
-    s.guest_noclip = s.guest_no_bail = s.guest_boosts = true;
+    s.guest_noclip = s.guest_no_bail = s.guest_boosts = s.guest_ollies = true;
     s.enforce_tuning = true;
     s.score_check = true;
     s.scoring_sent.reset();
@@ -125,7 +125,7 @@ void stop(Session &s, std::string reason) {
     s.server_votes = 0;
     s.server_polls = 0;
     s.server_custom_votes.clear();
-    set_session_tools_allowed(true, true, true);
+    set_session_tools_allowed(true, true, true, true);
     s.object_clears.reset();
     s.clear_pending = false;
     s.force_world_layers = false;

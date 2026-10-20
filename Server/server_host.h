@@ -76,6 +76,11 @@ class Host {
     void send_player_chat(std::uint64_t steam_id, std::string_view text);
     void broadcast_player_chat(std::string_view text);
     bool teleport_player(std::uint64_t steam_id, float x, float y, float z);
+    bool is_banned(std::uint64_t id) const;
+    // A player's locks (lock_*, server_config.h), and making them exactly `locks` as an admin's
+    // lock and unlock would (logged, and the player told): the tools that changed.
+    std::uint8_t player_locks(std::uint64_t id) const { return locks_of(id); }
+    std::uint8_t set_locks(std::uint64_t id, std::uint8_t locks, const std::string &source);
     std::optional<std::array<float, 3>> player_position(std::uint64_t steam_id) const;
     void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
     void change_map(std::string_view map); // a level name, level path or destination
@@ -434,7 +439,6 @@ class Host {
     void send_words(Guest &);          // the server's own filtered chat words (server_words.h)
     void send_next_maps(Guest &);      // the maps the vote for the next one will offer
     void roles_changed();              // after any change to the roles or who has them
-    bool is_banned(std::uint64_t id) const;
     void save();
 
     // `detail` is for the log alone: the player is told `reason`.

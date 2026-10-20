@@ -9,12 +9,11 @@ local RA = require("td/h/race_arrow_placement")
 -- game_modes.cpp:1445.
 local pad_up, pad_down, pad_left, pad_right = 0x1, 0x2, 0x4, 0x8
 
--- Windows virtual keys (WinUser.h) and WHEEL_DELTA.
+-- Windows virtual keys (WinUser.h).
 local VK_LBUTTON, VK_BACK, VK_RETURN, VK_ESCAPE = 0x01, 0x08, 0x0D, 0x1B
 local VK_PRIOR, VK_NEXT, VK_END = 0x21, 0x22, 0x23
 local VK_OEM_4, VK_OEM_6 = 0xDB, 0xDD
 local KEY_F, KEY_G, KEY_R, KEY_X, KEY_Z = 0x46, 0x47, 0x52, 0x58, 0x5A
-local WHEEL_DELTA = 120
 
 local band, bor, bnot = bit32.band, bit32.bor, bit32.bnot
 
@@ -200,7 +199,7 @@ function M.run_placing(s, now)
     local mouse = s.free_place
     local keys = {held(VK_RETURN) or (mouse and held(VK_LBUTTON)), held(VK_BACK), held(VK_END) or (mouse and held(KEY_F)), held(VK_ESCAPE)}
     local wheel = reskate.input.wheel() -- only gathered while the free camera flies
-    local notches = wheel / WHEEL_DELTA
+    local notches = wheel -- reskate.input.wheel counts whole notches already
     local struck = {false, false, false, false}
     for i = 1, #keys do struck[i] = keys[i] and not s.keys_previous[i] end
     s.keys_previous = keys

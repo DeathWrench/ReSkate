@@ -38,3 +38,7 @@ analysis/raw/**/*.res
 !/contrib/plugins/SmokeyDawg58-ReSkate_Throwdown/plugin/
 !/contrib/plugins/SmokeyDawg58-ReSkate_Throwdown/reskate-plugin.json
 /contrib/plugins/*.fbmod
+
+# vtf's linux development configuration
+.vscode/
+.clangd

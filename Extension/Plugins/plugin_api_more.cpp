@@ -8,21 +8,6 @@
 // plugin_api.cpp, every value is checked before it leaves the VM.
 namespace dingosdk::plugins {
 namespace {
-Plugin& plugin_of(lua_State* L) {
-    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
-    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
-    return plugin;
-}
-void set_function(lua_State* L, const char* name, lua_CFunction function) {
-    lua_pushcfunction(L, function, name);
-    lua_setfield(L, -2, name);
-}
-std::string checked_text(lua_State* L, int index, std::size_t most, const char* what) {
-    std::size_t length = 0;
-    const char* text = luaL_checklstring(L, index, &length);
-    if (length > most) luaL_error(L, "%s is longer than %d characters", what, static_cast<int>(most));
-    return std::string(text, length);
-}
 // A name another plugin calls or listens for: letters, digits and _ . -, 1 to 48 of them.
 std::string identifier(lua_State* L, int index, const char* what) {
     auto name = checked_text(L, index, 48, what);
@@ -194,15 +179,8 @@ void install_more_api(Plugin& plugin, lua_State* L) { MoreApi::install(plugin, L
 void MoreApi::install(Plugin& plugin, lua_State* L) {
     (void)plugin;
     // The reskate table is on top of the stack.
-    set_function(L, "expose", MoreApi::expose);
-    set_function(L, "require_plugin", MoreApi::require_plugin);
-    set_function(L, "emit", MoreApi::emit);
-    set_function(L, "on_plugin", MoreApi::on_plugin);
-
-    lua_createtable(L, 0, 1);
-    lua_pushcfunction(L, MoreApi::http_request, "request");
-    lua_setfield(L, -2, "request");
-    lua_setreadonly(L, -1, true);
-    lua_setfield(L, -2, "http");
+    using F = MoreApi;
+    add_functions(L, {{"expose", F::expose}, {"require_plugin", F::require_plugin}, {"emit", F::emit}, {"on_plugin", F::on_plugin}});
+    add_functions(L, "http", {{"request", F::http_request}});
 }
 }

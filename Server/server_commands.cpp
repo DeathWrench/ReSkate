@@ -947,14 +947,14 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         // last word, so a name may have spaces in it.
         const bool lock = name == "lock";
         auto who = trim(argument);
-        std::optional<std::uint8_t> tools = lock ? std::nullopt : std::optional<std::uint8_t>(lock_all);
+        std::optional<std::uint8_t> tools = lock ? std::nullopt : std::optional<std::uint8_t>(lock_all | lock_objects);
         if (const auto space = who.find_last_of(" \t"); space != std::string_view::npos)
             if (const auto named = parse_lock_tools(who.substr(space + 1))) {
                 tools = named;
                 who = trim(who.substr(0, space));
             }
         if (who.empty() || !tools)
-            return lock ? "lock <player|SteamID64> <tool[,tool...]|all> (tools: noclip, nobail, boosts, tuning)"
+            return lock ? "lock <player|SteamID64> <tool[,tool...]|all> (tools: noclip, nobail, boosts, tuning, ollies, objects)"
                         : "unlock <player|SteamID64> [<tool[,tool...]|all>]";
         auto *guest = target(who);
         if (guest && !guest->handshaken) guest = nullptr;
@@ -996,7 +996,7 @@ std::string Host::command(std::string_view line, std::uint64_t admin) {
         if (argument.empty())
             return "throwdown-locks <tool[,tool...]|all>|off (now " + (config_.throwdown_locks ? lock_tools_text(config_.throwdown_locks) : std::string("off")) + ")";
         const auto tools = lower(argument) == "off" ? std::optional<std::uint8_t>(0) : parse_lock_tools(argument);
-        if (!tools) return "throwdown-locks <tool[,tool...]|all>|off (tools: noclip, nobail, boosts, tuning)";
+        if (!tools) return "throwdown-locks <tool[,tool...]|all>|off (tools: noclip, nobail, boosts, tuning, ollies, objects)";
         // The players of a running throwdown get the new set at once: what it no longer locks
         // unlocked, what it now locks locked (none of it when it is turned off or on: then
         // update_throwdown_locks ends or starts theirs).
@@ -1024,6 +1024,16 @@ std::string Host::lock_name(std::uint64_t id, const Guest *guest) const {
     if (guest) return guest_name(*guest);
     if (const auto seen = seen_names_.find(id); seen != seen_names_.end()) return seen->second;
     return std::to_string(id);
+}
+std::uint8_t Host::set_locks(std::uint64_t id, std::uint8_t locks, const std::string &source) {
+    auto *guest = find(id);
+    if (guest && !guest->handshaken) guest = nullptr;
+    // Locked as an admin locks, so a throwdown ending does not lift what was asked for here.
+    const auto found = locks_.find(id);
+    const std::uint8_t manual = found == locks_.end() ? 0 : found->second.manual;
+    const auto now = locks_of(id);
+    return change_locks(id, guest, locks & ~manual, true, LockBy::admin, source) |
+           change_locks(id, guest, now & ~locks, false, LockBy::admin, source);
 }
 std::uint8_t Host::change_locks(std::uint64_t id, Guest *guest, std::uint8_t tools, bool lock, LockBy by, const std::string &source) {
     const bool automatic = by != LockBy::admin;

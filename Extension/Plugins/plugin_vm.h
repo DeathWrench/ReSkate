@@ -135,7 +135,8 @@ public:
     virtual std::string claim_command(std::string_view plugin, std::string_view name) = 0;
     // The local skater, or empty without one (the menu, a load).
     virtual std::optional<SkaterState> skater() = 0;
-    virtual Teleport teleport(const Vec3& position, float heading) = 0;
+    // `plugin`: whose call it is (a throwdown match of its own may let it through, kit::allows_teleports).
+    virtual Teleport teleport(std::string_view plugin, const Vec3& position, float heading) = 0;
     // Where the line first meets the world's collision, or empty when it is clear (or not loaded).
     virtual std::optional<Vec3> raycast(const Vec3& from, const Vec3& to) = 0;
     // The score HUD now, or empty without one.

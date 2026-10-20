@@ -941,6 +941,13 @@ void dedicated_server_codec() {
     auto no_boosts = roster;
     no_boosts.guest_boosts = false;
     check(decode(encode(no_boosts)) && !decode(encode(no_boosts))->guest_boosts, "Guest boosts permission lost");
+    auto no_ollies = voting;
+    no_ollies.guest_ollies = false;
+    const auto ollies_decoded = decode(encode(no_ollies));
+    check(ollies_decoded && !ollies_decoded->guest_ollies && ollies_decoded->enforce_tuning &&
+              ollies_decoded->server_votes == (server_vote_map | server_vote_time),
+          "Guest ollies permission lost, or it spilled into the other roster bits");
+    check(decoded && decoded->guest_ollies, "Guest ollies should be allowed by default");
     check(decoded && decoded->enforce_tuning, "Physics tuning enforcement lost");
     auto own_tuning = voting;
     own_tuning.enforce_tuning = false;

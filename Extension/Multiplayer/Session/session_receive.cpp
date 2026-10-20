@@ -286,7 +286,7 @@ void apply_roster(Session &s, const Packet &p, std::uint64_t now) {
     apply_object_limit(s, p.object_limit); // after server_admin, which exempts an admin
     apply_object_scaling(s, !dedicated_host(s) || p.object_scaling);
     s.sync_effects = !dedicated_host(s) || p.sync_effects;
-    apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts);
+    apply_guest_tools(s, p.guest_noclip, p.guest_no_bail, p.guest_boosts, p.guest_ollies);
     s.enforce_tuning = p.enforce_tuning;
     s.server_votes = dedicated_host(s) ? p.server_votes : 0;
     s.server_polls = dedicated_host(s) ? p.server_polls : 0;
@@ -970,7 +970,7 @@ void networking(Session &s, const NativeFrame &local, std::uint64_t now) {
                 apply_object_limit(s, s.object_limit);
                 apply_object_placement(s, s.object_placement);
                 apply_object_scaling(s, s.object_scaling);
-                apply_guest_tools(s, s.guest_noclip, s.guest_no_bail, s.guest_boosts);
+                apply_guest_tools(s, s.guest_noclip, s.guest_no_bail, s.guest_boosts, s.guest_ollies);
                 publish(s);
                 publish_chat(s);
             }

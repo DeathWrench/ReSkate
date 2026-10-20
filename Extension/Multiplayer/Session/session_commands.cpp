@@ -51,12 +51,13 @@ void apply_nametags(const Session &s) {
     set_native_nametags_enabled(false);
     set_native_compass_enabled(!s.nametags);
 }
-void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts) {
+void apply_guest_tools(Session &s, bool noclip, bool no_bail, bool boosts, bool ollies) {
     s.guest_noclip = noclip;
     s.guest_no_bail = no_bail;
     s.guest_boosts = boosts;
+    s.guest_ollies = ollies;
     const bool exempt = s.mode == Mode::host || (s.role_permissions & role_movement);
-    set_session_tools_allowed(noclip || exempt, no_bail || exempt, boosts || exempt);
+    set_session_tools_allowed(noclip || exempt, no_bail || exempt, boosts || exempt, ollies || exempt);
 }
 } // namespace session_detail
 namespace {

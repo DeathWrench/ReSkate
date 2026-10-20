@@ -16,27 +16,6 @@
 // under the game's own rules (a session's host, the park editor's limits).
 namespace dingosdk::plugins {
 namespace {
-Plugin& plugin_of(lua_State* L) {
-    auto& plugin = *static_cast<Plugin*>(lua_callbacks(L)->userdata);
-    if (plugin.halted()) luaL_error(L, "the plugin was stopped");
-    return plugin;
-}
-void need(lua_State* L, Plugin& plugin, const char* permission, const char* what) {
-    if (!plugin.has(permission)) luaL_error(L, "%s needs the \"%s\" permission in reskate-plugin.json", what, permission);
-}
-std::string checked_text(lua_State* L, int index, std::size_t most, const char* what) {
-    std::size_t length = 0;
-    const char* text = luaL_checklstring(L, index, &length);
-    if (length > most) luaL_error(L, "%s is longer than %d characters", what, static_cast<int>(most));
-    return std::string(text, length);
-}
-Vec3 position_of(lua_State* L, int index, const char* what) {
-    const float* v = luaL_checkvector(L, index);
-    for (int i = 0; i < 3; ++i)
-        if (!std::isfinite(v[i]) || std::fabs(v[i]) > 1e5f) luaL_error(L, "%s must be a finite position within 100 km", what);
-    return {v[0], v[1], v[2]};
-}
-void push_position(lua_State* L, const Vec3& v) { lua_pushvector(L, v[0], v[1], v[2]); }
 // ok, or false and why: what most of these return.
 int result(lua_State* L, const std::string& why) {
     lua_pushboolean(L, why.empty());
@@ -279,7 +258,7 @@ struct WorldApi {
         if (!plugin.trainer_point_) return result(L, "no save point is set");
         if (!within(plugin.services_.now_ms(), plugin.teleport_second_, plugin.teleports_, plugin.limits_.teleports_per_second))
             return result(L, "asked more than twice in a second");
-        switch (plugin.services_.teleport(plugin.trainer_point_->first, plugin.trainer_point_->second)) {
+        switch (plugin.services_.teleport(plugin.id(), plugin.trainer_point_->first, plugin.trainer_point_->second)) {
         case Teleport::sent: return result(L, {});
         case Teleport::forbidden: return result(L, "the host has turned teleporting off");
         default: return result(L, "teleporting is unavailable now");
@@ -1141,6 +1120,73 @@ struct WorldApi {
         const auto player = player_of(L, 1);
         return result(L, game(plugin).move_player(player, position_of(L, 2, "where the player goes")));
     }
+    static int server_ban(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.ban");
+        return result(L, game(plugin).ban(player_of(L, 1)));
+    }
+    static int server_unban(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.unban");
+        return result(L, game(plugin).unban(player_of(L, 1)));
+    }
+    // A player's permissions: player.permissions is what the server holds for them now, read-only;
+    // permissions:clone() is a copy to change; player:apply_permissions(copy) makes it theirs.
+    static constexpr std::array<std::pair<const char*, bool Game::Permissions::*>, 6> permission_fields{{
+        {"noclip", &Game::Permissions::noclip}, {"nobail", &Game::Permissions::nobail}, {"boosts", &Game::Permissions::boosts},
+        {"tuning", &Game::Permissions::tuning}, {"objects", &Game::Permissions::objects}, {"ollies", &Game::Permissions::ollies}}};
+    static void push_permissions(lua_State* L, const Game::Permissions& permissions, bool readonly) {
+        lua_createtable(L, 0, static_cast<int>(permission_fields.size()));
+        for (const auto& [name, field] : permission_fields) {
+            lua_pushboolean(L, permissions.*field);
+            lua_setfield(L, -2, name);
+        }
+        lua_getfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
+        lua_setmetatable(L, -2);
+        if (readonly) lua_setreadonly(L, -1, true);
+    }
+    // Every permission, each true or false, and nothing else: a clone, so none is left out by mistake.
+    static Game::Permissions permissions_of(lua_State* L, int index) {
+        luaL_checktype(L, index, LUA_TTABLE);
+        Game::Permissions permissions;
+        for (const auto& [name, field] : permission_fields) {
+            lua_getfield(L, index, name);
+            if (!lua_isboolean(L, -1)) luaL_error(L, "permission \"%s\" must be true or false (clone the player's permissions to change them)", name);
+            permissions.*field = lua_toboolean(L, -1);
+            lua_pop(L, 1);
+        }
+        lua_pushnil(L);
+        while (lua_next(L, index)) {
+            const char* key = lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : nullptr;
+            const bool known = key && std::any_of(permission_fields.begin(), permission_fields.end(),
+                                                  [&](const auto& f) { return std::string_view(f.first) == key; });
+            if (!known) luaL_error(L, "there is no permission \"%s\"", key ? key : "(not a name)");
+            lua_pop(L, 1);
+        }
+        return permissions;
+    }
+    static int permissions_clone(lua_State* L) {
+        push_permissions(L, permissions_of(L, 1), false);
+        return 1;
+    }
+    static int player_apply_permissions(lua_State* L) {
+        auto& plugin = authority(L, "player:apply_permissions");
+        const auto player = player_of(L, 1);
+        return result(L, game(plugin).apply_permissions(plugin.id(), player, permissions_of(L, 2)));
+    }
+    // A player table's own names: permissions (read when asked, so always the server's now) and
+    // apply_permissions. Anything else a player table does not have is nil.
+    static int player_index(lua_State* L) {
+        const char* key = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
+        if (std::string_view(key) == "apply_permissions") {
+            lua_pushcfunction(L, player_apply_permissions, "apply_permissions");
+            return 1;
+        }
+        if (std::string_view(key) != "permissions") return 0;
+        auto& plugin = authority(L, "player.permissions");
+        const auto permissions = game(plugin).permissions(player_of(L, 1));
+        if (!permissions) return 0;
+        push_permissions(L, *permissions, true);
+        return 1;
+    }
     // ---- throwdowns -------------------------------------------------------------------------------------
     // host(mode, players, {max}): a drop where the skater stands for these players ("jam",
     // "spot_battle" or "skate"); it starts once they all join. One every 5 s.
@@ -1561,59 +1607,56 @@ struct WorldApi {
 
 void install_world_api(Plugin& plugin, lua_State* L) { WorldApi::install(plugin, L); }
 
-// Adds the functions to the table at `field` of the reskate table on top of the stack, making it
-// when there is none yet.
-static void into(lua_State* L, const char* field, std::initializer_list<std::pair<const char*, lua_CFunction>> functions) {
-    lua_getfield(L, -1, field);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_createtable(L, 0, static_cast<int>(functions.size()));
-        lua_pushvalue(L, -1);
-        lua_setfield(L, -3, field);
-    }
-    // A table made read-only earlier in the install is opened for this, and closed again.
-    lua_setreadonly(L, -1, false);
-    for (const auto& [name, function] : functions) {
-        lua_pushcfunction(L, function, name);
-        lua_setfield(L, -2, name);
-    }
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-}
-
 void WorldApi::install(Plugin& plugin, lua_State* L) {
     (void)plugin;
-    into(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
-                        {"grind_exit", grind_exit}});
-    into(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
-                       {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}});
-    into(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
-    into(L, "trainer", {{"set_point", set_point}, {"back", back}});
-    into(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});
-    into(L, "time", {{"slow", slow}, {"speed", speed}});
-    into(L, "objects", {{"catalog", catalog}, {"list", objects}, {"place", place}, {"move", move}, {"remove", remove}});
-    into(L, "entities", {{"set", entities_set}, {"remove", entities_remove}, {"clear", entities_clear}, {"status", entities_status},
-                         {"ready", entities_ready}});
-    into(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
-    into(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
-    into(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
-    into(L, "session", {{"skaters", skaters}, {"tag", tag}});
-    into(L, "voice", {{"set_volume", voice_volume}});
-    into(L, "chat", {{"send", chat_send}, {"notice", chat_local}});
-    into(L, "animation", {{"play", animation_play}, {"stop", animation_stop}, {"playing", animation_playing}, {"replace", animation_replace},
-                          {"record", animation_record}, {"recorded", animation_recorded}, {"forget", animation_forget}, {"trick", animation_trick}});
-    into(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
-    into(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
-    into(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move}});
-    into(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
-                           {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}});
-    into(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
-                      {"game", game_current}, {"game_next", game_next}});
-    into(L, "progression", {{"get", progress}});
-    into(L, "settings", {{"game", setting}, {"names", setting_names}});
-    into(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
-                      {"hide", input_hide}});
-    into(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
+    // The metatables of player tables (push_player) and of permissions; their own stay hidden.
+    lua_createtable(L, 0, 2);
+    lua_pushcfunction(L, player_index, "player");
+    lua_setfield(L, -2, "__index");
+    lua_pushstring(L, "locked");
+    lua_setfield(L, -2, "__metatable");
+    lua_setfield(L, LUA_REGISTRYINDEX, "reskate.player");
+    lua_createtable(L, 0, 2);
+    lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, permissions_clone, "clone");
+    lua_setfield(L, -2, "clone");
+    lua_setreadonly(L, -1, true);
+    lua_setfield(L, -2, "__index");
+    lua_pushstring(L, "locked");
+    lua_setfield(L, -2, "__metatable");
+    lua_setfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
+    add_functions(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
+                                {"grind_exit", grind_exit}});
+    add_functions(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
+                               {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}});
+    add_functions(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
+    add_functions(L, "trainer", {{"set_point", set_point}, {"back", back}});
+    add_functions(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});
+    add_functions(L, "time", {{"slow", slow}, {"speed", speed}});
+    add_functions(L, "objects", {{"catalog", catalog}, {"list", objects}, {"place", place}, {"move", move}, {"remove", remove}});
+    add_functions(L, "entities", {{"set", entities_set}, {"remove", entities_remove}, {"clear", entities_clear}, {"status", entities_status},
+                                  {"ready", entities_ready}});
+    add_functions(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
+    add_functions(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
+    add_functions(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
+    add_functions(L, "session", {{"skaters", skaters}, {"tag", tag}});
+    add_functions(L, "voice", {{"set_volume", voice_volume}});
+    add_functions(L, "chat", {{"send", chat_send}, {"notice", chat_local}});
+    add_functions(L, "animation", {{"play", animation_play}, {"stop", animation_stop}, {"playing", animation_playing}, {"replace", animation_replace},
+                                   {"record", animation_record}, {"recorded", animation_recorded}, {"forget", animation_forget}, {"trick", animation_trick}});
+    add_functions(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
+    add_functions(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
+    add_functions(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},
+                                {"ban", server_ban}, {"unban", server_unban}});
+    add_functions(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
+                                    {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}});
+    add_functions(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},
+                               {"game", game_current}, {"game_next", game_next}});
+    add_functions(L, "progression", {{"get", progress}});
+    add_functions(L, "settings", {{"game", setting}, {"names", setting_names}});
+    add_functions(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
+                               {"hide", input_hide}});
+    add_functions(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
 }
 
 std::uint32_t combo_of(std::string_view name) {

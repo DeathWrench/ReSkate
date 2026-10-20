@@ -1,6 +1,7 @@
 #include "trainer_jump.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Game/Multiplayer/session_tools.h"
 #include "Extension/Skater/no_bail.h"
 #include <windows.h>
 #include <array>
@@ -15,8 +16,9 @@ namespace {
 // the vector at parameters + 0x80. Measured with a scripted controller:
 //  - a no comply calls it from 0x482f646 on entering the pop (state 200) after a crouch
 //    (state 103) of about 0.20 s; an ollie crouches for 0.08 s and launches elsewhere;
-//  - a boneless calls it from 0x47691f8 while the foot is planted (state 602).
-constexpr std::uintptr_t set_trajectory = 0x4752aa0, no_comply_call = 0x482f646, boneless_call = 0x47691f8;
+//  - a boneless calls it from 0x47691f8 while the foot is planted (state 602);
+//  - a flat-ground ollie calls it from 0x4824f7f (Engine/Game/Build/20260929/grind_exit.h).
+constexpr std::uintptr_t set_trajectory = 0x4752aa0, no_comply_call = 0x482f646, boneless_call = 0x47691f8, ollie_call = 0x4824f7f;
 constexpr std::array<unsigned char, 32> set_trajectory_prefix{0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x80, 0xb9, 0x88, 0xbb, 0x00,
                                                               0x00, 0x00, 0x48, 0x8b, 0xd9, 0x0f, 0x85, 0xf6, 0x00, 0x00, 0x00,
                                                               0xc5, 0xfc, 0x28, 0x05, 0x62, 0x7d, 0xe8, 0x01, 0xc5, 0xfc};
@@ -53,6 +55,9 @@ void set_trajectory_hook(std::uintptr_t trajectory, float *parameters) {
             parameters[velocity_y + 1] = velocity[2];
         }
     }
+    // A dedicated server's ollie lock (session_tools.h): the ollie launches with no upward speed,
+    // so the skater stays on the ground.
+    if (parameters && caller == ollie_call + 5 && !session_ollies_allowed() && parameters[velocity_y] > 0) parameters[velocity_y] = 0;
     if (parameters && (caller == no_comply_call + 5 || caller == boneless_call + 5)) {
         const auto watch = watched_physics_state(); // the local skater's
         Trick trick{};

@@ -70,13 +70,13 @@ void bone_cam_bail() noexcept;
 // and strikes are followed then even with the Bone Cam off. An owner's ask goes with release.
 void bone_cam_game(std::string_view owner, bool on);
 void bone_cam_release(std::string_view owner);
-// Whether the skater's body stopped dead (lost 7 m/s within a third of a second) since the last
-// call: the ground, a pole, a wall. Only followed while the Bone Cam would show or a game asks.
-bool bone_cam_slam() noexcept;
-// Whether the skater's head, chest, shoulders or hips struck an object at speed (a pole, a tree, a
-// rail: nearly stopped while the body was still flying) since the last call. Followed as
-// bone_cam_slam is.
-bool bone_cam_struck() noexcept;
+// How many times the skater's body has stopped dead (lost 7 m/s within a third of a second): the
+// ground, a pole, a wall. A count, so each reader keeps its own place (a reader that cleared a flag
+// hid the slam from every other). Only followed while the Bone Cam would show or a game asks.
+std::uint64_t bone_cam_slams() noexcept;
+// How many times the skater's head, chest, shoulders or hips struck an object at speed (a pole, a
+// tree, a rail: nearly stopped while the body was still flying). Followed as bone_cam_slams is.
+std::uint64_t bone_cam_strikes() noexcept;
 // The X-ray's snapshot, with the latest camera (any thread).
 BoneCam bone_cam();
 // Fresh native hips position while the normal on-board telemetry is absent.
