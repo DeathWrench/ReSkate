@@ -53,7 +53,7 @@ plugin_ui::Style style_of(lua_State* L, int index) {
     const auto field = [&](const char* name) { return lua_getfield(L, index, name) != LUA_TNIL; };
     if (field("colour") || (lua_pop(L, 1), field("color"))) style.colour = colour_of(L, -1);
     lua_pop(L, 1);
-    if (field("size")) style.size = std::clamp(finite(L, -1, "size"), 4.0f, 200.0f);
+    if (field("size")) style.size = std::clamp(finite(L, -1, "size"), 4.0f, 400.0f);
     lua_pop(L, 1);
     if (field("thickness")) style.thickness = std::clamp(finite(L, -1, "thickness"), 0.5f, 40.0f);
     lua_pop(L, 1);
@@ -69,7 +69,8 @@ plugin_ui::Style style_of(lua_State* L, int index) {
         else if (font == "body") style.font = 1;
         else if (font == "heading") style.font = 2;
         else if (font == "title") style.font = 3;
-        else luaL_error(L, "font is \"bold\", \"body\", \"heading\" or \"title\"");
+        else if (font == "title_large") style.font = 4;
+        else luaL_error(L, "font is \"bold\", \"body\", \"heading\", \"title\" or \"title_large\"");
     }
     lua_pop(L, 1);
     // A picture's source rectangle, {u0, v0, u1, v1} from 0 to 1: one glyph of a font atlas, a tile.
@@ -83,6 +84,8 @@ plugin_ui::Style style_of(lua_State* L, int index) {
             lua_pop(L, 1);
         }
     }
+    lua_pop(L, 1);
+    if (field("wrap")) style.wrap = std::clamp(finite(L, -1, "wrap"), 0.0f, 10000.0f);
     lua_pop(L, 1);
     if (field("align")) {
         const std::string align = luaL_checkstring(L, -1);
@@ -198,6 +201,14 @@ struct UiApi {
             lua_pop(L, 1);
             if (lua_getfield(L, 5, "edge") != LUA_TNIL) shape.edge = std::clamp(finite(L, -1, "edge"), 0.0f, 400.0f);
             lua_pop(L, 1);
+            if (lua_getfield(L, 5, "frame") != LUA_TNIL) {
+                const double frame = luaL_checknumber(L, -1);
+                if (shape.text != "loading_board") luaL_error(L, "only loading_board has frames");
+                if (!(frame >= 0 && frame < plugin_ui::loading_board_frames) || frame != std::floor(frame))
+                    luaL_error(L, "the loading board's frame is a whole number from 0 to %d", plugin_ui::loading_board_frames - 1);
+                shape.frame = static_cast<int>(frame);
+            }
+            lua_pop(L, 1);
         }
         add(L, plugin, std::move(shape));
         return 0;
@@ -273,6 +284,76 @@ struct UiApi {
         const auto on = plugin.services_.world_to_screen(point(L, 2, "the world position"));
         if (on) lua_pushvector(L, (*on)[0], (*on)[1], (*on)[2]);
         else lua_pushnil(L);
+        return 1;
+    }
+    // d:rough_rect(top_left, bottom_right, style): skate.'s tile with hand-cut edges; style.seed picks
+    // its edge (the same seed, the same edge), style.scale its roughness (1 at 1080 lines).
+    static float scale_field(lua_State* L, int index) {
+        if (!lua_istable(L, index)) return 1;
+        float scale = 1;
+        if (lua_getfield(L, index, "scale") != LUA_TNIL) scale = std::clamp(finite(L, -1, "scale"), 0.1f, 10.0f);
+        lua_pop(L, 1);
+        return scale;
+    }
+    static std::uint32_t seed_field(lua_State* L, int index) {
+        if (!lua_istable(L, index)) return 1;
+        std::uint32_t seed = 1;
+        if (lua_getfield(L, index, "seed") != LUA_TNIL) {
+            const double v = luaL_checknumber(L, -1);
+            if (!(v >= 0 && v <= 4294967295.0)) luaL_error(L, "a seed is a whole number from 0");
+            seed = static_cast<std::uint32_t>(v);
+        }
+        lua_pop(L, 1);
+        return seed;
+    }
+    static int rough_rect(lua_State* L) {
+        auto& plugin = drawing(L);
+        plugin_ui::Shape shape{plugin_ui::Shape::Kind::rough_rect, {point(L, 2, "a tile's top left"), point(L, 3, "a tile's bottom right")}, scale_field(L, 4),
+                               {}, style_of(L, 4)};
+        shape.seed = seed_field(L, 4);
+        add(L, plugin, std::move(shape));
+        return 0;
+    }
+    // d:scribble(top_left, bottom_right, style): the dry-brush scribble skate. draws over a tile.
+    static int scribble(lua_State* L) {
+        auto& plugin = drawing(L);
+        plugin_ui::Shape shape{plugin_ui::Shape::Kind::scribble, {point(L, 2, "a scribble's top left"), point(L, 3, "a scribble's bottom right")},
+                               scale_field(L, 4), {}, style_of(L, 4)};
+        shape.seed = seed_field(L, 4);
+        add(L, plugin, std::move(shape));
+        return 0;
+    }
+    // d:halftone(top_left, columns, rows, style): a screen-print of dots 7 pixels apart, rows offset.
+    static int halftone(lua_State* L) {
+        auto& plugin = drawing(L);
+        const double columns = luaL_checknumber(L, 3), rows = luaL_checknumber(L, 4);
+        if (!(columns >= 1 && columns <= 64 && rows >= 1 && rows <= 64)) luaL_error(L, "a halftone is 1 to 64 dots each way");
+        plugin_ui::Shape shape{plugin_ui::Shape::Kind::halftone, {point(L, 2, "a halftone's top left")}, 0, {}, style_of(L, 5)};
+        shape.columns = static_cast<int>(columns);
+        shape.rows = static_cast<int>(rows);
+        add(L, plugin, std::move(shape));
+        return 0;
+    }
+    // d:clip(top_left, bottom_right): what is drawn after it shows only inside the box, until d:clip()
+    // (or the end of the frame).
+    static int clip(lua_State* L) {
+        auto& plugin = drawing(L);
+        if (lua_isnone(L, 2)) {
+            add(L, plugin, {plugin_ui::Shape::Kind::unclip, {}});
+            return 0;
+        }
+        add(L, plugin, {plugin_ui::Shape::Kind::clip, {point(L, 2, "a clip's top left"), point(L, 3, "a clip's bottom right")}});
+        return 0;
+    }
+    // d:measure(text, style): how wide and tall the text is drawn, in the window's pixels.
+    static int measure(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "overlay", "d:measure");
+        const auto text = checked_text(L, 2, 500, "a measured text");
+        const auto style = style_of(L, 3);
+        const float k = plugin_ui::display()[1] / 1080.0f;
+        const auto size = plugin_ui::measure(style.font, style.size * k, text, style.wrap * k);
+        lua_pushvector(L, size[0], size[1], 0);
         return 1;
     }
     // overlay: a toast, ReSkate's notices in the top left. Three in 5 s; false past them.
@@ -631,7 +712,8 @@ void UiApi::install(Plugin& plugin, lua_State* L) {
     using F = UiApi;
     push_functions(L, {{"text", F::text}, {"rect", F::rect}, {"line", F::line}, {"circle", F::circle}, {"poly", F::poly},
                        {"world_text", F::world_text}, {"world_line", F::world_line}, {"world_circle", F::world_circle},
-                       {"image", F::image}, {"world_image", F::world_image}, {"game_image", F::game_image},
+                       {"image", F::image}, {"world_image", F::world_image}, {"game_image", F::game_image}, {"rough_rect", F::rough_rect}, {"scribble", F::scribble}, {"halftone", F::halftone},
+                       {"clip", F::clip}, {"measure", F::measure},
                        {"gradient", F::gradient}, {"skeleton", F::skeleton}, {"size", F::size}, {"world_to_screen", F::world_to_screen}});
     plugin.draw_table_ = lua_ref(L, -1);
     lua_pop(L, 1);

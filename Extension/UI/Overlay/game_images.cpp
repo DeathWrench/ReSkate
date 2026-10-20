@@ -18,20 +18,22 @@ namespace ui = addr::ui_textures;
 namespace theme = dingosdk::skate_theme;
 
 // The pictures, by the names plugins give them.
-enum Picture : std::size_t { picture_count = 13 };
+enum Picture : std::size_t { loading_board = 13, picture_count = 14 };
 constexpr std::array<std::string_view, picture_count> names{
     "stopwatch", "wipeout", "wipeout_broken", "spread_eagle", "airtime", "gap_height", "flaming_wheel", "roll",
-    "thrasher", "brush_bar", "rough_tile", "scratches", "streak"};
+    "thrasher", "brush_bar", "rough_tile", "scratches", "streak", "loading_board"};
 struct Source {
     const ui::Texture* texture;
     std::uint32_t side;      // fitted into a side x side square, its aspect kept
     bool brightness{};       // white with the texture's brightness as alpha (light marks on black), else its own alpha
+    bool colours{};          // its own colours, as it is (the loading board)
 };
+// The loading board's first place stands for it; decode tries all of ui::loading_board's.
 constexpr std::array<Source, picture_count> sources{{
     {&ui::stopwatch, 64}, {&ui::wipeout, 64}, {&ui::wipeout_broken, 64}, {&ui::spread_eagle, 64},
     {&ui::airtime, 64}, {&ui::gap_height, 64}, {&ui::flaming_wheel, 64}, {&ui::roll, 64},
     {&ui::thrasher_wordmark, 512}, {&ui::brush_bar, 512}, {&ui::rough_tile, 256}, {&ui::scratches, 512, true},
-    {&ui::streak, 512},
+    {&ui::streak, 512}, {&ui::loading_board[0], 1152, false, true},
 }};
 using Images = std::array<std::optional<frostbite::Image>, picture_count>;
 
@@ -72,6 +74,18 @@ Images decode() {
         vfs::GameTextures textures(xray::game_folder());
         for (std::size_t index = 0; index < picture_count; ++index) {
             const auto& source = sources[index];
+            if (source.colours) {
+                for (const auto& place : ui::loading_board) {
+                    try {
+                        result[index] = textures.read(place.toc, place.bundle, place.name, source.side);
+                        break;
+                    } catch (const std::exception& error) {
+                        logging::log(logging::Level::debug, logging::Channel::graphics, "The loading board is not in {}: {}.", place.bundle, error.what());
+                    }
+                }
+                if (!result[index]) logging::write(logging::Level::warning, logging::Channel::graphics, "The game's loading board picture is unavailable.");
+                continue;
+            }
             try {
                 result[index] = cut(textures.read(source.texture->toc, source.texture->bundle, source.texture->name, source.side),
                                     source.texture->region, source.brightness);
@@ -110,13 +124,23 @@ bool find(Picture picture, Found& found) {
     return true;
 }
 
-// Fitted into the box with its aspect kept, centred: an icon, a logo.
-bool draw_image(ImDrawList* draw, Picture picture, ImVec2 min, ImVec2 max, ImU32 tint) {
+// Fitted into the box with its aspect kept, centred: an icon, a logo; of a flipbook (the loading
+// board), its frame `frame`.
+bool draw_image(ImDrawList* draw, Picture picture, ImVec2 min, ImVec2 max, ImU32 tint, int frame) {
     Found found;
     if (!find(picture, found)) return false;
     const auto* rect = found.rect;
-    const float scale = std::min((max.x - min.x) / rect->Width, (max.y - min.y) / rect->Height);
-    const ImVec2 size(rect->Width * scale, rect->Height * scale);
+    float width = rect->Width, height = rect->Height;
+    if (picture == loading_board) {
+        const int f = std::clamp(frame, 0, ui::loading_board_frames - 1);
+        const float du = (found.uv1.x - found.uv0.x) / ui::loading_board_columns, dv = (found.uv1.y - found.uv0.y) / ui::loading_board_rows;
+        found.uv0 = ImVec2(found.uv0.x + du * static_cast<float>(f % ui::loading_board_columns), found.uv0.y + dv * static_cast<float>(f / ui::loading_board_columns));
+        found.uv1 = ImVec2(found.uv0.x + du, found.uv0.y + dv);
+        width /= ui::loading_board_columns;
+        height /= ui::loading_board_rows;
+    }
+    const float scale = std::min((max.x - min.x) / width, (max.y - min.y) / height);
+    const ImVec2 size(width * scale, height * scale);
     const ImVec2 at(min.x + (max.x - min.x - size.x) * 0.5f, min.y + (max.y - min.y - size.y) * 0.5f);
     draw->AddImage(loaded().atlas->TexID, at, ImVec2(at.x + size.x, at.y + size.y), found.uv0, found.uv1, tint);
     return true;
@@ -221,12 +245,13 @@ void fill_game_images(ImFontAtlas& atlas) noexcept {
 }
 
 bool game_image_known(std::string_view name) noexcept { return std::find(names.begin(), names.end(), name) != names.end(); }
-bool draw_game_image(ImDrawList* draw, std::string_view name, ImVec2 min, ImVec2 max, ImU32 tint, GameImageFit fit, float edge) {
+bool draw_game_image(ImDrawList* draw, std::string_view name, ImVec2 min, ImVec2 max, ImU32 tint, GameImageFit fit, float edge, int frame) {
     const auto at = std::find(names.begin(), names.end(), name);
     if (at == names.end()) return false;
     const auto picture = static_cast<Picture>(at - names.begin());
+    if (picture == loading_board) return draw_image(draw, picture, min, max, tint, frame); // a flipbook's frame, fitted
     switch (fit) {
-    case GameImageFit::contain: return draw_image(draw, picture, min, max, tint);
+    case GameImageFit::contain: return draw_image(draw, picture, min, max, tint, 0);
     case GameImageFit::shape: return draw_shape(draw, picture, min, max, tint);
     case GameImageFit::panel: return draw_panel(draw, picture, min, max, edge, tint);
     }

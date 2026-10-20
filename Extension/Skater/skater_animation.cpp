@@ -452,6 +452,7 @@ void on_animation(std::uintptr_t component) noexcept {
                 j.rotation = normalised(multiply(j.rotation, slerp(Quat{0, 0, 0, 1}, o.rotation, w)));
                 const float s = 1.0f + (o.scale - 1.0f) * w;
                 for (auto& k : j.scale) k *= s;
+                for (std::size_t a = 0; a < 3; ++a) j.position[a] += o.offset[a] * w;
                 if (last > first) {
                     first = std::min<std::size_t>(first, o.joint);
                     last = std::max<std::size_t>(last, o.joint + 1u);

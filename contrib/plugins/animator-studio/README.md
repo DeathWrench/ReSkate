@@ -5,26 +5,53 @@ Record a trick, change the body and the board on a timeline, save it, and from t
 trick in game plays your version. Every other trick stays the game's own, and no game data is
 changed.
 
+The screen is the pull request's, drawn by the plugin: the skater in the middle on the studio's own
+camera, skate.'s Trick List menu on the left with its tabs and white card, a timeline of the body's
+joints along the bottom, the controls and KEY / SAVE in the lower right, the unsaved-changes card, the
+recording strip and the loading screen with skate.'s own kickflipping board. It works from the
+keyboard and mouse or from a controller; the prompts follow whichever was used last.
+
 ## How to use it
 
-1. Press **F8** (or **L3 + R3** on a pad), or open it from its page in the menu's PLUGINS section, or
-   type `studio`. The studio is a panel down the right of the screen; the skater is held still, and
-   the camera turns round him: hold the right mouse button and drag to turn, roll the wheel to come
-   closer.
-2. **TRICKS > Record a trick**: the studio steps out. Skate and land the trick within 10 seconds, and
-   you are back in the studio with it, cut from a little before its takeoff to a little after its
-   landing.
-3. **JOINTS**: pick a joint in the list, or click its dot on the skater. Turn it with the X, Y and Z
-   sliders (the hips and the board move as well). With **Key as you change it** on, each change keys
-   the joint at the timeline's time; **Key it here** keys it as it is. Move along the timeline with
-   its slider or a frame at a time; **Play** plays it. A key's ease (smooth, linear or step) says how
-   it goes into the next one. **Undo** and **Redo** step through the changes.
-4. **PLAYBACK**: which pop it is for (any, low, mid or high), its speed, and **Play it in game**.
-   **Copy to low, mid and high pop** saves a copy for each pop, each playing in game.
-5. **LIBRARY > Save**. With **Play it in game** on, doing the trick plays it, and keeps doing so every
-   time the game starts. **Open** brings a saved one back to change it.
+1. Press **F8** (or hold **L3 + R3** on a controller), or open it from its page in the menu's PLUGINS
+   section, or type `studio`. A loading screen, then the studio, the skater held where he stands.
+2. **TRICKS > Record a trick**: the studio steps out (a strip across the top shows it records). Skate
+   and land the trick: you are back in the studio with it, cut from a little before its takeoff to a
+   little after its landing. It records again until a trick is landed; Esc / Back goes back without
+   one.
+3. **JOINTS**: pick a joint (or **Board**) in the list or on the skater and turn it by dragging (the
+   left stick on a controller). **G** moves the hips or the board, **R** turns again; **X / Y / Z**
+   lock an axis, **L** switches between the joint's axes and the world's. The card's numbers drag
+   left and right, and a double click types one.
+4. Move along the timeline (**Left / Right**, **RT / LT**, or drag the playhead) and key with **K**
+   (**A** on a controller). **Ctrl+A** chooses every key, **Shift+click** adds one, drag one to move
+   them all, **Delete** takes them off. **KEYS** has the rest: blend into the next key (smooth, linear,
+   step), copy and paste a pose, hide or lock a joint's keys, follow a joint with the camera.
+5. **SAVE** (Ctrl+S). With **Custom tricks in game** on (PLAYBACK), doing the trick plays it, and keeps
+   doing so every time the game starts. **PLAYBACK** also has the pop it is for (any, low, mid,
+   high), *Copy to low, mid and high pop*, the speed and loop. **SAVED** opens a saved one again, and
+   names it and its trick.
 
-Console: `studio open|close|record|save <name>|ingame on|off|list|status`.
+The camera: hold the right mouse button and drag to turn round the skater, the middle button to pan,
+the wheel to come closer; 1 to 5 are set views and 0 the first; Tab hides the menu. On a controller
+the right stick orbits, and after R3 it zooms and pans.
+
+Console: `studio open|close|record|save <name>|ingame on|off|list|status|test`.
+
+## The game's own tricks
+
+The pull request made a list of the game's own trick animations with `tools/make_trick_library.py`
+(here beside this README, with `clip.py` and `fbxbin.py`). It needs ReSkate Studio's command line
+(`reskate_cli`, or `RESKATE_CLI` naming it) and Python with numpy:
+
+```
+python tools/make_trick_library.py "<the game's folder>" "<the game's folder>/Mods/.reskate_plugin_data/animator-studio/library"
+```
+
+The clips and `catalog.json` it writes there are listed in TRICKS by category: choose a trick, then
+its pop, and it opens in the studio. The pull request hid the list for a reason that still holds: in
+flips the game places the board with its physics, which those clips do not hold, so a recording is
+the better way in.
 
 ## How it works
 
@@ -33,15 +60,20 @@ It is built on general plugin APIs, so another plugin can do the same:
 - `reskate.animation.record` records the skater as the game draws it, with the trick's takeoff and
   landing marked; `reskate.animation.trim` cuts it down to the trick.
 - The keys are the plugin's own. `reskate.animation.edit` bakes them onto the recording: each key
-  turns a joint in its own frame and moves it in its parent's, eased into the next key.
-- The studio shows the baked clip on the skater, held at the timeline's time
-  (`reskate.animation.play` with `paused`, then `seek`, `pause` and `time`).
-- The panel is a docked `reskate.ui.screen`; `reskate.input.cursor` is the mouse beside it, and the
-  joints' dots come from `reskate.skater.joint`.
+  turns a joint in its own frame and moves it in its parent's, eased into the next key. The studio
+  shows the baked clip on the skater, held at the playhead (`reskate.animation.play` with `paused`,
+  then `seek`, `pause` and `time`). A change shows at once through `reskate.skater.pose` (a joint's
+  turn and offset) until the next bake has it.
+- The screen is a `reskate.ui.screen` with no panel: the plugin draws it all in its draw handler
+  (`d:rough_rect`, `d:halftone`, `d:scribble`, `d:clip`, `d:measure`, `d:game_image` for the loading
+  screen's grain, tape, tiles and `loading_board`), reading `reskate.input.cursor`, the keys and the
+  pad. The joints' dots and the drag come from `reskate.skater.joint` (with each joint's parent).
 - A saved animation is its recording as a clip file and its keys as JSON, in the plugin's data folder
   (`Mods/.reskate_plugin_data/animator-studio/anims/<name>.fas` and `.json`), saved with
-  `reskate.animation.save` and read back as `"data:anims/<name>.fas"`.
-- Playing in game is `reskate.animation.replace` on the game's trick, for its pop.
+  `reskate.animation.save` and read back as `"data:anims/<name>.fas"`. Playing in game is
+  `reskate.animation.replace` on the game's trick, for its pop.
+- `studio test` runs its own checks: the editing, the sliders' maths against the baked clip, and every
+  screen drawn once.
 
 ## Install
 
@@ -49,11 +81,11 @@ Copy this folder into the game's `Mods` folder.
 
 ## Not here from the pull request
 
-- The studio room: the PR walks the game menu to the Skaters page's lit character room and draws the
-  skater there. The plugin opens the studio where the skater is.
-- The loading screen over that walk, and the gizmo for dragging a joint round on the skater: here
-  joints turn with sliders.
-- The game's own tricks as a library to start from (`make_trick_library.py`).
+- The studio room: the PR walks the game menu to the Skaters page's lit character room (with a scripted
+  pad) and draws the skater there. That needs plugins to drive the game's menus, which they cannot;
+  the studio opens where the skater is, and its loading screen shows over the opening and closing.
+- Typing a name, a trick or a number straight into the card: here a click (or a double click on a
+  number) opens a small dialog to type it in.
 
 ## Limits
 
@@ -61,3 +93,5 @@ Copy this folder into the game's `Mods` folder.
 - Clips do not play while a throwdown or a game of S.K.A.T.E. runs; the studio shows nothing then.
 - A plugin's clips hold at most 48 MB of poses: each saved animation that plays in game holds its
   clip while the plugin runs.
+- A change shows on the skater at once for the body; the board's shows with the next bake, about three
+  times a second.

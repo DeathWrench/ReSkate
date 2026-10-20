@@ -1118,12 +1118,17 @@ struct WorldApi {
         if (!(joint >= 0 && joint <= 394) || joint != static_cast<int>(joint)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips or spine");
         return static_cast<std::uint16_t>(joint);
     }
-    static int push_joint(lua_State* L, const std::optional<Game::JointPlace>& at) {
+    static int push_joint(lua_State* L, const std::optional<Game::JointPlace>& at, std::uint16_t joint) {
         if (!at) {
             lua_pushnil(L);
             return 1;
         }
-        lua_createtable(L, 0, 3);
+        lua_createtable(L, 0, 4);
+        // Its parent in the skeleton (none for the root): for turning it about another frame.
+        if (const auto parent = anim_studio::parent(joint); parent >= 0) {
+            lua_pushinteger(L, parent);
+            lua_setfield(L, -2, "parent");
+        }
         push_position(L, at->position);
         lua_setfield(L, -2, "position");
         push_quaternion(L, at->rotation);
@@ -1163,6 +1168,13 @@ struct WorldApi {
                     o.scale = static_cast<float>(s);
                 }
                 lua_pop(L, 1);
+                lua_getfield(L, at, "offset");
+                if (!lua_isnil(L, -1)) {
+                    o.offset = position_of(L, lua_gettop(L), "a joint's offset");
+                    for (const auto v : o.offset)
+                        if (std::abs(v) > 2) luaL_error(L, "a joint's offset is at most 2 m on each axis");
+                }
+                lua_pop(L, 1);
                 if (std::any_of(offsets.begin(), offsets.end(), [&](const auto& e) { return e.joint == o.joint; }))
                     luaL_error(L, "joint %d is posed twice", static_cast<int>(o.joint));
                 if (offsets.size() >= 64) luaL_error(L, "at most 64 joints are posed at once");
@@ -1178,14 +1190,16 @@ struct WorldApi {
     static int skater_joint(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "skater.read", "reskate.skater.joint");
-        return push_joint(L, game(plugin).skater_joint(0, joint_of(L, 1)));
+        const auto joint = joint_of(L, 1);
+        return push_joint(L, game(plugin).skater_joint(0, joint), joint);
     }
     // session.joint(player, joint): the same of another player's skater, as this game draws it.
     static int session_joint(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "session.skaters", "reskate.session.joint");
         const auto player = player_of(L, 1);
-        return push_joint(L, game(plugin).skater_joint(player, joint_of(L, 2)));
+        const auto joint = joint_of(L, 2);
+        return push_joint(L, game(plugin).skater_joint(player, joint), joint);
     }
     // skater.hand(side): {position, rotation} of that hand joint in the world as last drawn, or nil.
     static int hand(lua_State* L) {
@@ -2067,6 +2081,12 @@ struct WorldApi {
                 if (side == "left") dock = 1;
                 else if (side == "right") dock = 2;
                 else luaL_error(L, "a screen docks \"left\" or \"right\"");
+            }
+            lua_pop(L, 1);
+            lua_getfield(L, 3, "panel");
+            if (!lua_isnil(L, -1) && !lua_toboolean(L, -1)) {
+                if (dock) luaL_error(L, "a screen without a panel has no dock");
+                dock = 3;
             }
             lua_pop(L, 1);
             lua_getfield(L, 3, "width");

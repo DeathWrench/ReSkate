@@ -503,6 +503,7 @@ public:
         std::uint16_t joint{};
         std::array<float, 4> rotation{0, 0, 0, 1};
         float scale{1};
+        Vec3 offset{}; // added to its position, in its parent's frame
     };
     virtual std::string skater_pose(std::string_view /*plugin*/, const std::vector<JointOffset>&, float /*weight*/) { return unavailable; }
     // Where a hand joint of the local skater is in the world, as last evaluated (after any reach).

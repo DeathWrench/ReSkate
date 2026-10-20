@@ -888,7 +888,7 @@ public:
         poser_ = plugin;
         pose_at_ = now;
         std::vector<skater_animation::PoseOffset> out;
-        for (const auto& o : offsets) out.push_back({o.joint, o.rotation, o.scale});
+        for (const auto& o : offsets) out.push_back({o.joint, o.rotation, o.scale, o.offset});
         skater_animation::pose(std::move(out), weight);
         return {};
     }

@@ -2152,10 +2152,35 @@ void animator_studio_records_and_saves() {
           "and opens on the trick:\n" + printed_lines(environment) + environment.all());
     ticks(host, environment, 2);
     check(game.called("play animator-studio 3 frames 1.0 0.00 true at 0.00 paused"), "held on the skater\n" + environment.all());
+    // Past its loading screen, the studio's screen is drawn every frame, within the plugin's time.
+    ticks(host, environment, 120);
+    std::size_t tiles = 0, texts = 0;
+    for (const auto& layer : environment.layers)
+        for (const auto& shape : layer.shapes) {
+            tiles += shape.kind == plugin_ui::Shape::Kind::rough_rect;
+            texts += shape.kind == plugin_ui::Shape::Kind::text;
+        }
+    check(tiles > 30 && texts > 60, std::format("The studio's screen is drawn: {} tiles, {} texts\n", tiles, texts) + environment.all());
+    const auto studio_ms = status_of(host, "animator-studio").tick_ms;
+    std::cout << std::format("animator-studio: {:.3f} ms a tick open (its budget is 2 ms)\n", studio_ms);
+    check(studio_ms < 2, "It stays within its time");
+    running(host, "animator-studio", environment);
+    // Its own checks: the editing, the key maths against the baked clip, and every screen drawn.
+    environment.lines.clear();
+    check(host.run_console("studio test"), "studio test runs\n" + environment.all());
+    check(environment.printed(" failed") && !environment.printed("FAIL") && environment.printed(", 0 failed"),
+          "The studio's own checks pass:\n" + printed_lines(environment) + environment.all() + "\nstate: " + status_of(host, "animator-studio").state +
+              " " + status_of(host, "animator-studio").reason);
+    ticks(host, environment, 20);
+    check(environment.printed("studio test: every screen drawn"), "every screen is drawn:\n" + printed_lines(environment) + environment.all());
+    running(host, "animator-studio", environment);
+    ticks(host, environment, 70); // its file calls (64 a second) back
     // Saved to play in game: a clip file and its keys, and the trick replaced.
     environment.lines.clear();
-    check(host.run_console("studio ingame on") && host.run_console("studio save Kick One") && environment.printed("studio: Saved Kick One"),
-          "It saves:\n" + printed_lines(environment) + environment.all());
+    check(host.run_console("studio ingame on"), "studio ingame runs\n" + environment.all());
+    check(host.run_console("studio save Kick One") && environment.printed("studio: Saved Kick One"),
+          "It saves:\n" + printed_lines(environment) + environment.all() + "\nstate: " + status_of(host, "animator-studio").state + " " +
+              status_of(host, "animator-studio").reason);
     check(game.files.contains("animator-studio/anims/Kick One.fas") && game.files.contains("animator-studio/anims/Kick One.json"),
           "a clip file and its keys in the data folder\n" + environment.all());
     check(game.called("replace animator-studio kickflip any clip"), "and plays in game\n" + environment.all());

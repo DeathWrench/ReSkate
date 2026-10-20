@@ -59,6 +59,7 @@ struct PoseOffset {
     std::uint16_t joint{};
     anim_studio::Quat rotation{0, 0, 0, 1};
     float scale{1};
+    anim_studio::Vec3 offset{}; // added to its position, in its parent's frame
 };
 void pose(std::vector<PoseOffset> offsets, float weight);
 // Where a joint (of the 395) was in the world in the last pose evaluated, after any clip and reach;

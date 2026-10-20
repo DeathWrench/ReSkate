@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -28,7 +29,8 @@ struct Style {
     int align{};                       // text: 0 left, 1 centre, 2 right of its point
     bool shadow = true;
     std::array<float, 4> uv{0, 0, 1, 1}; // pictures: the part of the picture drawn (u0, v0, u1, v1)
-    int font{};                          // text: 0 bold, 1 body, 2 heading, 3 title (the menus' fonts)
+    int font{};                          // text: 0 bold, 1 body, 2 heading, 3 title, 4 title_large (the menus' fonts)
+    float wrap{};                        // text: wrapped to this width (pixels at 1080 lines); 0 one line
 };
 // The skater's bodies by the ragdoll's order (Engine/Game/Skater/skater_body.h's names): d:skeleton's paint.
 inline constexpr std::array<std::string_view, 24> body_names{
@@ -37,9 +39,11 @@ inline constexpr std::array<std::string_view, 24> body_names{
     "Lower back", "Spine", "Left toes", "Left foot", "Left shin", "Left thigh",
     "Right toes", "Right foot", "Right shin", "Right thigh", "Pelvis"};
 // The game's own pictures a plugin draws by name (game_image; Extension/UI/Overlay/game_images.h).
-inline constexpr std::array<std::string_view, 13> game_images{
+inline constexpr std::array<std::string_view, 14> game_images{
     "stopwatch", "wipeout", "wipeout_broken", "spread_eagle", "airtime", "gap_height", "flaming_wheel", "roll",
-    "thrasher", "brush_bar", "rough_tile", "scratches", "streak"};
+    "thrasher", "brush_bar", "rough_tile", "scratches", "streak", "loading_board"};
+// The loading board is a flipbook: this many frames, at 30 a second (style.frame).
+inline constexpr int loading_board_frames = 27;
 // Screen shapes are in pixels from the top left; world shapes in world metres, projected through
 // the camera as the frame is drawn, and left out behind it.
 struct Shape {
@@ -49,8 +53,11 @@ struct Shape {
     // the top left, top right, bottom right and bottom left. skeleton: the local skater's x-ray, a
     // colour for each body in `colours` (body_names' order; 0 leaves it out), the style's alpha
     // fading the whole.
-    enum class Kind { text, rect, line, circle, poly, world_text, world_line, world_circle, image, world_image, game_image, gradient, skeleton } kind{
-        Kind::text};
+    // rough_rect: skate.'s hand-cut tile from points[0] to [1], `seed` its edge, `radius` its scale.
+    // halftone: a screen-print of `columns` x `rows` dots from points[0]. scribble: the dry-brush
+    // scribble over points[0] to [1]. clip: what follows is clipped to points[0] to [1], until unclip.
+    enum class Kind { text, rect, line, circle, poly, world_text, world_line, world_circle, image, world_image, game_image, gradient, skeleton,
+                      rough_rect, halftone, scribble, clip, unclip } kind{Kind::text};
     std::vector<Vec3> points;
     float radius{};
     std::string text;
@@ -58,6 +65,9 @@ struct Shape {
     std::vector<std::uint32_t> colours;
     int fit{};
     float edge{};
+    int frame{}; // game_image: a flipbook's frame (the loading board's, 0 to 26)
+    std::uint32_t seed{};
+    int columns{}, rows{};
 };
 struct Layer {
     std::string plugin;
@@ -82,7 +92,8 @@ struct Panel {
     std::string plugin, title;
     std::vector<Widget> widgets;
     bool screen{}; // a full-screen screen (reskate.ui.screen)
-    int dock{};    // a screen docked to a side, the game showing beside it: 1 left, 2 right; 0 full screen
+    int dock{};    // a screen docked to a side, the game showing beside it: 1 left, 2 right; 0 full screen;
+                   // 3 no panel at all (the plugin draws its own with the draw handler)
     float width{}; // a docked screen's share of the window's width
     bool page{};   // the plugin's page (reskate.menu.page); else a panel, a card on that page
 };
@@ -124,6 +135,13 @@ inline std::shared_ptr<const std::vector<Bind>> binds = std::make_shared<std::ve
 inline std::vector<Rebind> rebinds;
 inline std::atomic<std::int64_t> panels_seen_ms{};
 inline std::atomic<float> display_width{1920}, display_height{1080};
+// The menus' four fonts as the overlay has them (set_font): each printable character's advance at the
+// font's own size, for d:measure.
+struct FontMetrics {
+    float size{};
+    std::array<float, 96> advance{}; // characters 32 to 127
+};
+inline std::array<FontMetrics, 5> fonts{};
 inline std::int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -205,5 +223,53 @@ inline void set_display(float width, float height) {
 }
 inline std::array<float, 2> display() {
     return {detail::display_width.load(std::memory_order_relaxed), detail::display_height.load(std::memory_order_relaxed)};
+}
+// Render thread, when the overlay's fonts are (re)built.
+inline void set_font(int font, const detail::FontMetrics& metrics) {
+    if (font < 0 || font > 4) return;
+    std::lock_guard lock(detail::mutex);
+    detail::fonts[static_cast<std::size_t>(font)] = metrics;
+}
+// How big `text` is drawn in `font` at `size` pixels (the window's, not 1080's), wrapped to `wrap`
+// pixels when that is more than 0, as the overlay draws it. Before the fonts are known, a guess.
+inline std::array<float, 2> measure(int font, float size, std::string_view text, float wrap) {
+    detail::FontMetrics m;
+    {
+        std::lock_guard lock(detail::mutex);
+        m = detail::fonts[static_cast<std::size_t>(std::clamp(font, 0, 4))];
+    }
+    const float scale = m.size > 0 ? size / m.size : 1.0f;
+    const auto advance = [&](char c) {
+        const auto u = static_cast<unsigned char>(c);
+        if (m.size <= 0) return size * 0.55f;
+        return (u >= 32 && u < 128 ? m.advance[u - 32] : m.advance['?' - 32]) * scale;
+    };
+    float widest = 0, line = 0;
+    int lines = 1;
+    std::size_t at = 0;
+    while (at < text.size()) {
+        if (text[at] == '\n') {
+            widest = std::max(widest, line);
+            line = 0;
+            ++lines;
+            ++at;
+            continue;
+        }
+        // A word and the spaces before it: it goes on a new line when it would pass the wrap.
+        std::size_t end = at;
+        float word = 0;
+        while (end < text.size() && text[end] == ' ') word += advance(text[end++]);
+        while (end < text.size() && text[end] != ' ' && text[end] != '\n') word += advance(text[end++]);
+        if (wrap > 0 && line > 0 && line + word > wrap) {
+            widest = std::max(widest, line);
+            ++lines;
+            float trimmed = word;
+            for (std::size_t i = at; i < end && text[i] == ' '; ++i) trimmed -= advance(' ');
+            line = trimmed;
+        } else line += word;
+        at = end;
+    }
+    widest = std::max(widest, line);
+    return {widest, static_cast<float>(lines) * size};
 }
 }
