@@ -6,6 +6,7 @@
 #include "Extension/Plugins/plugin_runtime.h"
 #include "Extension/Plugins/plugin_wire.h"
 #include "Extension/Plugins/plugin_session_feed.h"
+#include "Extension/AnimationStudio/anim_core.h"
 #include "Engine/Core/Debug/trace.h"
 #include "Extension/Multiplayer/Hud/native_player_ui.h"
 #include "Extension/Multiplayer/Hud/native_indicators.h"
@@ -755,6 +756,23 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
                 peers.push_back({p.member.id, p.latest_root->position, p.latest_root->rotation,
                                  now > p.pose_arrival ? static_cast<double>(now - p.pose_arrival) / 1000.0 : 0.0});
         plugin_feed::publish_peers(std::move(peers));
+        // And the joints of theirs that plugins asked for (reskate.entities.set's attach).
+        std::map<std::pair<std::uint64_t, std::uint16_t>, plugin_feed::JointPlace> joints;
+        if (const auto wanted = plugin_feed::joints_wanted(); !wanted.empty()) {
+            std::vector<anim_studio::Joint> pose;
+            for (const auto &p : active_peers(s)) {
+                if (!p.member.id || p.render_pose.skater.empty()) continue;
+                pose.clear();
+                for (const auto &[player, joint] : wanted) {
+                    if (player != p.member.id || joint >= p.render_pose.skater.size()) continue;
+                    if (pose.empty())
+                        for (const auto &t : p.render_pose.skater) pose.push_back({t.scale, t.rotation, t.position});
+                    const auto w = anim_studio::world(pose, joint);
+                    if (anim_studio::finite(w)) joints[{player, joint}] = {w.position, w.rotation, w.scale[0]};
+                }
+            }
+        }
+        plugin_feed::publish_joints(std::move(joints));
     }
     if (labels)
         publish_custom_nametags(s.base, std::move(nametags),

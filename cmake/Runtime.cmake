@@ -141,6 +141,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/xray_skeleton.cpp
     Extension/Skater/game_speed.cpp
     Extension/Skater/grind_exit.cpp
+    Extension/Skater/trick_rewrite.cpp
+    Extension/Skater/arm_reach.cpp
     Extension/UI/hud_corner.cpp
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp

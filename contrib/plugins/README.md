@@ -33,6 +33,12 @@ test`) that `dingosdk_plugin_tests` runs too, and its own page in the ReSkate me
   pictures (`d:game_image`). `hallofmeat 0|1`.
 - **grind-exits**: LT / RT in a grind pick the side of the pop (`reskate.skater.grind_exit`,
   `reskate.input.hide`). `grindexit status`.
+- **dual-stick**: the settings of GoalTrains' Dual Stick Controls companion on its page, in the
+  companion's `session_controls.ini` in the plugin's own data folder (`reskate.files`). Made from
+  pull request 254. `dualstick status`, `dualstick preset xl`.
+- **rock-to-fakie**: TheRealEJR's Rock to Fakie: a Board Stall or Lip Stall shows as Rock to Fakie,
+  and left with B is recorded as the game's fakie_rock (`reskate.tricks.label`, `record_as`). From
+  pull request 285. `rocktofakie on`.
 
 ## Throwdown modes
 

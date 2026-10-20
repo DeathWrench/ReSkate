@@ -120,6 +120,12 @@ struct State {
     std::string status = "Waiting for the game.", last;
     bool ready{};
     std::map<std::string, Saved, std::less<>> saved;                                    // by key
+    // Plugins' values (plugin_tune), by key: whose, and what was there before.
+    struct PluginTune {
+        std::string owner;
+        double before{};
+    };
+    std::map<std::string, PluginTune, std::less<>> plugin_tunes;
     UserPresets user;                                                                   // presets
     std::vector<std::string> active;                                                    // presets applied since Stock
     std::map<std::string, MapData, std::less<>> maps;
@@ -473,11 +479,16 @@ void remember(const Entry &e) {
     if (e.touched || e.frozen) s.saved[e.key] = {e.value, e.frozen};
     else s.saved.erase(e.key);
 }
-void set_entry(Entry &e, double value) {
+// `own`: the player's change, remembered and saved, which takes the value back from a plugin.
+// Otherwise a plugin's (plugin_tune), neither.
+void set_entry(Entry &e, double value, bool own = true) {
     e.value = sane(e, value);
     e.touched = e.value != e.stock;
     apply_entry(e);
-    remember(e);
+    if (own) {
+        remember(e);
+        state().plugin_tunes.erase(e.key);
+    }
     // A linked value scales its graphs by the same ratio (the graphs are what the game reads).
     if (!e.drives.empty() && e.stock != 0) {
         const auto ratio = e.value / e.stock;
@@ -487,7 +498,7 @@ void set_entry(Entry &e, double value) {
             if (index < s.entries.size() && !s.entries[index].frozen) {
                 auto &target = s.entries[index];
                 const bool multiplier = target.kind == Kind::curve || target.kind == Kind::graph;
-                set_entry(target, multiplier ? ratio : target.stock * ratio);
+                set_entry(target, multiplier ? ratio : target.stock * ratio, own);
             }
     }
 }
@@ -508,6 +519,7 @@ Entry *find_entry(std::string_view id) {
 }
 void build_entries() {
     auto &s = state();
+    s.plugin_tunes.clear();
     s.entries.clear();
     s.index.clear();
     s.class_entries.clear();
@@ -1911,6 +1923,65 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
 }
 } // namespace
 
+namespace {
+TuningValue tuning_of(const Entry &e) {
+    const auto &s = state();
+    const auto held = s.plugin_tunes.find(e.key);
+    return {e.id, e.label, e.group, e.kind, e.value, e.stock, held == s.plugin_tunes.end() ? std::string{} : held->second.owner};
+}
+} // namespace
+
+std::optional<TuningValue> tuning_value(std::string_view id, std::string *why) {
+    if (!state().model) {
+        if (why) *why = "the game's physics tuning is not read yet";
+        return std::nullopt;
+    }
+    const auto *e = find_entry(id);
+    if (!e) {
+        if (why) *why = "no tuning value is called \"" + std::string(id) + "\"";
+        return std::nullopt;
+    }
+    return tuning_of(*e);
+}
+std::vector<TuningValue> find_tuning(std::string_view text, std::size_t most) {
+    std::vector<TuningValue> found;
+    const auto pattern = lower(text);
+    for (const auto &e : state().entries)
+        if (found.size() < most && matches(e.key, pattern)) found.push_back(tuning_of(e));
+    return found;
+}
+std::string plugin_tune(std::string_view owner, std::string_view id, std::optional<double> value) {
+    auto &s = state();
+    if (!s.model) return "the game's physics tuning is not read yet";
+    auto *e = find_entry(id);
+    if (!e) return "no tuning value is called \"" + std::string(id) + "\"";
+    const auto held = s.plugin_tunes.find(e->key);
+    if (held != s.plugin_tunes.end() && held->second.owner != owner) return held->second.owner + " tunes " + e->id;
+    if (!value) {
+        if (held != s.plugin_tunes.end()) {
+            const double before = held->second.before;
+            s.plugin_tunes.erase(held);
+            set_entry(*e, before, false);
+            changed(false);
+        }
+        return {};
+    }
+    std::string why;
+    if (!editable(&why)) return why;
+    if (is_locked(*e)) return "the player has locked " + e->id + " in the trainer";
+    if (!std::isfinite(*value)) return "a tuning value is a finite number";
+    if (held == s.plugin_tunes.end()) s.plugin_tunes[e->key] = {std::string(owner), e->value};
+    set_entry(*e, *value, false);
+    changed(false);
+    return {};
+}
+void release_plugin_tunes(std::string_view owner) {
+    auto &s = state();
+    std::vector<std::string> mine;
+    for (const auto &[key, tune] : s.plugin_tunes)
+        if (tune.owner == owner) mine.push_back(key);
+    for (const auto &key : mine) (void)plugin_tune(owner, key, std::nullopt);
+}
 std::string command(std::string_view verb, const std::vector<std::string> &arguments) {
     auto result = run(verb, arguments);
     // The menu shows the last answer, except for the ones a dragged slider sends every frame.

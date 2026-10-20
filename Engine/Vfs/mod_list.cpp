@@ -318,6 +318,33 @@ std::vector<std::pair<std::string, bool>> read_order(const fs::path& path) {
 
 } // namespace
 
+std::vector<std::string> keep_plugin_data(const std::filesystem::path& mods_root) noexcept {
+    std::vector<std::string> moved;
+    try {
+        std::error_code error;
+        const auto old = mods_root / generated_folder / "data";
+        if (!fs::is_directory(old, error)) return moved;
+        const auto kept = mods_root / plugin_data_folder;
+        std::vector<fs::path> plugins; // listed first: the folder changes as they move
+        for (fs::directory_iterator it(old, error), end; !error && it != end; it.increment(error))
+            if (it->is_directory(error)) plugins.push_back(it->path());
+        for (const auto& from : plugins) {
+            const auto target = kept / from.filename();
+            std::error_code step;
+            fs::create_directories(kept, step);
+            if (!fs::exists(target, step)) fs::rename(from, target, step);
+            if (step || fs::exists(from, step)) {
+                // Another volume, a file in use, or the plugin has a folder there already: copy what
+                // it lacks, leaving its own files as they are.
+                step.clear();
+                fs::copy(from, target, fs::copy_options::recursive | fs::copy_options::skip_existing, step);
+            }
+            moved.push_back(path_utf8(from.filename()) + (step ? " (partly: " + step.message() + ")" : std::string{}));
+        }
+    } catch (...) {}
+    return moved;
+}
+
 std::string mod_fingerprint(const std::filesystem::path& directory) {
     std::vector<std::string> files;
     std::error_code error;

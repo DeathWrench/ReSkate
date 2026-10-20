@@ -15,13 +15,13 @@ namespace {
 // throwdown kit (modes, documents, the native flag); "variants" choosing which of its own mod's
 // variants is in the game (reskate.package.choose). A manifest's "resident" list and "variants" are
 // the merge's (Engine/Vfs/mod_list.h ResidentAssets, Variants), not the plugin host's.
-constexpr std::array<std::string_view, 45> permissions{
+constexpr std::array<std::string_view, 46> permissions{
     "console", "storage", "overlay", "menu", "ui.screen", "input", "hud", "events.tricks", "events.skater",
     "skater.read", "skater.teleport", "skater.control", "skater.animation", "trainer", "camera",
     "world.raycast", "world.objects", "world.entities", "world.environment", "world.ai", "travel", "session.read",
     "session.skaters", "session.nametags", "net.session", "net.http", "voice.control", "chat.read",
     "chat.send", "chat.local", "server", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read",
-    "events.physics", "game.speed", "files", "variants"};
+    "events.physics", "game.speed", "files", "variants", "settings.write"};
 }
 
 bool known_permission(std::string_view name) noexcept {
@@ -108,6 +108,21 @@ Manifest parse_manifest(std::string_view text) {
         }
         if (!result.domains.empty() && !result.permissions.contains("net.http"))
             throw std::runtime_error("\"domains\" is for web requests: add the \"net.http\" permission too");
+    }
+    if (json.contains("content")) {
+        const auto& list = json.at("content");
+        if (!list.is_array() || list.size() > 8) throw std::runtime_error("\"content\" must be a list of at most 8 folder names");
+        for (const auto& item : list) {
+            if (!item.is_string()) throw std::runtime_error("\"content\" must be a list of folder names");
+            std::string name = item.string();
+            for (auto& c : name) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+            const bool valid = !name.empty() && name.size() <= 32 &&
+                               std::all_of(name.begin(), name.end(), [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'; });
+            if (!valid) throw std::runtime_error("\"" + item.string() + "\" is not a folder name for \"content\" (1 to 32 letters, digits, _ and -)");
+            if (std::find(result.content.begin(), result.content.end(), name) == result.content.end()) result.content.push_back(name);
+        }
+        if (!result.content.empty() && !result.permissions.contains("mods.read"))
+            throw std::runtime_error("\"content\" reads other mods' folders: add the \"mods.read\" permission too");
     }
     return result;
 }

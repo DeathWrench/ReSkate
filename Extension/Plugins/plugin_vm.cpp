@@ -663,6 +663,8 @@ std::optional<plugin_ui::Panel> Plugin::build_screen(const std::vector<plugin_ui
     if (found == screens_.end()) return std::nullopt;
     const auto entry = *found;
     plugin_ui::Panel panel{id_, entry.title, {}, true};
+    panel.dock = entry.dock;
+    panel.width = entry.width;
     pending_ = actions;
     building_ = &panel;
     lua_getref(L_, entry.function);

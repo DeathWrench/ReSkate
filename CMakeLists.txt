@@ -275,7 +275,7 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS AND WIN32)
         Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Net/delta_codec.cpp
         Extension/Multiplayer/Session/password.cpp Extension/Multiplayer/Session/party_book.cpp
         Extension/Multiplayer/Steam/steam_lobbies.cpp Extension/Multiplayer/Steam/steam_server_browser.cpp
-        Extension/Multiplayer/word_lists.cpp)
+        Extension/Multiplayer/word_lists.cpp Extension/AnimationStudio/anim_core.cpp)
     target_link_libraries(dingosdk_multiplayer_mesh_tests PRIVATE dingosdk_logging dingosdk_launcher_support dingosdk_lz4 dingosdk_zstd bcrypt
         dingosdk_word_filter dingosdk_json)
     add_test(NAME multiplayer_mesh COMMAND dingosdk_multiplayer_mesh_tests)
@@ -370,6 +370,12 @@ if(DINGOSDK_BUILD_ANIMATION_STUDIO_TESTS)
     target_include_directories(dingosdk_animation_studio_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_animation_studio_tests PRIVATE dingosdk_json)
     add_test(NAME animation_studio COMMAND dingosdk_animation_studio_tests)
+    # An arm reaching (reskate.skater.reach) on a made-up pose.
+    add_executable(dingosdk_arm_reach_tests Extension/Skater/Test/arm_reach_tests.cpp Extension/Skater/arm_reach.cpp
+        Extension/AnimationStudio/anim_core.cpp)
+    target_include_directories(dingosdk_arm_reach_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_arm_reach_tests PRIVATE dingosdk_json)
+    add_test(NAME arm_reach COMMAND dingosdk_arm_reach_tests)
 endif()
 option(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS "Build replay keyframe smoothing regression tests" OFF)
 if(DINGOSDK_BUILD_REPLAY_KEYFRAMES_TESTS)

@@ -4,9 +4,11 @@
 #include "Extension/UI/Overlay/game_images.h"
 #include "Extension/UI/Overlay/overlay_internal.h"
 #include "Extension/UI/Overlay/xray_overlay.h"
+#include "Extension/UI/Overlay/overlay.h"
 #include <algorithm>
 #include <imgui_internal.h>
 #include <memory>
+#include <mutex>
 
 namespace dingosdk::overlay {
 namespace {
@@ -36,6 +38,42 @@ void circle(ImDrawList* draw, ImVec2 centre, float radius, const plugin_ui::Styl
     if (style.fill) draw->AddCircleFilled(centre, radius, style.colour);
     else draw->AddCircle(centre, radius, style.colour, 0, style.thickness * k);
 }
+}
+
+// The mouse while a plugin's screen is open, for reskate.input.cursor (render thread writes it).
+struct CursorState {
+    std::mutex mutex;
+    PluginCursor now;
+    bool open{};
+};
+static CursorState& cursor_state() {
+    static auto* value = new CursorState;
+    return *value;
+}
+bool read_plugin_cursor(PluginCursor& out) noexcept {
+    auto& c = cursor_state();
+    std::lock_guard lock(c.mutex);
+    if (!c.open) return false;
+    out = c.now;
+    c.now.wheel = 0;
+    return true;
+}
+static void note_cursor(bool open, bool over_screen) {
+    auto& c = cursor_state();
+    std::lock_guard lock(c.mutex);
+    c.open = open;
+    if (!open) {
+        c.now = {};
+        return;
+    }
+    const auto& io = ImGui::GetIO();
+    c.now.x = io.MousePos.x;
+    c.now.y = io.MousePos.y;
+    c.now.left = io.MouseDown[0];
+    c.now.right = io.MouseDown[1];
+    c.now.middle = io.MouseDown[2];
+    c.now.wheel += io.MouseWheel;
+    c.now.over_screen = over_screen;
 }
 
 // The screen Esc closed, until its plugin's next build no longer has it open.
@@ -71,16 +109,27 @@ bool plugins_pending() {
 
 void draw_plugin_screen() {
     const auto* screen = open_screen();
-    if (!screen) return;
+    if (!screen) {
+        note_cursor(false, false);
+        return;
+    }
     const auto display = ImGui::GetIO().DisplaySize;
     const float k = std::max(1.0f, display.y / 1080.0f);
     auto& s = detail::state();
-    ImGui::SetNextWindowPos(ImVec2(0, 0));
-    ImGui::SetNextWindowSize(display);
-    ImGui::SetNextWindowBgAlpha(0.94f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(64 * k, 48 * k));
+    // Docked: a panel down one side, the game showing beside it.
+    const bool docked = screen->dock != 0;
+    const float panel = docked ? std::round(display.x * std::clamp(screen->width, 0.2f, 0.6f)) : display.x;
+    ImGui::SetNextWindowPos(ImVec2(screen->dock == 2 ? display.x - panel : 0.0f, 0));
+    ImGui::SetNextWindowSize(ImVec2(panel, display.y));
+    ImGui::SetNextWindowBgAlpha(docked ? 0.88f : 0.94f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, docked ? ImVec2(24 * k, 24 * k) : ImVec2(64 * k, 48 * k));
     const auto flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings;
+    const auto& io = ImGui::GetIO();
+    const float left = screen->dock == 2 ? display.x - panel : 0.0f;
+    note_cursor(true, io.MousePos.x >= left && io.MousePos.x < left + panel);
     if (ImGui::Begin("##plugin-screen", nullptr, flags)) {
+        const float wide = docked ? ImGui::GetContentRegionAvail().x * 0.6f : 480 * k;
+        const float button = docked ? ImGui::GetContentRegionAvail().x : 320 * k;
         ImGui::SetWindowFontScale(1.25f * k);
         if (s.menu.heading) ImGui::PushFont(s.menu.heading);
         ImGui::TextUnformatted(screen->title.c_str());
@@ -126,9 +175,9 @@ void draw_plugin_screen() {
                 }
                 break;
             case Kind::bar:
-                ImGui::ProgressBar((w.value - w.minimum) / (w.maximum - w.minimum), ImVec2(480 * k, 0), w.text.c_str());
+                ImGui::ProgressBar((w.value - w.minimum) / (w.maximum - w.minimum), ImVec2(wide, 0), w.text.c_str());
                 break;
-            case Kind::button: acted = ImGui::Button(w.text.c_str(), ImVec2(320 * k, 0)); break;
+            case Kind::button: acted = ImGui::Button(w.text.c_str(), ImVec2(button, 0)); break;
             case Kind::toggle: {
                 bool on = w.on;
                 if (ImGui::Checkbox(w.text.c_str(), &on)) {
@@ -139,7 +188,7 @@ void draw_plugin_screen() {
             }
             case Kind::slider: {
                 float value = w.value;
-                ImGui::SetNextItemWidth(480 * k);
+                ImGui::SetNextItemWidth(wide);
                 if (ImGui::SliderFloat(w.text.c_str(), &value, w.minimum, w.maximum, "%.2f", ImGuiSliderFlags_AlwaysClamp)) {
                     action.value = value;
                     acted = true;
@@ -148,7 +197,7 @@ void draw_plugin_screen() {
             }
             case Kind::dropdown: {
                 int selected = std::clamp(w.chosen - 1, 0, static_cast<int>(w.choices.size()) - 1);
-                ImGui::SetNextItemWidth(480 * k);
+                ImGui::SetNextItemWidth(wide);
                 if (ImGui::BeginCombo(w.text.c_str(), w.choices.empty() ? "" : w.choices[static_cast<std::size_t>(selected)].c_str())) {
                     for (int i = 0; i < static_cast<int>(w.choices.size()); ++i)
                         if (ImGui::Selectable(w.choices[static_cast<std::size_t>(i)].c_str(), i == selected)) {

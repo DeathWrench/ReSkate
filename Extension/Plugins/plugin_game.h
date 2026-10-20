@@ -268,7 +268,14 @@ public:
     // full transform (rows: right, up, forward axes with their scale, then the position), kept by the
     // plugin's id for it. Only this player's game shows them. Status: 0 none, 1 waiting, 2 loading,
     // 3 missing, 4 ready, 5 hidden.
-    virtual std::string entity_set(std::string_view /*plugin*/, std::uint32_t, std::string_view, const std::array<float, 16>&, bool) {
+    // With `attach`, kept on a joint of a skater (player 0: the local one) and the transform in that
+    // joint's frame, moved with it every frame.
+    struct EntityAttach {
+        std::uint64_t player{};
+        std::uint16_t joint{};
+    };
+    virtual std::string entity_set(std::string_view /*plugin*/, std::uint32_t, std::string_view, const std::array<float, 16>&, bool,
+                                   std::optional<EntityAttach> /*attach*/) {
         return unavailable;
     }
     virtual void entity_remove(std::string_view /*plugin*/, std::uint32_t) {}
@@ -326,6 +333,20 @@ public:
     virtual std::optional<std::uint32_t> pad_bits(bool /*menu*/) { return std::nullopt; }
     virtual bool key_down(int /*virtual_key*/) { return false; }
     virtual int mouse_wheel() { return 0; }
+    // The mouse since this plugin's last read (reskate.input.mouse): raw counts right and down, the
+    // wheel in notches (away from you positive). Empty while the game is not in front or a menu is open.
+    struct MouseMotion {
+        double x{}, y{}, wheel{};
+    };
+    virtual std::optional<MouseMotion> mouse_motion(std::string_view /*plugin*/) { return std::nullopt; }
+    // The mouse over the game window while a plugin's screen is open (reskate.input.cursor): where
+    // (pixels from the top left), its buttons, the wheel's notches since the last read, and whether
+    // it is over the screen's own panel.
+    struct Cursor {
+        float x{}, y{}, wheel{};
+        bool left{}, right{}, middle{}, over_screen{};
+    };
+    virtual std::optional<Cursor> cursor() { return std::nullopt; }
     // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
     // and all game input paused for half a second at a time.
     virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}
@@ -362,13 +383,39 @@ public:
     // The flick diagram of a flip trick as skate. names it (trick_gestures.h): read in the
     // background the first time; empty until then, or for a trick without one.
     virtual std::vector<std::array<float, 2>> trick_gesture(std::string_view /*trick*/) { return {}; }
-    // ---- files: the plugin's own data folder, <game>/Mods/.reskate/data/<plugin>/ ------------------
+    // What the game shows and records of the local skater's tricks (Extension/Skater/trick_rewrite.h):
+    // the ticker's label `from` shown as `to` (empty: that label is the game's again), and the next
+    // trick with one of `from`'s ids, within `within_ms`, recorded as `to`. Empty when done, else why not.
+    virtual std::string trick_label(std::string_view /*plugin*/, std::string_view /*from*/, std::string_view /*to*/) { return unavailable; }
+    // ---- content: a folder of every enabled mod, as the plugin's manifest names it ("content") -------
+    struct ContentFile {
+        std::string mod, title; // the mod's folder name and its own name
+        std::string path;       // under <mod>/<folder>/, with / between folders
+        std::uint64_t size{};
+    };
+    // The files there, mod by mod in load order; `folder` is checked against the manifest already.
+    virtual std::string content_list(std::string_view /*folder*/, std::vector<ContentFile>& /*files*/) { return unavailable; }
+    // One of them: `path` is checked already (safe_relative_path). Empty when read, else why not.
+    virtual std::string content_read(std::string_view /*mod*/, std::string_view /*folder*/, std::string_view /*path*/, std::string& /*text*/) {
+        return unavailable;
+    }
+    virtual std::string trick_record_as(std::string_view /*plugin*/, std::vector<std::uint32_t> /*from*/, std::uint32_t /*to*/, int /*within_ms*/) {
+        return unavailable;
+    }
+    // ---- files: the plugin's own data folder, <game>/Mods/.reskate_plugin_data/<plugin>/ -----------
     // Paths are relative to it and already checked (plugin_manifest.h's safe_relative_path). A listing
     // names the files and folders in `folder` (empty: the top), folders ending in "/".
     virtual std::string files_list(std::string_view /*plugin*/, std::string_view /*folder*/, std::vector<std::string>& /*names*/) { return unavailable; }
     virtual std::string files_read(std::string_view /*plugin*/, std::string_view /*path*/, std::string& /*text*/) { return unavailable; }
     virtual std::string files_write(std::string_view /*plugin*/, std::string_view /*path*/, std::string_view /*text*/) { return unavailable; }
     virtual std::string files_remove(std::string_view /*plugin*/, std::string_view /*path*/) { return unavailable; }
+    // The same, for a file up to `most` bytes (an animation clip's, say).
+    virtual std::string files_read_bytes(std::string_view plugin, std::string_view path, std::string& out, std::size_t /*most*/) {
+        return files_read(plugin, path, out);
+    }
+    virtual std::string files_write_bytes(std::string_view plugin, std::string_view path, std::string_view bytes, std::size_t /*most*/) {
+        return files_write(plugin, path, bytes);
+    }
     // ---- ui.dialog -----------------------------------------------------------------------------------
     // One dialog at a time over the game; the same id again updates it (what was typed is kept).
     virtual std::string dialog_open(std::string_view /*plugin*/, const DialogSpec&) { return unavailable; }
@@ -393,6 +440,9 @@ public:
     virtual Progress progress() { return {}; }
     virtual std::optional<std::string> setting(std::string_view) { return std::nullopt; }
     virtual std::vector<std::string> setting_names() { return {}; }
+    // A game setting held at `value` while the plugin keeps it, then put back as it was found
+    // (reskate.settings.set); no value lets go. One plugin holds a setting at a time.
+    virtual std::string set_setting(std::string_view /*plugin*/, std::string_view /*name*/, std::optional<std::string> /*value*/) { return unavailable; }
     // ---- camera ------------------------------------------------------------------------------------
     // The view from a pose (rows right, up, back and position, as follow_camera.h builds them) with
     // a vertical field of view in degrees (0 the camera's own). One plugin holds it at a time, and
@@ -427,9 +477,62 @@ public:
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.
     using ClipRef = std::shared_ptr<const anim_studio::Clip>;
-    virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/) { return unavailable; }
+    // `at`: seconds into the clip it starts from; `paused`: held there (seek and pause move it).
+    virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/, float /*at*/, bool /*paused*/) {
+        return unavailable;
+    }
     virtual void stop_clip(std::string_view /*plugin*/) {}
+    virtual void seek_clip(std::string_view /*plugin*/, float /*seconds*/) {}
+    virtual void pause_clip(std::string_view /*plugin*/, bool /*paused*/) {}
+    virtual std::optional<float> clip_time(std::string_view /*plugin*/) { return std::nullopt; }
     virtual bool clip_playing(std::string_view /*plugin*/) { return false; }
+    // An arm of the local skater reaching (Extension/Skater/arm_reach.h): its hand joint to `at` in the
+    // world, turned to `rotation` when given, `weight` of the way; held 0.3 s, set every tick. One
+    // plugin at a time; none ends that plugin's. Empty when done, else why not.
+    struct Reach {
+        bool left{};
+        Vec3 at{};
+        std::optional<std::array<float, 4>> rotation;
+        float weight{1};
+    };
+    virtual std::string skater_reach(std::string_view /*plugin*/, std::optional<Reach>) { return unavailable; }
+    // Joints of the local skater turned (in their own frame) and scaled on top of the animation, in
+    // the pose drawn and sent (Extension/Skater/skater_animation.h pose); held 0.3 s, so set every
+    // tick; empty ends it. One plugin at a time.
+    struct JointOffset {
+        std::uint16_t joint{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+        float scale{1};
+    };
+    virtual std::string skater_pose(std::string_view /*plugin*/, const std::vector<JointOffset>&, float /*weight*/) { return unavailable; }
+    // Where a hand joint of the local skater is in the world, as last evaluated (after any reach).
+    struct HandPlace {
+        Vec3 position{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+    };
+    virtual std::optional<HandPlace> skater_hand(bool /*left*/) { return std::nullopt; }
+    // Where a joint (0..394) of a skater is in the world: player 0 the local skater as its pose was
+    // last evaluated, else another player's as the session draws it. Asking keeps it read for two
+    // seconds, so the first ask comes back empty.
+    struct JointPlace {
+        Vec3 position{};
+        std::array<float, 4> rotation{0, 0, 0, 1};
+        float scale{1};
+    };
+    virtual std::optional<JointPlace> skater_joint(std::uint64_t /*player*/, std::uint16_t /*joint*/) { return std::nullopt; }
+    // The physics tuning's values, as the trainer has them (Extension/Trainer/trainer.h): read,
+    // found by words, and set over the player's own while the plugin keeps them (never saved).
+    struct Tuning {
+        std::string id, label, group, kind; // kind: number, integer, flag, multiplier
+        double value{}, stock{};
+        std::string tuner; // the plugin whose value it is, if any
+    };
+    virtual std::optional<Tuning> tuning(std::string_view /*id*/, std::string& why) {
+        why = unavailable;
+        return std::nullopt;
+    }
+    virtual std::vector<Tuning> find_tuning(std::string_view /*text*/, std::size_t /*most*/) { return {}; }
+    virtual std::string tune(std::string_view /*plugin*/, std::string_view /*id*/, std::optional<double> /*value*/) { return unavailable; }
     virtual std::string replace_trick(std::string_view /*plugin*/, std::string /*trick*/, std::string /*pop*/, ClipRef, float /*speed*/) {
         return unavailable;
     }
@@ -500,7 +603,28 @@ public:
     virtual std::vector<GrindPop> take_grind_pops(std::string_view /*plugin*/) { return {}; }
     // Pad controls kept from the game while any plugin asks: the triggers, and the left stick's
     // left/right while the skater grinds.
-    virtual std::string hide_pad(std::string_view /*plugin*/, bool /*lt*/, bool /*rt*/, bool /*left_x while grinding*/) { return unavailable; }
+    // The skater carried up to a speed (m/s, 0 off) for the next 300 ms, eased down to it with may_slow.
+    virtual std::string cruise(std::string_view /*plugin*/, float /*speed*/, bool /*may_slow*/) { return unavailable; }
+    // The board's velocity set (or `add`ed to) by the next physics step with the skater on its board,
+    // within 500 ms.
+    virtual std::string set_velocity(std::string_view /*plugin*/, const Vec3& /*velocity*/, bool /*add*/) { return unavailable; }
+    // What of the pad the game does not see (reskate.input.hide): the triggers, the left stick's
+    // sideways while grinding, the right stick and the stick clicks.
+    struct PadHidden {
+        bool left_trigger{}, right_trigger{}, left_x_grinding{}, right_stick{}, left_stick_click{}, right_stick_click{};
+    };
+    virtual std::string hide_pad(std::string_view /*plugin*/, const PadHidden&) { return unavailable; }
+    // A camcorder look over the game's picture (reskate.screen.look; Extension/UI/Overlay/screen_look.h
+    // says what each is) for the next 300 ms; empty ends it. One plugin at a time.
+    struct ScreenLook {
+        float bend{}, fov{60}, age{};
+        bool bars{}, hood{}, grade{}, soft{}, scanlines{}, grain{}, dropouts{}, head_switching{}, tracking{}, smear{}, iris{};
+        double rolling{-1};
+        std::array<std::string, 5> text;
+    };
+    virtual std::string screen_look(std::string_view /*plugin*/, std::optional<ScreenLook>) { return unavailable; }
+    // A hand slaps the lens, while this plugin has the look.
+    virtual std::string screen_slap(std::string_view /*plugin*/) { return unavailable; }
     // The skater bails as from a slam of `force` (0.5 to 3); not in a throwdown. While No Bail protects
     // the skater the wipeout is dropped, as any other is.
     virtual std::string wipeout(float /*force*/) { return unavailable; }

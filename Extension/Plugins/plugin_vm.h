@@ -320,7 +320,7 @@ private:
     double wave_second_{};
     int wave_starts_{};
     int draw_table_{}, ui_table_{};
-    struct PanelEntry { std::string title; int function{}; };
+    struct PanelEntry { std::string title; int function{}; int dock{}; float width{}; };
     std::vector<PanelEntry> panels_;
     std::optional<PanelEntry> page_;        // reskate.menu.page
     plugin_ui::Panel* building_{};          // the panel a build is filling

@@ -1,7 +1,8 @@
 -- SmokeyDawg58's race_route_library.h / race_route_library.cpp and race_route_json.h, line for line:
 -- his saved Deathrace routes, one JSON file a route in a folder a map, read back with their ids and
--- names. His folder was <game>/Mods/ReSkate/DeathraceRoutes; here it is "routes/" in the plugin's
--- own data folder (reskate.files: <game>/Mods/.reskate/data/<plugin>/routes/<map>/<name>.json).
+-- names. His folder was <game>/Mods/ReSkateRoutes/Deathrace/<map>/<name>.json; here it is "routes/"
+-- in the plugin's own data folder, laid out the same (reskate.files:
+-- <game>/Mods/.reskate_plugin_data/<plugin>/routes/<map>/<name>.json), so his saves copy straight in.
 -- A route is {id, name, map, settings} (settings as td/rules.lua's Settings, positions vectors).
 local R = require("td/rules")
 local RR = require("td/h/race_route")

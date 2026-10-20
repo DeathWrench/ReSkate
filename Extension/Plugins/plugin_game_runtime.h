@@ -16,6 +16,9 @@ bool plugin_freeze_active() noexcept;
 bool plugin_input_capture() noexcept;
 // Each client tick: the local skater for plugins' clips (reskate.animation).
 void tick_plugin_animation(std::uintptr_t image_base, std::uintptr_t client) noexcept;
+// Each client tick: game settings plugins hold (reskate.settings.set) that change how the game plays
+// go back as a multiplayer session starts.
+void tick_plugin_settings() noexcept;
 // Each client tick: plugins' sounds (reskate.audio); `ready` while a level plays.
 void tick_plugin_sounds(std::uintptr_t image_base, std::uintptr_t client, bool ready) noexcept;
 }

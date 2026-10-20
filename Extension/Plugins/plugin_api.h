@@ -52,6 +52,9 @@ Plugin& plugin_of(lua_State* L);
 void need(lua_State* L, Plugin& plugin, const char* permission, const char* what);
 // A string argument of at most `most` bytes.
 std::string checked_text(lua_State* L, int index, std::size_t most, const char* what);
+// A path in the plugin's data folder (reskate.files): relative, inside it, no name Windows keeps
+// for a device. `folder`: nil or "" is the folder itself, and a "/" at the end is fine.
+std::string data_path(lua_State* L, int index, bool folder);
 // A vector argument, finite and within 100 km of the map's centre.
 Vec3 position_of(lua_State* L, int index, const char* what);
 void push_position(lua_State* L, const Vec3& v);

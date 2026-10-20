@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -15,8 +16,22 @@ using Matrix = std::array<float, 16>;
 
 enum class Status { none, waiting, loading, missing, ready, hidden };
 
+// An object kept on a joint of a skater (of the 395 the animation uses): `player` 0 for the local
+// skater, else another player in the session. Its matrix is then in the joint's frame, and it moves
+// with the joint every frame; while the joint is not known it waits, and after a second without it a
+// shown object is taken away until the joint comes back.
+struct Attach {
+    std::uint64_t player{};
+    std::uint16_t joint{};
+};
+// Where a skater's joint is in the world now, or empty (set by the runtime: the local skater's pose
+// and the session's drawn poses). Called on the client thread.
+using JointSource = std::optional<Matrix> (*)(std::uint64_t player, std::uint16_t joint) noexcept;
+void set_joint_source(JointSource source) noexcept;
+
 // An object of `owner` (a plugin's id). False and why when it cannot be kept.
-std::string set(std::string_view owner, std::uint32_t id, std::string asset, const Matrix& matrix, bool hidden);
+std::string set(std::string_view owner, std::uint32_t id, std::string asset, const Matrix& matrix, bool hidden,
+                std::optional<Attach> attach = std::nullopt);
 void remove(std::string_view owner, std::uint32_t id);
 void clear(std::string_view owner);
 Status status(std::string_view owner, std::uint32_t id);

@@ -48,7 +48,7 @@ struct Control {
     std::string wisher;
     std::optional<Wish> wanted;
     std::map<std::string, Hidden, std::less<>> hidden;
-    std::atomic<bool> hide_lt{}, hide_rt{}, hide_left_x{};
+    std::atomic<bool> hide_lt{}, hide_rt{}, hide_left_x{}, hide_right_stick{}, hide_l3{}, hide_r3{};
     std::vector<Pop> pops; // under mutex
     std::atomic<float> side_speed{gx::measured_side_speed};
 };
@@ -131,6 +131,9 @@ void filter_pad(unsigned, overlay::GamepadValues& pad) noexcept {
     if (c.hide_lt.load(std::memory_order_acquire)) pad.left_trigger = 0;
     if (c.hide_rt.load(std::memory_order_acquire)) pad.right_trigger = 0;
     if (c.hide_left_x.load(std::memory_order_acquire) && grinding_now(c, qpc_now())) pad.left_x = 0;
+    if (c.hide_right_stick.load(std::memory_order_acquire)) pad.right_x = pad.right_y = 0;
+    if (c.hide_l3.load(std::memory_order_acquire)) pad.buttons &= static_cast<std::uint16_t>(~0x0040u); // XINPUT_GAMEPAD_LEFT_THUMB
+    if (c.hide_r3.load(std::memory_order_acquire)) pad.buttons &= static_cast<std::uint16_t>(~0x0080u); // XINPUT_GAMEPAD_RIGHT_THUMB
 }
 void publish_hidden(Control& c) {
     Hidden all;
@@ -138,10 +141,16 @@ void publish_hidden(Control& c) {
         all.left_trigger = all.left_trigger || h.left_trigger;
         all.right_trigger = all.right_trigger || h.right_trigger;
         all.left_x_grinding = all.left_x_grinding || h.left_x_grinding;
+        all.right_stick = all.right_stick || h.right_stick;
+        all.left_stick_click = all.left_stick_click || h.left_stick_click;
+        all.right_stick_click = all.right_stick_click || h.right_stick_click;
     }
     c.hide_lt.store(all.left_trigger, std::memory_order_release);
     c.hide_rt.store(all.right_trigger, std::memory_order_release);
     c.hide_left_x.store(all.left_x_grinding, std::memory_order_release);
+    c.hide_right_stick.store(all.right_stick, std::memory_order_release);
+    c.hide_l3.store(all.left_stick_click, std::memory_order_release);
+    c.hide_r3.store(all.right_stick_click, std::memory_order_release);
     DingoSDKOverlaySetGamepadFilter(c.hidden.empty() ? nullptr : &filter_pad);
 }
 
@@ -253,7 +262,7 @@ void hide(std::string_view owner, Hidden hidden) {
     auto& c = control();
     if (!c.started.load(std::memory_order_acquire)) return;
     std::lock_guard lock(c.mutex);
-    if (hidden.left_trigger || hidden.right_trigger || hidden.left_x_grinding) c.hidden.insert_or_assign(std::string(owner), hidden);
+    if (hidden.any()) c.hidden.insert_or_assign(std::string(owner), hidden);
     else if (const auto found = c.hidden.find(owner); found != c.hidden.end()) c.hidden.erase(found);
     if (hidden.left_x_grinding) listen(c);
     publish_hidden(c);

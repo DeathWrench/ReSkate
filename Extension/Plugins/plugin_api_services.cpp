@@ -166,6 +166,25 @@ int wheel(lua_State* L) {
     lua_pushnumber(L, game_of(plugin).mouse_wheel());
     return 1;
 }
+// input.mouse(): the mouse since this plugin's last read, whatever the game does with it: {x, y
+// (raw counts right and down), wheel (notches, away from you positive)}; nil while the game is not in
+// front or a menu is open.
+int mouse(lua_State* L) {
+    auto& plugin = allowed(L, "input", "reskate.input.mouse");
+    const auto motion = game_of(plugin).mouse_motion(plugin.id());
+    if (!motion) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_createtable(L, 0, 3);
+    lua_pushnumber(L, motion->x);
+    lua_setfield(L, -2, "x");
+    lua_pushnumber(L, motion->y);
+    lua_setfield(L, -2, "y");
+    lua_pushnumber(L, motion->wheel);
+    lua_setfield(L, -2, "wheel");
+    return 1;
+}
 // input.game_buttons(hidden, held, pause): the game buttons (XInput bits) kept from the game while
 // asked, those held down for it, and all game input paused for half a second.
 int game_buttons(lua_State* L) {
@@ -247,6 +266,68 @@ int prepare(lua_State* L) {
     return 0;
 }
 
+// physics.tuning(id): one tuning value, {id, label, group, kind, value, stock, tuner}, or nil and why.
+void push_tuning(lua_State* L, const Game::Tuning& t) {
+    lua_createtable(L, 0, 7);
+    const auto text = [&](const char* field, const std::string& value) {
+        lua_pushlstring(L, value.data(), value.size());
+        lua_setfield(L, -2, field);
+    };
+    text("id", t.id);
+    text("label", t.label);
+    text("group", t.group);
+    text("kind", t.kind);
+    lua_pushnumber(L, t.value);
+    lua_setfield(L, -2, "value");
+    lua_pushnumber(L, t.stock);
+    lua_setfield(L, -2, "stock");
+    if (!t.tuner.empty()) text("tuner", t.tuner);
+}
+std::string tuning_id(lua_State* L, int index) {
+    std::size_t length{};
+    const char* id = luaL_checklstring(L, index, &length);
+    if (length == 0 || length > 200) luaL_argerror(L, index, "a tuning value's id is 1 to 200 characters");
+    return {id, length};
+}
+int tuning(lua_State* L) {
+    auto& plugin = allowed(L, "skater.read", "reskate.physics.tuning");
+    std::string why;
+    const auto t = game_of(plugin).tuning(tuning_id(L, 1), why);
+    if (!t) {
+        lua_pushnil(L);
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
+    }
+    push_tuning(L, *t);
+    return 1;
+}
+// physics.find(text): the values whose id has every word of `text`, at most 64.
+int find_tuning(lua_State* L) {
+    auto& plugin = allowed(L, "skater.read", "reskate.physics.find");
+    std::size_t length{};
+    const char* text = luaL_checklstring(L, 1, &length);
+    if (length > 200) luaL_argerror(L, 1, "at most 200 characters");
+    const auto found = game_of(plugin).find_tuning({text, length}, 64);
+    lua_createtable(L, static_cast<int>(found.size()), 0);
+    for (std::size_t i = 0; i < found.size(); ++i) {
+        push_tuning(L, found[i]);
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+// physics.tune(id, value): the value over the player's own while the plugin keeps it; nil lets go.
+int tune(lua_State* L) {
+    auto& plugin = allowed(L, "skater.control", "reskate.physics.tune");
+    const auto id = tuning_id(L, 1);
+    std::optional<double> value;
+    if (lua_type(L, 2) == LUA_TBOOLEAN) value = lua_toboolean(L, 2) ? 1.0 : 0.0;
+    else if (!lua_isnoneornil(L, 2)) {
+        value = luaL_checknumber(L, 2);
+        if (!std::isfinite(*value) || std::abs(*value) > 1e6) luaL_argerror(L, 2, "a finite number within a million");
+    }
+    return result(L, game_of(plugin).tune(plugin.id(), id, value));
+}
+
 // ---- tricks --------------------------------------------------------------------------------------
 // tricks.feed(on): skate.'s trick list, entry by entry, as trick_notes events while on.
 int trick_feed(lua_State* L) {
@@ -274,14 +355,107 @@ int gesture(lua_State* L) {
     return 1;
 }
 
+// tricks.label(from, to): the trick ticker shows `to` where the game's label is exactly `from`
+// ("Board Stall"); to nil, that label is the game's again. 1 to 63 characters each, 16 labels a plugin.
+int label(lua_State* L) {
+    auto& plugin = allowed(L, "hud", "reskate.tricks.label");
+    std::size_t from_length = 0, to_length = 0;
+    const char* from = luaL_checklstring(L, 1, &from_length);
+    const char* to = lua_isnoneornil(L, 2) ? "" : luaL_checklstring(L, 2, &to_length);
+    if (!from_length || from_length > 63 || to_length > 63) luaL_error(L, "a label is 1 to 63 characters");
+    return result(L, game_of(plugin).trick_label(plugin.id(), std::string_view(from, from_length), std::string_view(to, to_length)));
+}
+// tricks.record_as(from, to, within_ms): the next trick the game records whose id is one of `from`
+// (a list of 1 to 16 ids, or one id), within `within_ms` (1 to 2000), is recorded as the id `to`.
+// The game's trick ids, 0 to 336. One pending record a plugin: a new one replaces it.
+int record_as(lua_State* L) {
+    auto& plugin = allowed(L, "skater.control", "reskate.tricks.record_as");
+    const auto id_at = [&](int index) {
+        const double value = luaL_checknumber(L, index);
+        if (!(value >= 0 && value <= 336) || value != std::floor(value)) luaL_error(L, "a trick id is a whole number, 0 to 336");
+        return static_cast<std::uint32_t>(value);
+    };
+    std::vector<std::uint32_t> from;
+    if (lua_istable(L, 1)) {
+        const int count = lua_objlen(L, 1);
+        if (count < 1 || count > 16) luaL_error(L, "a record names 1 to 16 trick ids");
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 1, i);
+            from.push_back(id_at(lua_gettop(L)));
+            lua_pop(L, 1);
+        }
+    } else from.push_back(id_at(1));
+    const auto to = id_at(2);
+    const double within = luaL_checknumber(L, 3);
+    if (!(within >= 1 && within <= 2000)) luaL_error(L, "a record waits 1 to 2000 ms");
+    return result(L, game_of(plugin).trick_record_as(plugin.id(), std::move(from), to, static_cast<int>(within)));
+}
+
+// mods.content(folder): every file under <mod>/<folder>/ of every enabled mod, `folder` one the
+// manifest's "content" names: {{mod, title, path, size}, ...}, mod by mod in load order; nil, why.
+std::string content_folder(lua_State* L, Plugin& plugin, int index, const char* what) {
+    std::size_t length = 0;
+    const char* text = luaL_checklstring(L, index, &length);
+    std::string folder(text, std::min<std::size_t>(length, 64));
+    for (auto& c : folder) if (c >= 'A' && c <= 'Z') c = static_cast<char>(c + 32);
+    const auto& declared = plugin.manifest().content;
+    if (std::find(declared.begin(), declared.end(), folder) == declared.end())
+        luaL_error(L, "%s(\"%s\"): name \"%s\" in the manifest's \"content\" first", what, folder.c_str(), folder.c_str());
+    return folder;
+}
+int content(lua_State* L) {
+    auto& plugin = allowed(L, "mods.read", "reskate.mods.content");
+    const auto folder = content_folder(L, plugin, 1, "reskate.mods.content");
+    std::vector<Game::ContentFile> files;
+    if (const auto why = game_of(plugin).content_list(folder, files); !why.empty()) {
+        lua_pushnil(L);
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
+    }
+    lua_createtable(L, static_cast<int>(files.size()), 0);
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        lua_createtable(L, 0, 4);
+        lua_pushlstring(L, files[i].mod.data(), files[i].mod.size());
+        lua_setfield(L, -2, "mod");
+        lua_pushlstring(L, files[i].title.data(), files[i].title.size());
+        lua_setfield(L, -2, "title");
+        lua_pushlstring(L, files[i].path.data(), files[i].path.size());
+        lua_setfield(L, -2, "path");
+        lua_pushnumber(L, static_cast<double>(files[i].size));
+        lua_setfield(L, -2, "size");
+        lua_rawseti(L, -2, static_cast<int>(i + 1));
+    }
+    return 1;
+}
+// mods.read_content(mod, folder, path): that file's text, at most 1 MB; nil, why ("not found" for none).
+int read_content(lua_State* L) {
+    auto& plugin = allowed(L, "mods.read", "reskate.mods.read_content");
+    std::size_t mod_length = 0;
+    const char* mod = luaL_checklstring(L, 1, &mod_length);
+    if (!mod_length || mod_length > 64) luaL_argerror(L, 1, "a mod's folder name, 1 to 64 characters");
+    const auto folder = content_folder(L, plugin, 2, "reskate.mods.read_content");
+    const auto path = safe_relative_path(luaL_checkstring(L, 3));
+    if (path.empty()) luaL_argerror(L, 3, "a path inside the mod's folder (use / between folders, no ..)");
+    std::string text;
+    if (const auto why = game_of(plugin).content_read(std::string_view(mod, mod_length), folder, path, text); !why.empty()) {
+        lua_pushnil(L);
+        lua_pushlstring(L, why.data(), why.size());
+        return 2;
+    }
+    lua_pushlstring(L, text.data(), text.size());
+    return 1;
+}
+
 } // namespace
 
 void install_services_api(Plugin&, lua_State* L) {
     add_functions(L, "skater", {{"telemetry", telemetry}, {"goofy", goofy}, {"bone_cam", bone_cam}});
-    add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
+    add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"mouse", mouse}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
     add_functions(L, "session", {{"spectate", spectate}, {"world", world}});
     add_functions(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
-    add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}});
-    add_functions(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}});
+    add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}, {"tuning", tuning},
+                                 {"find", find_tuning}, {"tune", tune}});
+    add_functions(L, "tricks", {{"feed", trick_feed}, {"gesture", gesture}, {"label", label}, {"record_as", record_as}});
+    add_functions(L, "mods", {{"content", content}, {"read_content", read_content}});
 }
 } // namespace dingosdk::plugins

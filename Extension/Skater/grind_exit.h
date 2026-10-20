@@ -39,6 +39,9 @@ struct Wish {
 std::string wish(std::string_view owner, std::optional<Wish> wish);
 struct Hidden {
     bool left_trigger{}, right_trigger{}, left_x_grinding{};
+    // The right stick (reads centred) and the stick clicks (read up), whatever the skater does.
+    bool right_stick{}, left_stick_click{}, right_stick_click{};
+    bool any() const noexcept { return left_trigger || right_trigger || left_x_grinding || right_stick || left_stick_click || right_stick_click; }
 };
 void hide(std::string_view owner, Hidden hidden);
 // Whatever the plugin held.

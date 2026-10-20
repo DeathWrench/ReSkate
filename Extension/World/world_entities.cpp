@@ -11,6 +11,7 @@
 #include <Windows.h>
 #include <intrin.h>
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 #include <format>
@@ -38,6 +39,7 @@ struct Wanted {
     std::string asset;
     Matrix matrix{};
     bool hidden{};
+    std::optional<Attach> attach;
 };
 struct Live {
     std::uintptr_t entity{}, owner{}, context{};
@@ -61,8 +63,24 @@ struct State {
     std::uintptr_t context{};
     bool verified{};
     std::string error, waiting;
+    std::map<Key, std::uint64_t> lost; // client thread: attached objects whose joint is not known, since when
 };
 State& state() { static auto* s = new State; return *s; }
+std::atomic<JointSource> joint_source{};
+
+// `offset` (in a joint's frame) placed on the joint: each row taken through the joint's axes.
+Matrix on_joint(const Matrix& joint, const Matrix& offset) {
+    Matrix m{};
+    for (int row = 0; row < 4; ++row) {
+        for (int k = 0; k < 3; ++k) {
+            float v = row == 3 ? joint[12 + k] : 0.0f;
+            for (int j = 0; j < 3; ++j) v += offset[row * 4 + j] * joint[j * 4 + k];
+            m[row * 4 + k] = v;
+        }
+    }
+    m[15] = 1.0f;
+    return m;
+}
 
 void note(State& s, std::string issue) {
     if (s.waiting == issue) return;
@@ -163,9 +181,12 @@ std::uintptr_t resolve(std::uintptr_t base, Asset& a, const std::string& name, s
 }
 } // namespace
 
-std::string set(std::string_view owner, std::uint32_t id, std::string asset, const Matrix& matrix, bool hidden) {
+void set_joint_source(JointSource source) noexcept { joint_source.store(source, std::memory_order_release); }
+
+std::string set(std::string_view owner, std::uint32_t id, std::string asset, const Matrix& matrix, bool hidden, std::optional<Attach> attach) {
     if (asset.empty() || asset.size() > 200) return "an object's blueprint is a name of 1 to 200 characters";
     if (!finite(matrix)) return "an object's transform must be finite, within 100 km, each axis at most 200 long";
+    if (attach && attach->joint >= 395) return "a skater's joints are 0 to 394";
     auto& s = state();
     std::lock_guard lock(s.mutex);
     const Key key{std::string(owner), id};
@@ -174,7 +195,7 @@ std::string set(std::string_view owner, std::uint32_t id, std::string asset, con
         if (static_cast<std::size_t>(mine) >= max_per_owner) return std::format("at most {} objects", max_per_owner);
         if (s.wanted.size() >= max_total) return "the world holds as many objects as ReSkate keeps";
     }
-    s.wanted[key] = {std::move(asset), matrix, hidden};
+    s.wanted[key] = {std::move(asset), matrix, hidden, attach};
     return {};
 }
 void remove(std::string_view owner, std::uint32_t id) {
@@ -267,11 +288,27 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready) noexcept {
             wanted = s.wanted;
             live = s.live;
         }
+        // Attached objects onto their joints as they are now; one whose joint is not known stays put
+        // (or waits), and after a second is taken away.
+        const auto source = joint_source.load(std::memory_order_acquire);
+        std::vector<Key> unplaced;
+        for (auto& [key, w] : wanted) {
+            if (!w.attach || w.hidden) continue;
+            if (const auto at = source ? source(w.attach->player, w.attach->joint) : std::nullopt; at && finite(*at)) {
+                w.matrix = on_joint(*at, w.matrix);
+                s.lost.erase(key);
+            } else {
+                unplaced.push_back(key);
+                s.lost.try_emplace(key, now);
+            }
+        }
+        std::erase_if(s.lost, [&](const auto& l) { return !wanted.contains(l.first); });
         // Gone or hidden, or a different blueprint now: taken away.
         std::vector<Key> drop;
         for (const auto& [key, l] : live) {
             const auto w = wanted.find(key);
-            if (w == wanted.end() || w->second.hidden || w->second.asset != l.asset || !intact(l)) drop.push_back(key);
+            const bool gone = w != wanted.end() && s.lost.contains(key) && now - s.lost[key] > 1000;
+            if (w == wanted.end() || w->second.hidden || w->second.asset != l.asset || gone || !intact(l)) drop.push_back(key);
         }
         // A blueprint whose bundle streamed out: its objects come back once it resolves again.
         unsigned lookups = 4;
@@ -293,10 +330,11 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool ready) noexcept {
         std::uintptr_t parent{};
         unsigned created{};
         for (const auto& [key, w] : wanted) {
-            if (w.hidden) continue;
+            if (w.hidden || std::find(unplaced.begin(), unplaced.end(), key) != unplaced.end()) continue;
             if (const auto l = live.find(key); l != live.end()) {
                 // Move a resident object in place: recreating restarts its effects and makes it jump.
-                if (l->second.matrix != w.matrix && now >= l->second.moved + 16) {
+                // One on a joint follows it every frame.
+                if (l->second.matrix != w.matrix && (w.attach || now >= l->second.moved + 16)) {
                     move(base, l->second, w.matrix);
                     std::lock_guard lock(s.mutex);
                     if (const auto at = s.live.find(key); at != s.live.end()) at->second.matrix = w.matrix, at->second.moved = now;
@@ -345,6 +383,7 @@ void before_level_transition(std::uintptr_t base, unsigned next) noexcept {
     s.live.clear();
     s.wanted.clear();
     s.assets.clear();
+    s.lost.clear();
     s.context = 0;
     logging::log(logging::Level::info, logging::Channel::runtime, "World objects retired before native state {}.", next);
 }

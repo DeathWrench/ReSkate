@@ -900,7 +900,10 @@ template<class OwnsPointer> void note_packet(const RAWMOUSE& mouse, OwnsPointer&
     if (relative) {
         s.raw_mouse_x.fetch_add(mouse.lLastX);
         s.raw_mouse_y.fetch_add(mouse.lLastY);
+        s.look_mouse_x.fetch_add(mouse.lLastX);
+        s.look_mouse_y.fetch_add(mouse.lLastY);
     }
+    if (mouse.usButtonFlags & RI_MOUSE_WHEEL) s.look_wheel_raw.fetch_add(static_cast<SHORT>(mouse.usButtonData));
     auto buttons = s.raw_mouse_buttons.load();
     const auto flags = mouse.usButtonFlags;
     if (flags & RI_MOUSE_LEFT_BUTTON_DOWN) buttons |= 1u;

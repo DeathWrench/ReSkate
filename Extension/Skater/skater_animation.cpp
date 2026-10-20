@@ -170,12 +170,25 @@ std::string pop_of(float air) {
 struct Plan {
     std::optional<Play> play;
     double started{};
+    float from{};               // the clip's seconds at `started`
+    std::optional<float> held;  // paused at these seconds of the clip
     std::uint64_t serial{};
     std::vector<Replacement> replacements;
     bool allowed{};
     float record_seconds{}; // > 0: record this long, from the next update
     std::uint64_t record_serial{};
+    std::optional<arm_reach::Goal> reach;
+    double reach_until{}, joints_until{}; // now_seconds() until which the reach holds, and the joints are read
+    std::vector<std::uint16_t> joints_read; // joint(): the joints asked for, in order
+    std::vector<PoseOffset> offsets;        // pose(), until offsets_until
+    float offsets_weight{1};
+    double offsets_until{};
 };
+// The joints asked for as last evaluated (joint()), for the client thread.
+std::mutex joints_mutex;
+std::vector<std::pair<std::uint16_t, Joint>> joints_now;
+// The client thread's: each joint asked for and when it was last.
+std::vector<std::pair<std::uint16_t, double>> joints_asked;
 std::mutex plan_mutex;
 std::shared_ptr<const Plan> plan_now = std::make_shared<Plan>();
 Plan plan_draft; // the client thread's, published as plan_now
@@ -294,7 +307,11 @@ void on_animation(std::uintptr_t component) noexcept {
         const auto snap = plan();
         const bool wants_record = snap->record_seconds > 0 && snap->record_serial != l.record_serial.load(std::memory_order_acquire);
         const bool busy = record_running.load(std::memory_order_acquire) || wants_record;
-        if (!busy && (!snap->allowed || (!snap->play && snap->replacements.empty()))) {
+        const double now = now_seconds();
+        const bool reaching = snap->reach && now < snap->reach_until;
+        const bool joints_wanted = now < snap->joints_until && !snap->joints_read.empty();
+        const bool posing = !snap->offsets.empty() && now < snap->offsets_until;
+        if (!busy && !reaching && !joints_wanted && !posing && (!snap->allowed || (!snap->play && snap->replacements.empty()))) {
             std::lock_guard lock(pending().mutex);
             pending().bones.clear();
             SetLastError(error);
@@ -336,12 +353,12 @@ void on_animation(std::uintptr_t component) noexcept {
             clip = p.clip.get();
             const float elapsed = static_cast<float>(at - snap->started);
             const float blend = std::max(p.blend, 0.0f);
-            const float run = elapsed * std::max(p.speed, 0.05f);
+            const float run = snap->held ? *snap->held : snap->from + elapsed * std::max(p.speed, 0.05f);
             const float length = clip->duration();
             if (p.loop && length > 0) t = std::fmod(run, length);
             else t = std::min(run, length);
             weight = blend > 0 ? std::clamp(elapsed / blend, 0.0f, 1.0f) : 1.0f;
-            if (!p.loop && run >= length) {
+            if (!p.loop && !snap->held && run >= length) {
                 const float after = (run - length) / std::max(p.speed, 0.05f);
                 weight = std::min(weight, blend > 0 ? 1 - std::clamp(after / blend, 0.0f, 1.0f) : 0.0f);
                 if (weight <= 0) finished_serial.store(snap->serial, std::memory_order_release);
@@ -425,6 +442,48 @@ void on_animation(std::uintptr_t component) noexcept {
             }
             first = 2;
             last = layout.count;
+        }
+        // Joints turned and scaled, after the clip and before any reach: they join what is written.
+        if (posing) {
+            const float w = std::clamp(snap->offsets_weight, 0.0f, 1.0f);
+            for (const auto& o : snap->offsets) {
+                if (o.joint < 2 || o.joint >= layout.count) continue;
+                auto& j = l.pose[o.joint];
+                j.rotation = normalised(multiply(j.rotation, slerp(Quat{0, 0, 0, 1}, o.rotation, w)));
+                const float s = 1.0f + (o.scale - 1.0f) * w;
+                for (auto& k : j.scale) k *= s;
+                if (last > first) {
+                    first = std::min<std::size_t>(first, o.joint);
+                    last = std::max<std::size_t>(last, o.joint + 1u);
+                } else {
+                    first = o.joint;
+                    last = o.joint + 1u;
+                }
+            }
+        }
+        // An arm reaching, after the clip: its joints join what is written.
+        if (reaching) {
+            const auto& goal = *snap->reach;
+            if (arm_reach::reach(std::span<Joint>(l.pose.data(), l.pose.size()), goal).valid) {
+                const std::size_t from = arm_reach::first_written(goal.hand), to = arm_reach::last_written(goal.hand) + 1u;
+                if (last > first) {
+                    first = std::min(first, from);
+                    last = std::max(last, to);
+                } else {
+                    first = from;
+                    last = to;
+                }
+            }
+        }
+        if (joints_wanted) {
+            const std::span<const Joint> pose(l.pose.data(), l.pose.size());
+            thread_local std::vector<std::pair<std::uint16_t, Joint>> placed;
+            placed.clear();
+            for (const auto index : snap->joints_read)
+                if (index < pose.size())
+                    if (const auto w = anim_studio::world(pose, index); anim_studio::finite(w)) placed.emplace_back(index, w);
+            std::lock_guard lock(joints_mutex);
+            joints_now.swap(placed);
         }
         if (last > first) {
             for (std::size_t i = first; i < last; ++i)
@@ -581,11 +640,82 @@ std::uint64_t serial{};
 void play(std::optional<Play> clip) {
     plan_draft.play = std::move(clip);
     plan_draft.started = now_seconds();
+    plan_draft.from = plan_draft.play ? plan_draft.play->at : 0;
+    plan_draft.held = plan_draft.play && plan_draft.play->paused ? std::optional(plan_draft.from) : std::nullopt;
     plan_draft.serial = ++serial;
+    publish();
+}
+std::optional<float> play_time() {
+    if (!plan_draft.play || !plan_draft.play->clip) return std::nullopt;
+    if (plan_draft.held) return plan_draft.held;
+    const auto& p = *plan_draft.play;
+    const float run = plan_draft.from + static_cast<float>(now_seconds() - plan_draft.started) * std::max(p.speed, 0.05f);
+    const float length = p.clip->duration();
+    if (p.loop && length > 0) return std::fmod(run, length);
+    return std::min(run, length);
+}
+void seek(float seconds) {
+    if (!plan_draft.play || !plan_draft.play->clip) return;
+    const float t = std::clamp(seconds, 0.0f, plan_draft.play->clip->duration());
+    if (plan_draft.held) plan_draft.held = t;
+    else {
+        // Playing on from there, already blended in.
+        plan_draft.from = t;
+        plan_draft.started = now_seconds() - std::max(plan_draft.play->blend, 0.0f);
+        if (plan_draft.play->speed > 0) plan_draft.from -= std::max(plan_draft.play->blend, 0.0f) * plan_draft.play->speed;
+    }
+    publish();
+}
+void pause(bool paused) {
+    if (!plan_draft.play || !plan_draft.play->clip || paused == plan_draft.held.has_value()) return;
+    if (paused) plan_draft.held = play_time();
+    else {
+        const float t = *plan_draft.held;
+        plan_draft.held.reset();
+        seek(t);
+        return;
+    }
     publish();
 }
 bool playing() noexcept {
     return plan_draft.play.has_value() && finished_serial.load(std::memory_order_acquire) != plan_draft.serial;
+}
+void pose(std::vector<PoseOffset> offsets, float weight) {
+    plan_draft.offsets = std::move(offsets);
+    plan_draft.offsets_weight = weight;
+    plan_draft.offsets_until = plan_draft.offsets.empty() ? 0 : now_seconds() + 0.3;
+    publish();
+}
+void reach(std::optional<arm_reach::Goal> goal) {
+    plan_draft.reach = std::move(goal);
+    plan_draft.reach_until = plan_draft.reach ? now_seconds() + 0.3 : 0;
+    publish();
+}
+std::optional<Joint> joint(std::uint16_t index) {
+    if (index >= 395) return std::nullopt;
+    const double now = now_seconds();
+    std::erase_if(joints_asked, [&](const auto& asked) { return now - asked.second > 2.0; });
+    const auto asked = std::find_if(joints_asked.begin(), joints_asked.end(), [&](const auto& a) { return a.first == index; });
+    if (asked != joints_asked.end()) asked->second = now;
+    else if (joints_asked.size() < 32) joints_asked.emplace_back(index, now);
+    else return std::nullopt;
+    std::vector<std::uint16_t> read;
+    for (const auto& a : joints_asked) read.push_back(a.first);
+    std::sort(read.begin(), read.end());
+    if (read != plan_draft.joints_read || plan_draft.joints_until < now + 1.0) {
+        plan_draft.joints_read = std::move(read);
+        plan_draft.joints_until = now + 2.0;
+        publish();
+    }
+    std::lock_guard lock(joints_mutex);
+    for (const auto& [at, w] : joints_now)
+        if (at == index) return w;
+    return std::nullopt;
+}
+std::optional<arm_reach::Placed> hand(arm_reach::Hand side) {
+    const auto at = joint(arm_reach::chain(side).back());
+    if (!at) return std::nullopt;
+    return arm_reach::Placed{at->position, at->rotation, at->scale[0]};
 }
 void set_replacements(std::vector<Replacement> list) {
     plan_draft.replacements = std::move(list);
@@ -635,7 +765,10 @@ void tick(std::uintptr_t base, std::uintptr_t component, bool allowed) {
         plan_draft.play.reset();
         publish();
     }
-    const bool wanted = plan_draft.play || !plan_draft.replacements.empty() || recording();
+    const double now = now_seconds();
+    const bool wanted = plan_draft.play || !plan_draft.replacements.empty() || recording() ||
+                        (plan_draft.reach && now < plan_draft.reach_until) || now < plan_draft.joints_until ||
+                        (!plan_draft.offsets.empty() && now < plan_draft.offsets_until);
     if (wanted && !hooked && base) {
         std::string detail;
         if (multiplayer::install_entity_hooks(base, detail)) {

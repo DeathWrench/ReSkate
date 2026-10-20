@@ -114,6 +114,9 @@ struct State {
     // buttons use it because Skate's controller mode stops the legacy cursor
     // and button state from updating until the game is paused.
     std::atomic<long> raw_mouse_x{0}, raw_mouse_y{0};
+    // The same movement for read_mouse_look, kept apart so the editor's and the flight look's reads
+    // do not take it; and the wheel, from raw packets and from WM_MOUSEWHEEL (in its 120 a notch).
+    std::atomic<long> look_mouse_x{0}, look_mouse_y{0}, look_wheel_raw{0}, look_wheel_message{0};
     std::atomic<unsigned> raw_mouse_buttons{0}; // physical: 1 left, 2 right, 4 middle
     std::atomic<ULONGLONG> raw_mouse_time{0};
     // The mouse registration in effect has RIDEV_NOLEGACY: Windows does not
@@ -326,6 +329,8 @@ bool take_mod_icon_pixels(CardPixels& pixels);
 // draw asks for a picture by its file (its id once on the GPU, 0 until then); the render thread
 // takes one decoded picture a frame to upload and says where it went.
 inline constexpr UINT plugin_image_first_slot = 4, plugin_image_slots = 16;
+// Then the screen look's three (screen_look.h): its copy of the frame and the auto-iris's two targets.
+inline constexpr UINT screen_look_slot = plugin_image_first_slot + plugin_image_slots, screen_look_slots = 3;
 ImTextureID plugin_image(const std::string& path, ImVec2& size);
 struct PluginImageUpload {
     std::string path;

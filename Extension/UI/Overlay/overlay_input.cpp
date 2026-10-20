@@ -96,6 +96,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         ~NativeInputScope() { overlay_input_access = saved; }
     } native_input;
     auto& s = state();
+    if (message == WM_MOUSEWHEEL) s.look_wheel_message.fetch_add(GET_WHEEL_DELTA_WPARAM(wp));
     WNDPROC previous{};
     {
         std::lock_guard lock(s.window_hook_mutex);
@@ -565,6 +566,24 @@ static bool raw_mouse_live(const State& s) {
     return time && GetTickCount64() < time + 10000;
 }
 
+namespace dingosdk::overlay {
+bool read_mouse_look(MouseLook& output) noexcept {
+    struct PreserveError { DWORD value = GetLastError(); ~PreserveError() { SetLastError(value); } } preserve_error;
+    output = {};
+    auto& s = state();
+    // Taken whatever happens next, so nothing piles up while a menu is open.
+    const long x = s.look_mouse_x.exchange(0), y = s.look_mouse_y.exchange(0);
+    const long wheel_raw = s.look_wheel_raw.exchange(0), wheel_message = s.look_wheel_message.exchange(0);
+    const HWND window = s.window.load();
+    if (!window || s.stop.load() || s.failed.load() || interactive_visible(s) || !game_window_foreground(window)) return false;
+    output.x = x;
+    output.y = y;
+    // The same notch can arrive both ways: the raw count where raw packets come in, else the message's.
+    output.wheel = raw_mouse_live(s) && wheel_raw != 0 ? wheel_raw : wheel_message;
+    return true;
+}
+} // namespace dingosdk::overlay
+
 extern "C" void DingoSDKOverlayReadFlightInput(dingosdk::overlay::FlightInput* output, bool flight_active, bool player_flight) {
     if (!output) return;
     struct PreserveError { DWORD value = GetLastError(); ~PreserveError() { SetLastError(value); } } preserve_error;
@@ -628,4 +647,16 @@ extern "C" void DingoSDKOverlayReadFlightInput(dingosdk::overlay::FlightInput* o
             if (ClientToScreen(window, &center) && SetCursorPos(center.x, center.y)) previous = center;
         }
     } else looking = false;
+}
+
+// For native tools that run beside the game (a controller translator, say): whether ReSkate's menu,
+// a free camera on the pad or a prompt has the input now, so they hold their own input back while it
+// does. 1 or 0. Versioned: a later meaning gets a new name. Any thread; the caller's last error is kept.
+extern "C" __declspec(dllexport) unsigned long WINAPI ReSkateOverlayOwnsInputV1() {
+    const auto error = GetLastError();
+    const auto& s = state();
+    const bool owns = owns_menu_cursor(s) || s.freecam_controller_active.load(std::memory_order_relaxed) ||
+                      s.prompt_input_active.load(std::memory_order_relaxed);
+    SetLastError(error);
+    return owns ? 1ul : 0ul;
 }

@@ -1107,6 +1107,7 @@ void update_model(std::uintptr_t client, TickState& frame) {
     {
         DINGO_PROFILE_ZONE("tick/plugins");
         dingosdk::plugins::on_client_tick();
+        dingosdk::plugins::tick_plugin_settings();
     }
     if (!has_request && now < r.next_model && state == r.previous_state) return;
     r.next_model = now + 500;

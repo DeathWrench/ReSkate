@@ -82,6 +82,8 @@ struct Panel {
     std::string plugin, title;
     std::vector<Widget> widgets;
     bool screen{}; // a full-screen screen (reskate.ui.screen)
+    int dock{};    // a screen docked to a side, the game showing beside it: 1 left, 2 right; 0 full screen
+    float width{}; // a docked screen's share of the window's width
     bool page{};   // the plugin's page (reskate.menu.page); else a panel, a card on that page
 };
 // A plugin with a page in the menu's PLUGINS section: its id, and the page's name there (its page's

@@ -37,6 +37,7 @@
 #include "Extension/UI/Overlay/game_images.h"
 #include "Extension/Plugins/plugin_runtime.h"
 #include "Extension/Skater/grind_exit.h"
+#include "Extension/Skater/trick_rewrite.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/Progression/entitlement_request_hook.h"
 #include "Extension/Skater/skater_observer.h"
@@ -464,6 +465,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
                std::string(xray ? "true" : "false") + "}");
         const bool grind_exits = dingosdk::grind_exit::start(r.base);
         record("{\"event\":\"grind_exit_initialized\",\"active\":" + std::string(grind_exits ? "true" : "false") + "}");
+        const bool trick_rewrites = dingosdk::trick_rewrite::start(r.base);
+        record("{\"event\":\"trick_rewrite_initialized\",\"active\":" + std::string(trick_rewrites ? "true" : "false") + "}");
         const bool noclip_velocity = dingosdk::start_client_noclip_velocity(r.base);
         record("{\"event\":\"noclip_velocity_initialized\",\"active\":" + std::string(noclip_velocity ? "true" : "false") + "}");
         const bool loading_screens = dingosdk::loading_screen::start(r.base);

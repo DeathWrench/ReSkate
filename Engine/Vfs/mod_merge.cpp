@@ -89,6 +89,10 @@ MergeReport merge_mods(const Catalog& catalog, const MergeObserver& observe, con
         };
         const auto output = catalog.root / generated_folder;
         std::error_code error;
+        // A merge that rebuilds deletes the generated folder: plugins' files from before they had
+        // a folder of their own go to it first.
+        for (auto& plugin : keep_plugin_data(catalog.root))
+            report.notes.push_back("Plugin data of " + plugin + " moved to Mods/" + plugin_data_folder);
 
         std::vector<const Mod*> mods;
         for (const auto& mod : catalog.mods) if (mod.provides_layout) mods.push_back(&mod);
