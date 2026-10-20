@@ -39,10 +39,23 @@ void set_entity_destroyed_listener(EntityDestroyed listener) noexcept;
 // install_entity_hooks. Runs on the thread that evaluates animation.
 using AnimationEvaluated = void (*)(std::uintptr_t component) noexcept;
 void set_animation_evaluated_listener(AnimationEvaluated listener) noexcept;
+// Runs on the client thread with the pose capture_local is about to return: a feature may change
+// what other players receive of the local skater.
+using LocalPoseFilter = void (*)(std::uintptr_t component, std::vector<Transform> &skater) noexcept;
+void set_local_pose_filter(LocalPoseFilter filter) noexcept;
+// A pose override of the local skater (Extension/Skater/skater_animation.cpp): called after the
+// listener above, so it sees (and may change) the pose first person left.
+void set_pose_override_listener(AnimationEvaluated listener) noexcept;
 // Called after a skeleton's pose is handed to the renderer, with
 // its animation interface (animation holder + 0xc0), on the calling thread.
 using RenderPosePublished = void (*)(std::uintptr_t animation_interface) noexcept;
 void set_render_pose_listener(RenderPosePublished listener) noexcept;
+// The pose override again, when a pose is handed to the renderer (after the listener above): what it
+// writes then is what is drawn. And for the board, before the listener above, with the render data
+// the pose was handed over in.
+void set_pose_override_render_listener(RenderPosePublished listener) noexcept;
+using BoardPosePublished = void (*)(std::uintptr_t animation_interface, std::uintptr_t render_data) noexcept;
+void set_pose_override_board_listener(BoardPosePublished listener) noexcept;
 // Far-player savings (puppet_cost.cpp): native work a remote player's skater and skateboard
 // skip while far away. Within 200 m of the local skater or the camera nothing changes.
 // Each is on by default; the setter is thread-safe and applies at each player's next

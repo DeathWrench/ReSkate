@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
@@ -42,6 +43,10 @@ using vfs::archive_file;
 void unshare(const fs::path& path);
 std::uint64_t append_file(const fs::path& from, const fs::path& to);
 void link_or_copy(const fs::path& from, const fs::path& to);
+// `relative` (a mod's file, a superbundle a layout names) under the merge's output folder. One
+// that would land outside it (absolute, or climbing out with ..) throws: nothing the merge writes
+// may reach a mod's own folder or the game's.
+fs::path inside(const fs::path& output, const fs::path& relative);
 
 struct RelativeFiles {
     std::vector<std::string> tocs;     // Win32/... .toc, generic separators
@@ -331,8 +336,14 @@ struct AssetAddition {
     // guids of the documents it refers to in turn (a song names its wave).
     fb::Guid file;
     std::vector<fb::Guid> names;
+    // Bundled mesh/texture data follows the EBX/RES that references it.
+    std::vector<fb::Guid> chunk_names;
+    std::shared_ptr<const std::vector<std::byte>> chunk_metadata;
+    std::size_t chunk_index{};
 };
 struct AssetOverrides {
+    struct ChunkDefaults { std::vector<std::byte> metadata; std::vector<fb::Guid> chunks; };
+    std::map<std::string,ChunkDefaults,std::less<>> bundle_chunk_defaults;
     // By lower-case asset name, then the game's sha1 the change replaces.
     std::map<std::string, std::map<fb::Sha1, AssetOverride>, std::less<>> changed;
     // Separate from EBX: a script's EBX wrapper can have the same asset name.
@@ -374,7 +385,7 @@ struct ChunkRecord {
     static constexpr std::size_t none = static_cast<std::size_t>(-1);
     fb::Guid guid;
     std::size_t copy{none};     // the list of the copy this version of the chunk came in; none when that copy has no list
-    std::size_t index{};        // where that copy lists the chunk
+    std::size_t index{};        // where that copy's list has its record: where the copy lists it, unless the list was written again (merge_chunk_metadata's rows)
     std::size_t shipped{none};  // where the game's copy lists it; none for a chunk mods add
 };
 // The list for a merged bundle, written as the game writes one: a record for each
@@ -387,12 +398,16 @@ struct ChunkRecord {
 // does not ship, or ships without a list, every chunk is one a mod adds. When
 // every chunk is the game's own where the game lists it, the game's list comes
 // back as it is; so does one mod's, for a bundle without a list in the game that
-// is that mod's copy alone.
+// is that mod's copy alone. `rows`, when given, gets where each chunk's record is in
+// the list that comes back: its place by guid in a list in the game's form, else
+// where the chunk is listed. A copy given that list as its own reads its chunks'
+// records there (ChunkRecord::index).
 // Throws when a list that is needed cannot be read.
 [[nodiscard]] std::vector<std::byte> merge_chunk_metadata(std::span<const std::vector<std::byte>> lists,
                                                           std::span<const ChunkRecord> chunks,
                                                           std::size_t game = ChunkRecord::none,
-                                                          std::span<const fb::Guid> shipped = {});
+                                                          std::span<const fb::Guid> shipped = {},
+                                                          std::vector<std::size_t>* rows = nullptr);
 
 fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         std::vector<Source>& sources, MergeReport& report,

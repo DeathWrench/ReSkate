@@ -1,0 +1,22 @@
+local h = require("harness")
+local t = h.module("json")
+
+t.check("encode and decode round trip", function()
+    local back = reskate.json.decode(reskate.json.encode({a = {1, 2, 3}, b = "text", c = true, d = 1.5}))
+    assert(back.a[3] == 3 and back.b == "text" and back.c == true and back.d == 1.5)
+end)
+t.check("encode can be pretty", function()
+    assert(reskate.json.encode({a = 1}, true):find("\n", 1, true))
+end)
+t.check("bad JSON is refused", function()
+    h.refused(reskate.json.decode, "{nope")
+    h.refused(reskate.json.decode, "")
+end)
+t.check("values JSON cannot hold are refused", function()
+    h.refused(reskate.json.encode, print)
+    h.refused(reskate.json.encode, 0 / 0)
+    h.refused(reskate.json.encode, {[{}] = 1})
+    local cycle = {}
+    cycle.me = cycle
+    h.refused(reskate.json.encode, cycle)
+end)

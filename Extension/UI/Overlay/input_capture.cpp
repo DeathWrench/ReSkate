@@ -2,7 +2,9 @@
 #include "overlay_internal.h"
 #include "input_capture.h"
 #include "held_input.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
 #include "Engine/Game/Input/playstation_report.h"
+#include "Engine/Game/Input/owned_menu_input.h"
 #include <hidsdi.h>
 #include <atomic>
 #include <format>
@@ -18,6 +20,21 @@ namespace dingosdk::overlay::detail {
 // Window messages do not cover the game's independently polled input devices.
 // Only the overlay's own Win32 backend and binding reader may bypass these gates.
 thread_local HRAWINPUT noted_raw_input = nullptr;
+std::atomic<ULONGLONG> mode_input_paused_until{};
+std::atomic<std::uint16_t> mode_hidden_buttons{}, mode_held_buttons{};
+std::atomic<int> mode_mouse_wheel{};
+std::atomic<bool> challenge_menu_capture{};
+std::atomic<bool> challenge_native_panel{};
+std::atomic<bool> challenge_menu_release{};
+bool suppress_challenge_menu() noexcept {
+    return !overlay_input_access && (challenge_menu_capture.load(std::memory_order_relaxed) || challenge_menu_release.load(std::memory_order_relaxed));
+}
+bool challenge_menu_key(int key) noexcept {
+    return key==VK_ESCAPE && suppress_challenge_menu();
+}
+bool challenge_panel_owns_input() noexcept {
+    return challenge_native_panel.load(std::memory_order_relaxed);
+}
 namespace {
 std::atomic<unsigned> prompt_xinput{}, prompt_direct{}, prompt_hid{}, prompt_raw{};
 // A read the game made while a card held its input: counted, by the way it read.
@@ -31,7 +48,10 @@ PromptReads take_prompt_reads() noexcept {
 bool block_polled_input() {
     const auto error = GetLastError();
     const bool capture = !overlay_input_access && (owns_menu_cursor(state()) || state().freecam_controller_active.load(std::memory_order_relaxed) ||
-                                                    state().prompt_input_active.load(std::memory_order_relaxed));
+                                                    state().prompt_input_active.load(std::memory_order_relaxed) ||
+        game::owned_menu_countdown_capture(throwdowns::kit::match().input_lock,challenge_panel_owns_input()) ||
+        GetTickCount64() < mode_input_paused_until.load(std::memory_order_relaxed) ||
+        (mode_hidden_buttons.load(std::memory_order_relaxed) & mode_held_buttons.load(std::memory_order_relaxed)));
     SetLastError(error);
     return capture;
 }
@@ -96,7 +116,9 @@ void refresh_bluetooth_crc(std::uint8_t* bytes, DWORD size) noexcept {
     std::memcpy(bytes + size - 4, &crc, sizeof(crc));
 }
 void neutral_hid(const InputCaptureHooks::HidRead& read, DWORD size) {
-    if (!block_polled_input() || !read.buffer || size > read.capacity) return;
+    const bool capture=block_polled_input();
+    const bool menu=suppress_challenge_menu();
+    if ((!capture && !menu) || !read.buffer || size > read.capacity) return;
     auto* bytes = static_cast<std::uint8_t*>(read.buffer);
     // USB or Bluetooth decides where the buttons are in a report with id 1. It is the device's
     // report length that tells them apart, and Windows pads every read to that length, so it
@@ -110,17 +132,22 @@ void neutral_hid(const InputCaptureHooks::HidRead& read, DWORD size) {
         (bytes[0] == 0x31 || (bytes[0] == 1 && !bluetooth));
     const unsigned offset = bytes[0] == 0x31 ? 2 : bytes[0] == 0x11 ? 3 : 1;
     auto* data = bytes + offset;
-    std::fill_n(data, 4, std::uint8_t{128});
-    if (sense_full) {
+    if(!capture) {
+        // Options is the normalized Start bit. Preserve D-pad, face buttons,
+        // sticks and triggers, including the device's sequence counters.
+        data[sense_full?8:5]&=std::uint8_t{0xdf};
+    } else if (sense_full) {
+        std::fill_n(data,4,std::uint8_t{128});
         data[4] = data[5] = 0; // triggers; retain report sequence at +6
         data[7] = 8; data[8] = data[9] = 0;
     } else {
+        std::fill_n(data,4,std::uint8_t{128});
         data[4] = 8; data[5] = 0; data[6] &= 0xfc; // retain DS4 sequence bits
         data[7] = data[8] = 0;
     }
     refresh_bluetooth_crc(bytes, size);
     static std::atomic<bool> reported{};
-    if (!reported.exchange(true)) logging::printf(logging::Level::info, logging::Channel::input,
+    if (capture && !reported.exchange(true)) logging::printf(logging::Level::info, logging::Channel::input,
         "Native PlayStation HID report neutralized; overlay retains its independent input stream. (%s over %s, report 0x%02x of %lu bytes, "
         "the game's buffer %lu.)", read.kind == PlayStationPad::dualsense ? "DualSense" : "DualShock 4",
         bluetooth ? "Bluetooth" : "USB", bytes[0], size, read.capacity);
@@ -346,6 +373,7 @@ void filter_pad(bool outer, DWORD user, XINPUT_STATE* output) noexcept {
 template<std::size_t I>
 DWORD WINAPI captured_front(DWORD user, XINPUT_STATE* output) {
     const bool capture = block_polled_input();
+    const bool menu=suppress_challenge_menu();
     const bool outer = overlay_input_access == 0;
     note_prompt_read(prompt_xinput);
     DWORD result;
@@ -356,8 +384,12 @@ DWORD WINAPI captured_front(DWORD user, XINPUT_STATE* output) {
     if (result == ERROR_SUCCESS && output && capture) {
         output->Gamepad = {};
         output->dwPacketNumber ^= 0x80000000u;
-    } else if (result == ERROR_SUCCESS) {
+    } else if (result == ERROR_SUCCESS && output) {
         filter_pad(outer, user, output);
+        if (menu) {
+            output->Gamepad.wButtons=game::owned_menu_buttons(output->Gamepad.wButtons,true);
+            output->dwPacketNumber ^= 0x40000000u;
+        }
     }
     return result;
 }
@@ -388,15 +420,16 @@ void keep_xinput_capture_first() {
 }
 SHORT WINAPI captured_async_key(int key) {
     const auto value = original<SHORT(WINAPI*)(int)>(input_hooks().async_key)(key);
-    return block_polled_input() ? 0 : value;
+    return block_polled_input() || challenge_menu_key(key) ? 0 : value;
 }
 SHORT WINAPI captured_key(int key) {
     const auto value = original<SHORT(WINAPI*)(int)>(input_hooks().key)(key);
-    return block_polled_input() ? 0 : value;
+    return block_polled_input() || challenge_menu_key(key) ? 0 : value;
 }
 BOOL WINAPI captured_keyboard(PBYTE keys) {
     const auto result = original<BOOL(WINAPI*)(PBYTE)>(input_hooks().keyboard)(keys);
     if (result && keys && block_polled_input()) std::memset(keys, 0, 256);
+    else if(result && keys && challenge_menu_key(VK_ESCAPE))keys[VK_ESCAPE]=0;
     return result;
 }
 UINT WINAPI captured_raw_data(HRAWINPUT input, UINT command, LPVOID data, PUINT size, UINT header_size) {
@@ -414,7 +447,10 @@ UINT WINAPI captured_raw_data(HRAWINPUT input, UINT command, LPVOID data, PUINT 
         const bool mouse = raw->header.dwType == RIM_TYPEMOUSE && result >= offsetof(RAWINPUT, data) + sizeof(RAWMOUSE);
         const bool keyboard =
             raw->header.dwType == RIM_TYPEKEYBOARD && result >= offsetof(RAWINPUT, data) + sizeof(RAWKEYBOARD);
-        if (!block_polled_input()) {
+        if(keyboard && challenge_menu_key(raw->data.keyboard.VKey)) {
+            raw->data.keyboard={};raw->data.keyboard.VKey=255;
+            raw->data.keyboard.Flags=RI_KEY_BREAK;raw->data.keyboard.Message=WM_KEYUP;
+        } else if (!block_polled_input()) {
             if ((mouse || keyboard) && !overlay_input_access) held_input().seen(*raw);
         } else if ((mouse || keyboard) && held_input().release_only(*raw)) {
             // A key or button the game holds still comes up; presses stay blocked.
@@ -457,6 +493,9 @@ void note_input_record(const RAWINPUT& record) noexcept {
         last.mouse_buttons.store(record.data.mouse.usButtonFlags, std::memory_order_relaxed);
         last.mouse_device.store(record.header.hDevice, std::memory_order_relaxed);
         last.mouse_at.store(GetTickCount64(), std::memory_order_relaxed);
+        if ((record.data.mouse.usButtonFlags & RI_MOUSE_WHEEL) &&
+            GetTickCount64() < mode_input_paused_until.load(std::memory_order_relaxed))
+            mode_mouse_wheel.fetch_add(static_cast<SHORT>(record.data.mouse.usButtonData) / WHEEL_DELTA, std::memory_order_relaxed);
     }
 }
 std::string input_device_name(HANDLE device) {
@@ -519,6 +558,10 @@ UINT WINAPI captured_raw_buffer(PRAWINPUT data, PUINT size, UINT header_size) {
             const bool mouse = record->header.dwType == RIM_TYPEMOUSE && bytes >= offsetof(RAWINPUT, data) + sizeof(RAWMOUSE);
             const bool keyboard =
                 record->header.dwType == RIM_TYPEKEYBOARD && bytes >= offsetof(RAWINPUT, data) + sizeof(RAWKEYBOARD);
+            if(keyboard && challenge_menu_key(record->data.keyboard.VKey)) {
+                record->data.keyboard={};record->data.keyboard.VKey=255;
+                record->data.keyboard.Flags=RI_KEY_BREAK;record->data.keyboard.Message=WM_KEYUP;
+            }
             if (!capture) {
                 if ((mouse || keyboard) && !overlay_input_access) held_input().seen(*record);
             } else if ((mouse || keyboard) && held_input().release_only(*record)) {
@@ -650,6 +693,9 @@ DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
     const bool capture = block_polled_input();
     const bool outer = overlay_input_access == 0;
     note_prompt_read(prompt_xinput);
+    const auto hidden = overlay_input_access ? std::uint16_t{} : static_cast<std::uint16_t>(
+        mode_hidden_buttons.load(std::memory_order_relaxed) |
+        (suppress_challenge_menu()?XINPUT_GAMEPAD_START:0));
     DWORD result;
     { // XInput exports can forward through another hooked XInput export.
         OverlayInputAccess access;
@@ -660,8 +706,12 @@ DWORD WINAPI captured_xinput(DWORD user, XINPUT_STATE* output) {
         // The game must notice a neutral state even if the physical packet did
         // not change between opening the menu and its next controller poll.
         output->dwPacketNumber ^= 0x80000000u;
-    } else if (result == ERROR_SUCCESS) {
+    } else if (result == ERROR_SUCCESS && output) {
         filter_pad(outer, user, output);
+        if (hidden) {
+            output->Gamepad.wButtons &= static_cast<WORD>(~hidden);
+            output->dwPacketNumber ^= 0x40000000u;
+        }
     }
     return result;
 }
@@ -670,6 +720,9 @@ DWORD WINAPI captured_keystroke(DWORD user, DWORD reserved, PXINPUT_KEYSTROKE ou
     const auto result = original<DWORD(WINAPI*)(DWORD, DWORD, PXINPUT_KEYSTROKE)>(
         input_hooks().xinput_keystroke[I])(user, reserved, output);
     if (result == ERROR_SUCCESS && output && block_polled_input()) { *output = {}; return ERROR_EMPTY; }
+    if(result==ERROR_SUCCESS && output && suppress_challenge_menu() && output->VirtualKey==VK_PAD_START) {
+        *output={};return ERROR_EMPTY;
+    }
     return result;
 }
 
@@ -725,6 +778,8 @@ HRESULT STDMETHODCALLTYPE captured_device_state(void* device, DWORD size, LPVOID
             for (std::size_t offset = 8 * sizeof(DWORD); offset < 12 * sizeof(DWORD); offset += sizeof(DWORD))
                 std::memcpy(bytes + offset, &released_pov, sizeof(released_pov));
         }
+    } else if(SUCCEEDED(result) && data && size==256 && challenge_menu_key(VK_ESCAPE)) {
+        static_cast<std::uint8_t*>(data)[DIK_ESCAPE]=0;
     }
     return result;
 }
@@ -734,6 +789,15 @@ HRESULT STDMETHODCALLTYPE captured_device_data(void* device, DWORD size, LPDIDEV
     const auto result = original<HRESULT(STDMETHODCALLTYPE*)(void*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD)>(
         input_hooks().device_data[I])(device, size, data, count, capture ? flags & ~DIGDD_PEEK : flags);
     if (SUCCEEDED(result) && capture && count) *count = 0;
+    else if(SUCCEEDED(result) && data && count && size==sizeof(DIDEVICEOBJECTDATA) && challenge_menu_key(VK_ESCAPE)) {
+        std::lock_guard lock(input_hooks().formats_mutex);
+        const auto format=input_hooks().formats.find(device);
+        if(format!=input_hooks().formats.end() && format->second.size==256) {
+            DWORD kept{};
+            for(DWORD i=0;i<*count;++i)if(data[i].dwOfs!=DIK_ESCAPE)data[kept++]=data[i];
+            *count=kept;
+        }
+    }
     return result;
 }
 bool install_device_capture(void* device) {
@@ -953,6 +1017,26 @@ bool install_input_capture() {
     return true;
 }
 
+}
+
+namespace dingosdk::overlay {
+// A plugin's overlay dialog is up: it owns the cursor and the pad. (The old name stays until
+// every caller uses this one.)
+void set_plugin_dialog_active(bool active) noexcept { detail::state().plugin_dialog_visible.store(active); }
+bool interface_open() noexcept { return detail::interactive_visible(detail::state()); }
+void hide_game_buttons(std::uint16_t buttons) noexcept { detail::mode_hidden_buttons.store(buttons, std::memory_order_relaxed); }
+void capture_challenge_menu_input(bool active,bool native_panel,bool opening_key_down) noexcept {
+    detail::challenge_menu_release.store(game::owned_menu_release_latch(
+        detail::challenge_menu_release.load(std::memory_order_relaxed),active,opening_key_down),std::memory_order_relaxed);
+    detail::challenge_menu_capture.store(active,std::memory_order_relaxed);
+    detail::challenge_native_panel.store(native_panel,std::memory_order_relaxed);
+}
+void hold_game_buttons(std::uint16_t held) noexcept { detail::mode_held_buttons.store(held, std::memory_order_relaxed); }
+void pause_game_input(bool paused) noexcept {
+    detail::mode_input_paused_until.store(paused ? GetTickCount64() + 500 : 0, std::memory_order_relaxed);
+}
+bool key_down(int virtual_key) noexcept { detail::OverlayInputAccess access; return (GetAsyncKeyState(virtual_key) & 0x8000) != 0; }
+int take_mouse_wheel() noexcept { return detail::mode_mouse_wheel.exchange(0, std::memory_order_relaxed); }
 }
 
 extern "C" void DingoSDKOverlaySetGamepadFilter(dingosdk::overlay::GamepadFilter filter) {

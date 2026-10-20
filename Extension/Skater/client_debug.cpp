@@ -7,9 +7,8 @@
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Multiplayer/session_tools.h"
 #include "free_flight.h"
+#include "client_camera_activation.h"
 #include "Engine/Game/Skater/first_person_cycle.h"
-#include "drone_flight.h"
-#include "drone_audio.h"
 #include "Engine/Game/Skater/velocity_boost.h"
 #include "Extension/Multiplayer/Remote/native_skater.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
@@ -22,6 +21,9 @@
 #include <utility>
 
 namespace dingosdk::client_source::detail {
+namespace {
+std::atomic<std::uintptr_t> verified_free_camera{};
+}
 double source_flight_now() {
     // GetTickCount64 advances by roughly 15.6 ms even at high frame rates.
     // Keep those coarse ticks for deadlines, never for integrating motion.
@@ -35,8 +37,7 @@ double source_flight_now() {
     return static_cast<double>(counter.QuadPart) / frequency;
 }
 namespace {
-// Free-flight speed: any speed between the slowest and fastest the console offers (0.6 to 1500),
-// so the FPV drone's presets and its top speed slider can set their own (drone_flight.h).
+// Free-flight speed: any speed between the slowest and fastest the console offers (0.6 to 1500).
 constexpr float min_debug_speed = 0.6f, max_debug_speed = 1500.0f;
 bool valid_debug_speed(float speed) { return std::isfinite(speed) && speed >= min_debug_speed && speed <= max_debug_speed; }
 struct DebugUi { std::uintptr_t object{}; std::uint8_t draw{}; };
@@ -119,7 +120,7 @@ void debug_restore_camera(SourceTrial& trial, std::uintptr_t client, bool phase,
     auto& debug = trial.debug;
     debug_stop_noclip(debug);
     source_require(!debug.camera_ambiguous, "Native camera call had an uncertain result; restart before changing camera mode.");
-    if (!debug.camera_owned) { debug.first_person = false; debug.drone_follow = false; debug.first_person_saved_fov = 0; return; }
+    if (!debug.camera_owned) { debug.first_person = false; debug.first_person_saved_fov = 0; return; }
     source_require(phase, "Waiting for the native camera update phase.");
     auto camera = source_camera_snapshot(trial, client);
     if (debug.camera_owned) {
@@ -143,34 +144,6 @@ void debug_restore_camera(SourceTrial& trial, std::uintptr_t client, bool phase,
         debug.camera_owned = false;
         debug.flight_ready = false;
         debug.first_person = false;
-        debug.drone_follow = false;
-    }
-}
-// The game's own collision query (the Park Editor's ray), so the drone hits ground, walls and ramps.
-const drone::World& drone_world() {
-    static const drone::World world{[](const std::array<float, 3>& from, const std::array<float, 3>& to,
-                                      std::array<float, 3>& hit) {
-        const auto found = local_surface_hit(from, to);
-        if (!found) return false;
-        hit = *found;
-        return true;
-    }};
-    return world;
-}
-// Drone follow: the pilot's tuning from the DRONE page's follow distance and aggression.
-drone::follow::Tuning follow_tuning() {
-    const auto& values = drone::knobs().value;
-    return drone::follow::tuning_for(values[drone::kFollowDistance].load(std::memory_order_relaxed),
-                                     values[drone::kFollowAggression].load(std::memory_order_relaxed));
-}
-// Drone follow: the skater's position and which way it faces, or nothing between lives.
-std::optional<std::pair<drone::detail::Vec3, drone::detail::Vec3>> follow_target(SourceTrial& trial, std::uintptr_t client) {
-    try {
-        overlay::DebugModel unused;
-        const auto skater = debug_skater(trial.base, client, unused);
-        return std::pair{drone::detail::Vec3{skater[12], skater[13], skater[14]}, drone::detail::row(skater, 2)};
-    } catch (...) {
-        return std::nullopt;
     }
 }
 // `taken` receives the camera snapshot this step read, for the tick's model to reuse:
@@ -254,71 +227,8 @@ void debug_flight_tick(SourceTrial& trial, std::uintptr_t client, bool ready, bo
                 ? "First person on. True first person keeps the view level and steady."
                 : "First person on. The camera follows the skater's head.";
         }
-    } else if (debug.drone_follow) {
-        // The autopilot flies the drone behind the skater through the flight model; between
-        // lives (a bail, a respawn) it holds on to where the skater was last.
-        drone::audio::ensure_started();
-        const auto tuning = follow_tuning();
-        const auto cfg = drone::follow::flight_settings(drone::live_settings(), tuning);
-        const auto& world = drone_world();
-        const auto target = follow_target(trial, client);
-        const drone::detail::Vec3 at{debug.flight_matrix[12], debug.flight_matrix[13], debug.flight_matrix[14]};
-        const drone::detail::Vec3 skater = target ? target->first : debug.follow_pilot.last_target;
-        const drone::detail::Vec3 facing = target ? target->second : debug.follow_pilot.heading;
-        if (target && drone::detail::length(drone::detail::sub(skater, at)) > 60.0f) {
-            // Left far behind (a respawn, a teleport): it is back where it should be.
-            const auto spot = drone::follow::spot(skater, {0, 0, 0}, debug.follow_pilot.heading, tuning, 0.0f);
-            debug.flight_matrix = drone::follow::pose_facing(spot, skater);
-            debug.drone_state.valid = false;
-            debug.follow_pilot = {};
-        }
-        const auto cmd = drone::follow::fly(debug.follow_pilot, debug.drone_state, at, skater, facing, seconds, cfg, tuning, &world);
-        next = drone::step_drone_cmd(debug.flight_matrix, debug.drone_state, cmd, seconds, std::max(debug.flight_speed, 8.0f), cfg, &world);
     } else {
-        if (drone::is_enabled()) {
-            drone::audio::ensure_started();
-            const auto& world = drone_world();
-            bool flown_by_radio = false;
-            if (drone::radio::calibrating()) {
-                // The controller setup is moving the sticks and switches: hold the drone where it is.
-                next = debug.flight_matrix;
-                flown_by_radio = true;
-            } else if (drone::radio::config().enabled.load(std::memory_order_acquire) && drone::radio::game_in_foreground() &&
-                       drone::gamepad_mode()) {
-                // A gamepad, read directly (it is kept from the game while the drone has it).
-                overlay::Gamepad pad;
-                {
-                    drone::radio::detail::InputAccess access;
-                    pad = overlay::read_gamepad();
-                }
-                if (pad.valid) {
-                    // While the ReSkate menu is open (no flight input) the pad is the menu's: the drone
-                    // holds still in the air and the buttons do nothing.
-                    const bool menu_closed = input && input->active;
-                    drone::apply_gamepad_buttons(pad.buttons, menu_closed);
-                    overlay::Gamepad resting;
-                    resting.valid = true;
-                    next = drone::step_drone_radio(debug.flight_matrix, debug.drone_state,
-                        drone::read_gamepad(menu_closed ? pad : resting), seconds, debug.flight_speed, drone::live_settings(), &world);
-                    flown_by_radio = true;
-                }
-            } else if (drone::radio::config().enabled.load(std::memory_order_acquire) && drone::radio::game_in_foreground()) {
-                const auto sample = drone::radio::poll();
-                if (sample.valid) {
-                    drone::apply_switches(sample.axes, sample.buttons);
-                    next = drone::step_drone_radio(debug.flight_matrix, debug.drone_state,
-                        drone::read_sticks(sample.axes), seconds, debug.flight_speed,
-                        drone::live_settings(), &world);
-                    flown_by_radio = true;
-                }
-            }
-            if (!flown_by_radio)
-                next = drone::step_drone_flight(debug.flight_matrix, debug.drone_state, input ? *input : idle, seconds, debug.flight_speed,
-                    drone::live_settings(), &world);
-        } else {
-            debug.drone_state.valid = false; // restart from the current view next time drone mode turns on
-            next = step_free_flight(debug.flight_matrix, input ? *input : idle, seconds, debug.flight_speed);
-        }
+        next = step_free_flight(debug.flight_matrix, input ? *input : idle, seconds, debug.flight_speed);
     }
     // Runs after the native client update on the same engine thread. Publishing
     // our owned pose each tick also prevents native helper input from drifting it.
@@ -426,18 +336,6 @@ void load_saved_debug(InteractiveDebug& debug) noexcept {
         if (const auto fov = saved::number(saved::free_camera_fov);
             fov && (*fov == 0.0f || (*fov >= first_person_fov_min && *fov <= first_person_fov_max)))
             debug.free_camera_fov = *fov;
-        // Drone tuning saved by `dronetune`.
-        for (std::size_t i = 0; i < drone::knob_count; ++i) {
-            const auto tuned = saved::number(std::format("Drone.Tune.{}", drone::knob_info[i].name).c_str());
-            if (tuned && *tuned >= drone::knob_info[i].lo && *tuned <= drone::knob_info[i].hi) drone::knobs().value[i] = *tuned;
-        }
-        // Drone radio: on/off and which axis is which (signed 1..6), saved by the console commands.
-        if (const auto radio_on = saved::number("Drone.Radio")) drone::radio::config().enabled = *radio_on != 0.0f;
-        for (int i = 0; i < 4; ++i) {
-            const auto axis = saved::number(std::format("Drone.Axis{}", i).c_str());
-            const int signed_axis = axis ? static_cast<int>(std::lround(*axis)) : 0;
-            if (signed_axis != 0 && std::abs(signed_axis) <= 6) drone::radio::config().map[i] = signed_axis;
-        }
         auto arm = debug.first_person_settings;
         if (const auto enabled = profile_runtime::local_preference(saved::spring)) arm.enabled = *enabled;
         for (std::size_t i = 0; i < 3; ++i) {
@@ -794,7 +692,6 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
         source_require(camera.identity == debug.camera_identity && camera.mode == 1 &&
             camera.active == camera.identity.camera, "First person could not take the camera.");
         debug.first_person = true;
-        debug.drone_follow = false;
         debug.first_person_waiting = false;
         {
             float saved{};
@@ -817,47 +714,6 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
         debug.status = "First person on. The camera follows the skater's head.";
         return;
     }
-    if (request.action == overlay::DebugAction::set_drone_follow) {
-        if (!request.enabled) {
-            if (!debug.drone_follow) return;
-            debug_restore_camera(trial, client, phase, error); // Also ends drone follow.
-            debug.status = "Drone follow off. Original camera restored.";
-            return;
-        }
-        if (debug.drone_follow) return;
-        // The skater to follow comes first, so nothing is taken without one.
-        const auto target = follow_target(trial, client);
-        source_require(target.has_value(), "Drone follow needs the local skater.");
-        // Take mode 1 through the verified Freecam path, as first person does, then fly it.
-        if (!debug.camera_owned)
-            debug_action(trial, client, can_control, phase, {overlay::DebugAction::set_free_camera, true}, error);
-        camera = source_camera_snapshot(trial, client);
-        source_require(camera.identity == debug.camera_identity && camera.mode == 1 &&
-            camera.active == camera.identity.camera, "Drone follow could not take the camera.");
-        if (debug.first_person) {
-            first_person_disarm();
-            first_person_restore_fov(debug);
-            debug.first_person = false;
-        }
-        // It takes off from its spot behind the skater, facing them.
-        debug.follow_pilot = {};
-        drone::detail::Vec3 heading{target->second[0], 0.0f, target->second[2]};
-        heading = drone::detail::length(heading) > 0.1f ? drone::detail::normalize(heading) : drone::detail::Vec3{0, 0, -1};
-        const auto tuning = follow_tuning();
-        const auto spot = drone::follow::spot(target->first, {0, 0, 0}, heading, tuning, 0.0f);
-        auto pose = drone::follow::pose_facing(spot, target->first);
-        source_require(valid_flight_transform(pose), "Drone follow pose is invalid.");
-        debug.flight_ready = false;
-        SetLastError(error);
-        trial.camera_transform(camera.identity.camera, &pose);
-        debug.flight_matrix = pose;
-        debug.flight_time = source_flight_now();
-        debug.drone_state.valid = false;
-        debug.drone_follow = true;
-        debug.flight_ready = true;
-        debug.status = "Drone follow on. The drone flies itself behind you; skate as normal.";
-        return;
-    }
     if (request.action == overlay::DebugAction::set_free_camera) {
         debug_stop_noclip(debug);
         if (!request.enabled) {
@@ -866,43 +722,22 @@ void debug_action(SourceTrial& trial, std::uintptr_t client, bool can_control, b
             debug.status = "Original camera restored.";
             return;
         }
-        if (debug.camera_owned) {
-            source_require(camera.identity == debug.camera_identity && camera.mode == 1,
-                "The owned free camera changed.");
+        if (debug.camera_owned && debug.first_person) {
+            source_require(camera.identity == debug.camera_identity && camera.mode == 1 &&
+                camera.active == camera.identity.camera, "The owned free camera changed.");
             if (debug.first_person) {
-                // Keep the owned camera and fly on from the last head pose.
                 first_person_disarm();
                 first_person_restore_fov(debug);
                 debug.first_person = false;
                 debug.status = "Freecam enabled from the first-person view.";
             }
-            if (debug.drone_follow) {
-                // Keep the owned camera and fly on from where the drone was.
-                debug.drone_follow = false;
-                debug.status = "Freecam enabled from drone follow.";
-            }
-            return;
         }
-        source_require(camera.mode == 0 && camera.view_enabled && !camera.input_active,
-            "An active local view with no other camera override is required.");
-        const auto pose = debug_view_matrix(trial, camera);
-        debug.camera_identity = camera.identity;
-        debug.camera_owned = true; debug.camera_ambiguous = true;
-        SetLastError(error);
-        trial.camera_mode(camera.identity.controller, 1);
-        debug.camera_ambiguous = false;
-        camera = source_camera_snapshot(trial, client);
-        source_require(camera.identity == debug.camera_identity && camera.mode == 1 &&
-            camera.active == camera.identity.camera && camera.input_active,
-            "Freecam activation could not be verified; disable Freecam to restore the view.");
-        SetLastError(error);
-        trial.camera_transform(camera.identity.camera, &pose);
-        debug.flight_matrix = pose;
-        debug.flight_time = source_flight_now();
-        debug.flight_ready = true;
-        debug.drone_state.valid = false; // a fresh Freecam starts the drone at rest
-        debug.status = drone::is_enabled() ? "Freecam enabled in drone mode. WASD pitch/roll, Q E throttle, hold RMB + mouse to yaw."
-            : "Freecam enabled. WASD / Q E move; hold RMB to look; Shift boosts.";
+        const bool recovering = debug.camera_owned;
+        if (activate_free_camera(trial, client, camera, error)) {
+            debug.flight_time = source_flight_now();
+            debug.status = recovering ? "Freecam restored after native placement changed the view."
+                : "Freecam enabled. WASD / Q E move; hold RMB to look; Shift boosts.";
+        }
         return;
     }
     source_require(false, "Unknown debug request.");
@@ -1054,10 +889,10 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
     first_person_cycle_tick(trial, client, can_control, camera_phase_observed, error.value);
     // Camera ownership survives a busy tick or a failed presentation snapshot.
     // Input capture must follow the lease, not those transient model failures.
-    // (First person and drone follow own the same camera but leave the skater its controls.)
-    state.free_camera_active.store(debug.camera_owned && !debug.first_person && !debug.drone_follow, std::memory_order_release);
-    model.free_camera = debug.camera_owned && !debug.first_person && !debug.drone_follow;
-    model.drone_follow = debug.camera_owned && debug.drone_follow;
+    // (First person owns the same camera but leaves the skater its controls.)
+    state.free_camera_active.store(debug.camera_owned && !debug.first_person, std::memory_order_release);
+    model.free_camera = debug.camera_owned && !debug.first_person;
+    verified_free_camera.store(0, std::memory_order_release);
     std::optional<SourceCameraSnapshot> flight_camera;
     try { debug_flight_tick(trial, client, can_control, camera_phase_observed, flight_input, error.value, flight_camera); }
     catch (const SourceGuard& guard) { debug_stop_noclip(debug); debug.status = guard.message; }
@@ -1074,9 +909,10 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
     } catch (...) {}
     try {
         const auto camera = flight_camera ? *flight_camera : source_camera_snapshot(trial, client);
+        if (verified_free_camera_view(debug, camera))
+            verified_free_camera.store(camera.identity.camera, std::memory_order_release);
         const bool owned_view = camera.mode == 1 && camera.active == camera.identity.camera;
-        model.free_camera = owned_view && !debug.first_person && !debug.drone_follow;
-        model.drone_follow = owned_view && debug.drone_follow;
+        model.free_camera = owned_view && !debug.first_person;
         // Handed back on foot still reads as on, so the toggle can switch it off.
         model.first_person = (owned_view && debug.first_person) || debug.first_person_paused;
         model.first_person_fov = debug.first_person_fov;
@@ -1231,6 +1067,9 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
 }
 bool client_free_camera_active() noexcept {
     return source_state().free_camera_active.load(std::memory_order_acquire);
+}
+std::uintptr_t client_free_camera_view() noexcept {
+    return verified_free_camera.load(std::memory_order_acquire);
 }
 bool restore_client_debug(std::uintptr_t base, std::uintptr_t client, bool camera_phase_observed) {
     const overlay::DebugRequest request{overlay::DebugAction::restore_debug};

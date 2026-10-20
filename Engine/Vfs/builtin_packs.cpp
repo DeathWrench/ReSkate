@@ -24,7 +24,7 @@ struct Embedded {
     const wchar_t* resource;
     const char* name;
 };
-constexpr Embedded embedded[]{{L"BUILTIN_PACK_FPV_DRONE", "fpv_drone"}};
+constexpr Embedded embedded[]{{L"BUILTIN_PACK_THROWDOWN_MENU", "throwdown_menu"}};
 // Retired mods (builtin_packs.h), in small letters.
 constexpr std::string_view retired[]{"fourth_studio-board_break"};
 std::string lower_text(std::string_view text) {

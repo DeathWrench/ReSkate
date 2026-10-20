@@ -5,7 +5,7 @@
 #include <vector>
 
 // Game content ReSkate carries itself: packs of game assets built by ReSkate Studio, zipped into
-// ReSkate.dll (the FPV drone's model, tools/models/build_drone_pack.py). Nobody installs or sees
+// ReSkate.dll (the Throwdowns logo grid, tools/builtin/build_throwdown_menu_pack.py). Nobody installs or sees
 // them. Official mods (below) are the other content ReSkate keeps for every player. Before a merge each is unpacked under Mods/.reskate-builtin/<name> (a dot folder,
 // which no mod list shows) when the one embedded differs from what is there, and the catalogue
 // merges it after every installed mod, always on (mod_catalog.cpp).
@@ -35,9 +35,6 @@ inline constexpr std::string_view official_stamp = ".official-version";
 // launcher keeps the last list of official mods it read there.
 inline constexpr std::string_view official_folder = ".reskate-official";
 inline constexpr std::string_view official_off_file = "official-off.txt";
-// The official mods the features are made for, by folder name (Namespace-Name).
-inline constexpr std::string_view board_break_official = "Fourth_Studio-Board_Break_Pack";
-inline constexpr std::string_view road_rash_official = "Fourth_Studio-Road_Rash";
 // Moves the official mods kept in Mods/.reskate-official into the Mods folder, each at the bottom
 // of the load order (where they loaded from there), switched off when they were turned off there.
 // Says what it did, a line each. Does nothing once there is nothing left there. Never throws.

@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <array>
+#include <optional>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -136,7 +137,10 @@ struct State {
     std::atomic<bool> prompt_pointer{false};
     // The item grids' search box (item_browser_overlay.cpp): "-" opens it while a grid has the focus.
     std::atomic<bool> item_search_visible{false}, item_search_focus_requested{false};
+    std::atomic<bool> plugin_dialog_visible{false};
     std::atomic<bool> item_search_character_pending{false}, item_search_escape_pending{false};
+    // A plugin's full-screen screen is open (plugin_overlay.cpp): it has the input, as the menu.
+    std::atomic<bool> plugin_screen_visible{false};
     std::atomic<bool> input_attached{false};
     std::atomic<bool> stop{false};
     std::atomic<HWND> window{nullptr};
@@ -183,6 +187,8 @@ struct State {
     ComPtr<ID3D12Resource> menu_map_texture, menu_map_upload;
     // The icon of the mod the highlighted item is from (item_browser_overlay.cpp), in the fourth.
     ComPtr<ID3D12Resource> mod_icon_texture, mod_icon_upload;
+    // Plugins' pictures (plugin_images.cpp), from the fifth slot on.
+    std::array<ComPtr<ID3D12Resource>, 16> plugin_textures, plugin_uploads;
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12Fence> fence;
     HANDLE fence_event = nullptr;
@@ -316,14 +322,25 @@ void menu_map_pixels_uploaded(ImTextureID texture, unsigned serial);
 void menu_map_pixels_lost();
 // The item card's mod icon (item_browser_overlay.cpp), the same way, in the fourth slot.
 bool take_mod_icon_pixels(CardPixels& pixels);
+// Plugins' pictures (plugin_images.cpp): the SRV heap's slots from plugin_image_first_slot on. A
+// draw asks for a picture by its file (its id once on the GPU, 0 until then); the render thread
+// takes one decoded picture a frame to upload and says where it went.
+inline constexpr UINT plugin_image_first_slot = 4, plugin_image_slots = 16;
+ImTextureID plugin_image(const std::string& path, ImVec2& size);
+struct PluginImageUpload {
+    std::string path;
+    int slot{};
+    CardPixels pixels;
+};
+std::optional<PluginImageUpload> take_plugin_image();
+// id 0: it failed; `later`: the slot was busy, so it waits for another frame.
+void plugin_image_uploaded(const std::string& path, int slot, ImTextureID id, bool later = false);
+void plugin_images_lost();
 void mod_icon_uploaded(ImTextureID texture, unsigned serial);
 void mod_icon_lost();
 // Game debug text (game_text_overlay.cpp): polled every presented frame.
 bool game_text_pending();
 void draw_game_text();
-// The FPV drone's goggle display and stick overlay (drone_hud_overlay.cpp): polled every presented frame.
-bool drone_hud_pending();
-void draw_drone_hud();
 // ReSkate's S.K.A.T.E. throwdown HUD (skate_hud_overlay.cpp): polled every presented frame.
 bool skate_hud_pending();
 void draw_skate_hud();

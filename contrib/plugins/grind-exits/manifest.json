@@ -1,0 +1,7 @@
+{
+    "name": "Grind_Exits",
+    "version_number": "0.1.0",
+    "website_url": "https://github.com/Dingo-Shenanigans/ReSkate",
+    "description": "Press LT or RT while grinding to pick the side you pop out to, whatever trick and spin you do.",
+    "dependencies": []
+}

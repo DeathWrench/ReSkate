@@ -1,6 +1,8 @@
 #include "client_source_spawn.h"
+#include "skater_push.h"
 #include "client_source_spawn_internal.h"
 #include "no_bail.h"
+#include "Engine/Game/Multiplayer/session_tools.h"
 #include "offboard_flight.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
@@ -8,6 +10,7 @@
 #include "Engine/Game/Build/20260929/no_bail.h"
 #include "Engine/Game/Build/20260929/offboard_flight.h"
 #include "free_flight.h"
+#include "Engine/Game/Multiplayer/session_competition.h"
 #include <cmath>
 
 namespace dingosdk::client_source::detail {
@@ -113,6 +116,7 @@ void noclip_apply_velocity(std::uintptr_t core) noexcept {
     const auto apply_boost = [&](InteractiveDebug::VelocityRequest& boost, std::uint64_t& updates, bool up, bool offboard = false) {
         if (!boost.valid || boost.core != core) return;
         try {
+            source_require(session_boosts_allowed(), "Boosts are disabled while competition physics are on.");
             if (offboard && boost.applied && GetTickCount64() >= boost.expires) {
                 boost.valid = false;
                 state.offboard_boost_core.store(0, std::memory_order_release);
@@ -183,6 +187,7 @@ void noclip_apply_velocity(std::uintptr_t core) noexcept {
     const auto& request = debug.noclip_velocity;
     if (!debug.noclip || !request.valid || request.core != core) return;
     try {
+        source_require(session_noclip_allowed(), "Noclip is disabled while competition physics are on.");
         if (GetTickCount64() >= request.expires) { debug_stop_noclip(debug); debug.status = "Flight input timed out."; return; }
         const auto bodies = debug_noclip_bodies(state.trial.base, request.client, request.entity);
         source_require(bodies.core == core, "Skater physics was replaced; flight stopped.");
@@ -344,15 +349,63 @@ void trainer_push_speed(std::uintptr_t core) noexcept {
         }
     } catch (...) {}
 }
+// A plugin's push (skater_push.h), written by the next on-board physics step.
+struct PushVelocity {
+    std::atomic<bool> pending{};
+    std::uintptr_t client{},entity{},core{};
+    std::array<float,3> velocity{};
+    std::uint64_t expires{};
+};
+PushVelocity& push_velocity(){static PushVelocity r;return r;}
+void apply_push_velocity(std::uintptr_t core) noexcept {
+    auto& request=push_velocity();auto& state=source_state();
+    if(!request.pending.load(std::memory_order_acquire) || state.busy.test_and_set(std::memory_order_acquire))return;
+    SourceBusyScope scope{state.busy};
+    try {
+        const auto wanted=skater_push::peek();
+        // Held with no push: the board stays still; a push is written once it is asked for.
+        const bool hold=skater_push::holding() && request.velocity==std::array<float,3>{};
+        if(!competition_stock_physics() || GetTickCount64()>=request.expires || !wanted || *wanted!=request.velocity) {
+            request.pending.store(false,std::memory_order_release);return;
+        }
+        if(request.core!=core)return;
+        const auto bodies=debug_noclip_bodies(state.trial.base,request.client,request.entity);
+        if(bodies.core!=core || bodies.offboard)return;
+        SourceReader reader;if(reader.value<std::uint8_t>(request.entity,0x7e0)!=0)return;
+        std::array<std::array<float,3>,32> velocities{};std::array<std::uint32_t,32> flags{};
+        for(std::size_t i=0;i<bodies.parts.size();++i) {
+            velocities[i]=reader.value<std::array<float,3>>(bodies.parts[i],0x70);
+            flags[i]=reader.value<std::uint32_t>(bodies.parts[i],0x60);
+            // A push must discard fall energy as well as set absolute horizontal speed.
+            velocities[i]=request.velocity;
+        }
+        reader.verify();
+        for(std::size_t i=0;i<bodies.parts.size();++i) {
+            body_write(bodies.parts[i]+0x70,velocities[i]);
+            if(hold)body_write(bodies.parts[i]+0x90,std::array<float,3>{});
+            body_write(bodies.parts[i]+0x60,flags[i]|(hold?0x28u:8u));
+        }
+        // Hold the validated local board still while the plugin holds it (a
+        // countdown, a pending return). Native teleport must not carry old fall
+        // velocity away from its destination before the pushed speed is applied.
+        if(hold)return;
+        // A queued request is not delivery: bail/teleport physics may still be
+        // busy or have replaced the body. Acknowledge only the actual write.
+        skater_push::accepted(request.velocity);
+        request.pending.store(false,std::memory_order_release);
+    }catch(...){}
+}
 void noclip_physics_update(std::uintptr_t core) {
     const auto original = source_state().velocity_update_original.load(std::memory_order_acquire);
     if (original) original(core);
     noclip_apply_velocity(core);
     trainer_apply_jump_scale(core);
     trainer_push_speed(core);
+    apply_push_velocity(core);
 }
 bool noclip_motion_target(std::uintptr_t rig, std::uintptr_t context,
     const std::array<float,16>* supplied, std::array<float,16>& target) noexcept {
+    if(competition_stock_physics())return false;
     SourceLastError error;
     auto& state = source_state();
     if (!state.initialized.load(std::memory_order_acquire) || !state.velocity_guard_active.load(std::memory_order_acquire) ||
@@ -448,6 +501,26 @@ void noclip_skater_motion(std::uintptr_t rig, std::uintptr_t context,
 namespace dingosdk {
 using namespace client_source::detail;
 
+bool queue_skater_push_velocity(std::uintptr_t client,std::uintptr_t entity,const std::array<float,3>& velocity) noexcept {
+    try {
+        auto& state=source_state();auto& request=push_velocity();
+        if(!competition_stock_physics() || !start_client_noclip_velocity(state.trial.base) ||
+            !skater_push::valid(velocity))return false;
+        if(state.busy.test_and_set(std::memory_order_acquire))return false;
+        SourceBusyScope scope{state.busy};
+        if(request.pending.load(std::memory_order_acquire)) {
+            if(skater_push::holding() && velocity==std::array<float,3>{} &&
+               request.velocity==velocity && request.client==client && request.entity==entity) {
+                request.expires=GetTickCount64()+500;return true;
+            }
+            if(GetTickCount64()<request.expires)return false;
+            request.pending.store(false,std::memory_order_release);
+        }
+        const auto bodies=debug_noclip_bodies(state.trial.base,client,entity);if(bodies.offboard)return false;
+        request.client=client;request.entity=entity;request.core=bodies.core;request.velocity=velocity;request.expires=GetTickCount64()+500;
+        request.pending.store(true,std::memory_order_release);return true;
+    }catch(...){return false;}
+}
 bool queue_jump_scale(std::uintptr_t client, std::uintptr_t entity, float factor) noexcept {
     SourceLastError error;
     try {

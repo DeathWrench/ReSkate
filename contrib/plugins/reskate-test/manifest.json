@@ -1,0 +1,7 @@
+{
+    "name": "ReSkate_Test",
+    "version_number": "0.1.0",
+    "website_url": "https://github.com/Dingo-Shenanigans/ReSkate",
+    "description": "Checks every ReSkate plugin API: run ptest all in the console.",
+    "dependencies": []
+}

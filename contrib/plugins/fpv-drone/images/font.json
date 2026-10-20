@@ -1,0 +1,14 @@
+{
+  "order": "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.:%/-+()",
+  "columns": 13,
+  "cell": [
+    36,
+    48
+  ],
+  "pad": 1,
+  "size": [
+    494,
+    350
+  ],
+  "outline_offset": 44
+}

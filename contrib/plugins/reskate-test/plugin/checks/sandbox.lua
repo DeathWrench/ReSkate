@@ -1,0 +1,28 @@
+local h = require("harness")
+local t = h.module("sandbox")
+
+t.check("no files, programs or code loading", function()
+    assert(io == nil and package == nil and dofile == nil and loadfile == nil, "a file library")
+    assert(loadstring == nil and load == nil, "code loading")
+    assert(os.execute == nil and os.remove == nil and os.rename == nil and os.getenv == nil and os.exit == nil, "os")
+end)
+t.check("the reskate table cannot be changed", function()
+    h.refused(function() reskate.log = nil end)
+    h.refused(function() reskate.storage.get = print end)
+    h.refused(rawset, reskate, "x", 1)
+    h.refused(setmetatable, reskate, {})
+end)
+t.check("the libraries cannot be changed", function()
+    h.refused(function() string.rep = nil end)
+    h.refused(function() table.insert = nil end)
+    h.refused(function() getmetatable("").__index = {} end)
+end)
+t.check("its own globals work", function()
+    ptest_global = 1
+    assert(ptest_global == 1)
+    ptest_global = nil
+end)
+t.check("endless recursion is an error, not a crash", function()
+    local function deep(n) return deep(n + 1) + 1 end
+    h.refused(deep, 1)
+end)

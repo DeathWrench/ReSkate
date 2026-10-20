@@ -54,9 +54,6 @@ bool official(std::string_view full_name);
 // The pieces, for tests.
 // The backend's answer: its mods, or none when it is not that answer.
 std::vector<Mod> parse_list(std::string_view json);
-// The list ReSkate falls back on when it has never read one: Fourth Studio's Board Break pack and
-// Road Rash.
-std::vector<Mod> fallback_list();
 // Each official mod in the Mods folder without its stamp (installed by the player from Thunderstore)
 // is stamped with its manifest's version, as the official mod; retired mods go to the Recycle Bin;
 // mods.json forgets what went. Returns what was done, a line each. Never throws.

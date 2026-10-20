@@ -5,6 +5,8 @@
 #include "input_capture.h"
 #include "playstation_input.h"
 #include "cursor.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
+#include "Engine/Game/Input/owned_menu_input.h"
 
 using namespace dingosdk::overlay::detail;
 namespace dingosdk::overlay::detail {
@@ -148,6 +150,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         else window_cursor_input(window, message, wp);
         const bool key = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         const bool release = message == WM_KEYUP || message == WM_SYSKEYUP;
+        if((key || release) && challenge_menu_key(static_cast<int>(wp)))return 0;
         if (console_character(message) && s.console_character_pending.exchange(false)) return 0;
         if (console_character(message) && s.chat_character_pending.exchange(false)) return 0;
         if (console_character(message) && s.item_search_character_pending.exchange(false)) return 0;
@@ -281,10 +284,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
                 s.input.push_back({window, message, wp, lp});
             }
         }
-        const bool capture = owns_pointer();
+        const bool countdown = game::owned_menu_countdown_capture(
+            dingosdk::throwdowns::kit::match().input_lock,challenge_panel_owns_input());
         const bool freecam_capture = s.freecam_controller_active.load(std::memory_order_relaxed) ||
                                      s.prompt_input_active.load(std::memory_order_relaxed);
-        if (freecam_capture) release_game_buttons(window, previous);
+        if (countdown || freecam_capture) release_game_buttons(window, previous);
+        const bool capture = owns_pointer() || (countdown && wp != VK_ESCAPE && !console_toggle_key(message, wp, lp));
         if ((capture || freecam_capture) && is_input(message)) {
             // Foreground raw-input packets still need DefWindowProc cleanup.
             return message == WM_INPUT ? DefWindowProcW(window, message, wp, lp) : 0;

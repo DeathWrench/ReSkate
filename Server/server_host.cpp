@@ -1,4 +1,6 @@
 #include "server_host.h"
+#include "server_plugins.h"
+#include "Extension/Plugins/plugin_wire.h"
 #include "server_text.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
 #include "Extension/Multiplayer/Net/block_codec.h"
@@ -186,12 +188,23 @@ void Host::broadcast_player_chat(std::string_view text) {
 }
 
 bool Host::teleport_player(std::uint64_t steam_id, float x, float y, float z) {
-    (void)x; (void)y; (void)z;
     auto *guest = find(steam_id);
-    if (!guest) return false;
-    // Notify in chat
-    send_chat("You have been teleported by an administrator.", guest);
-    return true;
+    if (!guest || !guest->handshaken || !std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) return false;
+    // The player's game moves their skater (as tpall and tphere do) and says the server did.
+    auto p = packet(PacketKind::teleport, now_);
+    p.teleport = {x, y, z};
+    return send_packet(*guest, p, true, false);
+}
+
+void Host::send_plugin_message(std::uint64_t to, const std::vector<std::uint8_t> &bytes) {
+    if (bytes.empty() || bytes.size() > max_throwdown_message) return;
+    auto p = packet(PacketKind::throwdown, now_);
+    p.throwdown = bytes;
+    if (!to) {
+        broadcast(p, true, false);
+        return;
+    }
+    if (auto *guest = find(to); guest && guest->handshaken) send_packet(*guest, p, true, false);
 }
 
 std::optional<std::array<float, 3>> Host::player_position(std::uint64_t steam_id) const {
@@ -229,6 +242,8 @@ unsigned Host::players() const {
 }
 
 bool Host::start(std::string &error) {
+    if (!plugins_)
+        plugins_ = std::make_shared<ServerPlugins>(*this, config_.mods.parent_path() / "Plugins", bans_file(config_).parent_path() / "plugins", log_);
     transport_.set_send_rate(static_cast<int>(config_.send_rate * 1024));
     transport_.set_packing(config_.pack_ms);
     if (config_.steam_debug)
@@ -521,7 +536,7 @@ void Host::broadcast(const Packet &packet, bool reliable, bool fresh, std::uint6
     std::shared_ptr<const std::vector<AudioSample>> sound; // a skater's samples, shared by everyone sent them
     const bool gameplay = packet.kind == PacketKind::pose || packet.kind == PacketKind::audio ||
                           packet.kind == PacketKind::voice || packet.kind == PacketKind::cosmetics ||
-                          packet.kind == PacketKind::effects || packet.kind == PacketKind::drone;
+                          packet.kind == PacketKind::effects;
     for (auto &[id, guest] : guests_) {
         auto &p = *guest;
         if (!p.handshaken || id == except || (gameplay && !p.world_ready)) continue;
@@ -753,7 +768,6 @@ void Host::send_roster() {
     p.object_limit = config_.object_limit;
     p.object_scaling = config_.object_scaling;
     p.sync_effects = config_.sync_effects;
-    p.sync_drones = config_.sync_drones;
     p.guest_noclip = config_.noclip;
     p.guest_no_bail = config_.no_bail;
     p.guest_boosts = config_.boosts;
@@ -932,6 +946,7 @@ void Host::change_map(std::string_view map) {
         g.chat_rate = old.chat_rate;
         g.admin_budget = old.admin_budget;
         g.throwdown_budget = old.throwdown_budget;
+        g.plugin_budget = old.plugin_budget;
         g.party_budget = old.party_budget;
         g.scoring_budget = old.scoring_budget;
         g.speeding = old.speeding;
@@ -1018,8 +1033,6 @@ bool Host::accept_data(Guest &source, const Packet &p) {
         accepted = source.sound_budget.accept(now_, p.audio.size()) && source.audio.push(p, now_);
     else if (p.kind == PacketKind::effects)
         accepted = config_.sync_effects && source.effect_budget.accept(now_);
-    else if (p.kind == PacketKind::drone)
-        accepted = config_.sync_drones && source.drone_budget.accept(now_);
     else if (p.kind == PacketKind::pose)
         accepted = source.poses.push_validated(p, now_);
     // The server never plays anything back: keep only what ordering needs.
@@ -1343,12 +1356,27 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
     // Linked throwdowns (Extension/Throwdowns/throwdown_relay.cpp): opaque to the
     // server, relayed like chat to everyone else in the same world.
     if (p.kind == PacketKind::throwdown) {
-        if (p.world != world_ || !routed_source(p, link->member, peer, true, id_) || !link->throwdown_budget.accept(now_, 60))
+        // Plugin messages have a budget of their own (a few a second for a whole session).
+        if (p.world != world_ || !routed_source(p, link->member, peer, true, id_) ||
+            !(plugins::wire::is_plugin(p.throwdown) ? link->plugin_budget.accept(now_, 200) : link->throwdown_budget.accept(now_, 60)))
             return;
         // A player whose tricks score differently takes part in nothing linked: their scores,
         // attempts and drops go nowhere, whatever the other players' games would do with them.
         if (link->scoring_flagged) return;
         link->last_packet = now_;
+        // Plugin messages (Extension/Plugins/plugin_wire.h): the server's plugins hear what is for
+        // them or for everyone; only the server speaks as the authority; one for a single player
+        // goes to them alone.
+        if (plugins::wire::is_plugin(p.throwdown)) {
+            if (plugins::wire::from_authority(p.throwdown)) return;
+            if (plugins_) plugins_->receive(peer, p.throwdown);
+            if (!plugins::wire::relayed(p.throwdown)) return;
+            if (const auto to = plugins::wire::to_of(p.throwdown)) {
+                const std::set<std::uint64_t> only{to};
+                broadcast(p, true, false, p.source, &only);
+            } else broadcast(p, true, false, p.source);
+            return;
+        }
         if (config_.activity_log || config_.announce_throwdowns || config_.throwdown_locks) {
             activity_.throwdown(peer, p.throwdown, link->latest_root ? &link->latest_root->position : nullptr, now_);
             update_throwdown_locks();
@@ -1840,6 +1868,7 @@ void Host::tick(std::uint64_t now) {
         if (link.connected && !guest->connected_at) guest->connected_at = now_;
     }
     for (const auto &message : transport_.receive()) receive(message.peer, message.bytes, message.arrived);
+    if (plugins_) plugins_->tick(now_);
     relay_poses();
     flush_poses();
     receive_cosmetics();

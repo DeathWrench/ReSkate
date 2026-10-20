@@ -43,6 +43,19 @@ add_library(dingosdk_zstd STATIC ${zstd_sources})
 target_include_directories(dingosdk_zstd SYSTEM PUBLIC External/zstd/lib)
 target_compile_definitions(dingosdk_zstd PRIVATE ZSTD_LEGACY_SUPPORT=0 ZSTD_DISABLE_ASM)
 set_target_properties(dingosdk_zstd PROPERTIES FOLDER "Dependencies")
+# Luau (External/luau): the VM and compiler plugins run on (Extension/Plugins). Only these five
+# parts: no CodeGen (native code from scripts), no Analysis, no CLI or Require.
+file(GLOB dingosdk_luau_sources CONFIGURE_DEPENDS External/luau/Common/src/*.cpp External/luau/Ast/src/*.cpp
+    External/luau/Bytecode/src/*.cpp External/luau/Compiler/src/*.cpp External/luau/VM/src/*.cpp)
+add_library(dingosdk_luau STATIC ${dingosdk_luau_sources})
+target_include_directories(dingosdk_luau SYSTEM PUBLIC External/luau/Common/include External/luau/Ast/include
+    External/luau/Bytecode/include External/luau/Compiler/include External/luau/VM/include)
+target_include_directories(dingosdk_luau PRIVATE External/luau/VM/src External/luau/Bytecode/src)
+target_compile_features(dingosdk_luau PRIVATE cxx_std_17)
+if(MSVC)
+    target_compile_definitions(dingosdk_luau PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+set_target_properties(dingosdk_luau PROPERTIES FOLDER "Dependencies")
 add_library(dingosdk_sqlite STATIC External/sqlite/sqlite3.c)
 target_include_directories(dingosdk_sqlite SYSTEM PUBLIC External/sqlite)
 target_compile_definitions(dingosdk_sqlite PRIVATE SQLITE_THREADSAFE=1 SQLITE_OMIT_LOAD_EXTENSION SQLITE_DQS=0 SQLITE_DEFAULT_MEMSTATUS=0)

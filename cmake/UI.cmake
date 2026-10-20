@@ -15,8 +15,6 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/message_card.cpp
     Extension/UI/Overlay/hub_page.cpp
     Extension/UI/Overlay/game_text_overlay.cpp
-    Extension/UI/Overlay/drone_hud_overlay.cpp
-    Extension/UI/Overlay/drone_page.cpp
     Extension/UI/Overlay/perf_overlay.cpp
     Extension/UI/Overlay/skate_hud_overlay.cpp
     Extension/UI/Overlay/nametag_overlay.cpp
@@ -26,6 +24,11 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/skate_menu.cpp
     Extension/UI/Overlay/skate_menu_world.cpp
     Extension/UI/Overlay/skate_menu_addons.cpp
+    Extension/UI/Overlay/plugins_page.cpp
+    Extension/UI/Overlay/plugin_overlay.cpp
+    Extension/UI/Overlay/game_images.cpp
+    Extension/UI/Overlay/xray_overlay.cpp
+    Extension/UI/Overlay/plugin_images.cpp
     Extension/UI/Overlay/menu_map_pictures.cpp
     Extension/UI/Overlay/skate_menu_skater.cpp
     Extension/UI/Overlay/skate_menu_settings.cpp
@@ -36,6 +39,7 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/park_previews.cpp
     Extension/UI/Overlay/gpu_diagnostics.cpp
     Extension/UI/Overlay/input_capture.cpp
+    Extension/UI/Overlay/plugin_dialog.cpp
     Extension/UI/Overlay/cursor.cpp
     Extension/UI/Overlay/progression_menu.cpp
     Extension/UI/Overlay/atmosphere_menu.cpp
@@ -46,7 +50,6 @@ add_library(dingosdk_overlay STATIC
     Extension/Trainer/trainer_page.cpp
     Extension/Music/music_page.cpp
     Extension/Trainer/trainer_view.cpp
-    Extension/HallOfMeat/hall_of_meat_overlay.cpp
 )
 target_link_libraries(dingosdk_overlay PUBLIC dingosdk_logging dingosdk_profiler dingosdk_imgui dingosdk_hooks dingosdk_console_core dxguid PRIVATE dingosdk_playstation_input shell32 dingosdk_initfs dingosdk_custom_scripts dingosdk_game_archives dingosdk_mods dingosdk_json windowscodecs ole32)
 

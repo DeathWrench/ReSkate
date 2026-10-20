@@ -27,6 +27,7 @@
 #include <array>
 
 namespace dingosdk::server {
+class ServerPlugins;
 using namespace multiplayer;
 
 // The host side of a ReSkate session without a game: admission, the roster,
@@ -78,6 +79,8 @@ class Host {
     std::optional<std::array<float, 3>> player_position(std::uint64_t steam_id) const;
     void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
     void change_map(std::string_view map); // a level name, level path or destination
+    // A plugin message from the server's plugins (server_plugins.h) to one player, or everyone (0).
+    void send_plugin_message(std::uint64_t to, const std::vector<std::uint8_t> &bytes);
 
     enum class VoteKind { map, kick, time, custom, poll, extend };
 
@@ -183,7 +186,6 @@ class Host {
         OutfitBudget outfit_budget;
         SoundBudget sound_budget;
         EffectBudget effect_budget;
-        EffectBudget drone_budget; // FPV drone markers (drone_beacon.h): a few a second
         // Their poses read this pass, passed on once all of the pass's messages are read
         // (relay_poses), and how many of their effects packets were passed on in it.
         std::vector<Packet> relay_poses;
@@ -191,7 +193,7 @@ class Host {
         ChatRate chat_rate;
         std::uint64_t typing_notice{}; // last accepted "still typing", so a flood is not relayed
         bool typing{};                 // an "on" was passed along and no "off" since
-        ChatBudget admin_budget, throwdown_budget, party_budget;
+        ChatBudget admin_budget, throwdown_budget, party_budget, plugin_budget;
         SpeedCheck speed;           // how fast their game runs, from their pose timestamps
         bool speeding{};            // flagged: out of linked activities (config speed_check)
         std::uint64_t speed_normal_since{}; // flagged, but measuring normal again since then
@@ -304,6 +306,8 @@ class Host {
     JoinBackoff join_backoff_; // Steam IDs whose attempts to join keep failing
     std::optional<PasswordKey> password_;
     std::uint64_t id_{}, secret_{}, epoch_{}, map_{}, world_ = 1;
+    // Plugins' server copies (server_plugins.h), from start on.
+    std::shared_ptr<ServerPlugins> plugins_;
     std::uint32_t sequence_{};
     VoicePolicy voice_policy_;
     std::uint32_t object_clears_{};

@@ -501,6 +501,13 @@ std::int32_t __fastcall music_select_next_hook(std::uintptr_t queue, std::uintpt
     // next while a Spotify station is on.
     // Only of the queue the station is on: the others (a speaker's in the world, the one a song
     // grabbed from a speaker plays on) go on to their next songs for reasons of their own.
+    // Without a station, the player's own channel's queue is kept for plugins' next
+    // (spotify_station::game_next).
+    if (std::uint8_t asked{}; !spotify_station::active() && dingosdk::memory::peek(queue + 0xf1, asked)) {
+        std::uint32_t channel{};
+        if (const auto base = image_base.load(std::memory_order_acquire); base && native_queue_channel(base, queue, channel))
+            spotify_station::plain_song_chosen(queue, channel, asked != 0);
+    }
     if (std::uint8_t asked{}; spotify_station::active() && dingosdk::memory::peek(queue + 0xf1, asked)) {
         std::uint32_t channel{};
         if (const auto base = image_base.load(std::memory_order_acquire); base && native_queue_channel(base, queue, channel)) {

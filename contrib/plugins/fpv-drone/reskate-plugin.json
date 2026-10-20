@@ -1,0 +1,7 @@
+{
+    "api": 1,
+    "entry": "plugin/main.lua",
+    "side": "client",
+    "permissions": ["console", "storage", "overlay", "menu", "input", "camera", "hud", "world.raycast", "skater.read",
+                    "audio", "outfit", "session.read", "session.nametags", "net.session"]
+}

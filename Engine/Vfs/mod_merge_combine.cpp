@@ -46,6 +46,7 @@ struct Asset {
     // For a chunk: where its record is in the chunk metadata of the copy this version
     // of it came in, and where the game's copy lists the chunk (merge_chunk_metadata).
     ChunkRecord record;
+    const AssetAddition* carried_from{};
 };
 
 // Where one contributor's copy of an asset lives, so conflicting copies can be
@@ -241,7 +242,12 @@ void conflict(MergeReport& report, const std::string& kept, const std::string& l
 
 std::vector<std::byte> merge_chunk_metadata(std::span<const std::vector<std::byte>> lists,
                                             std::span<const ChunkRecord> chunks, std::size_t game,
-                                            std::span<const fb::Guid> shipped) {
+                                            std::span<const fb::Guid> shipped, std::vector<std::size_t>* rows) {
+    // Unless the records are put in another order below, each chunk's is where it is listed.
+    if (rows) {
+        rows->resize(chunks.size());
+        for (std::size_t index = 0; index < chunks.size(); ++index) (*rows)[index] = index;
+    }
     // A bundle with no chunks has nothing to describe; what the first copy has stays.
     if (chunks.empty()) return lists.empty() ? std::vector<std::byte>{} : lists.front();
     const bool shippedList = game < lists.size() && !lists[game].empty();
@@ -254,7 +260,22 @@ std::vector<std::byte> merge_chunk_metadata(std::span<const std::vector<std::byt
     for (std::size_t index = 0; whole && index < chunks.size(); ++index)
         whole = chunks[index].copy == first && chunks[index].index == index &&
                 (!shippedList || chunks[index].shipped == index);
-    if (whole) return lists[first];
+    // A carried dependency can be only the first chunk of a larger source
+    // bundle. Matching its indices does not mean that source's whole list fits.
+    if (whole && !shippedList)
+        whole = native_db::read(unsigned_bytes(lists[first]), "chunk metadata", nullptr,
+            {.unique_fields=false,.max_entries=lists[first].size()}).children.size()==chunks.size();
+    if (whole) {
+        // The game's own list, when it has a record for each chunk, has them by the chunks' guids.
+        if (rows && shippedList && native_db::read(unsigned_bytes(lists[first]), "chunk metadata", nullptr,
+                {.unique_fields=false,.max_entries=lists[first].size()}).children.size()==chunks.size()) {
+            std::vector<std::size_t> order(chunks.size());
+            for (std::size_t index = 0; index < order.size(); ++index) order[index] = index;
+            std::ranges::stable_sort(order, [&](std::size_t left, std::size_t right) { return chunks[left].guid < chunks[right].guid; });
+            for (std::size_t at = 0; at < order.size(); ++at) (*rows)[order[at]] = at;
+        }
+        return lists[first];
+    }
 
     std::vector<std::optional<native_db::Node>> read(lists.size());
     const auto list = [&](std::size_t copy) -> const native_db::Node* {
@@ -337,6 +358,8 @@ std::vector<std::byte> merge_chunk_metadata(std::span<const std::vector<std::byt
     merged.children.clear();
     merged.children.reserve(records.size());
     for (const auto index : order) merged.children.push_back(std::move(records[index]));
+    if (rows)
+        for (std::size_t at = 0; at < order.size(); ++at) (*rows)[order[at]] = at;
     const auto bytes = native_db::write(merged);
     const auto* data = reinterpret_cast<const std::byte*>(bytes.data());
     return {data, data + bytes.size()};
@@ -387,12 +410,17 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
     std::multimap<fb::Guid, std::pair<const std::string*, const AssetAddition*>> addedByGuid;
     // The resource a mod added to a bundle under a name, by bundle, mod and name.
     std::map<std::tuple<std::string, std::string, std::string>, const AssetAddition*> companions;
+    std::map<const AssetAddition*,const std::string*> additionBundles;
+    std::map<std::tuple<std::string,std::string,fb::Guid>,const AssetAddition*> bundleChunks;
     for (const auto& [bundleName, list] : overrides.added)
         for (const auto& addition : list) {
+            additionBundles.emplace(&addition,&bundleName);
             if (addition.asset.kind == fb::AssetKind::ebx)
                 addedByGuid.emplace(addition.file, std::pair{&bundleName, &addition});
             else if (addition.asset.kind == fb::AssetKind::resource)
                 companions.emplace(std::tuple{bundleName, addition.mod, lower(addition.asset.name)}, &addition);
+            else if (addition.asset.kind == fb::AssetKind::chunk)
+                bundleChunks.emplace(std::tuple{bundleName,addition.mod,addition.asset.guid},&addition);
         }
     // The map meshes already counted (reskate-map-meshes.json), by where they lie in a mod's folder.
     std::set<std::tuple<std::string, std::uint32_t, std::uint16_t, std::uint32_t>> countedMeshes;
@@ -735,10 +763,20 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                         take.push_back(companion->second);
                 }
             }
+            // Expand only the selected EBX/RES dependencies, including imports
+            // carried from another source bundle. Unrelated geometry stays out.
+            for (std::size_t index=0;index<take.size();++index) {
+                const auto* asset=take[index];
+                const auto* from=additionBundles.at(asset);
+                for (const auto& id:asset->chunk_names)
+                    if (const auto found=bundleChunks.find({*from,asset->mod,id});found!=bundleChunks.end() &&
+                        taking.insert(found->second).second) take.push_back(found->second);
+            }
             if (!take.empty()) {
                 std::set<std::string, std::less<>> present;
                 for (const auto& asset : casManifest.ebx) present.insert(asset_key(asset));
                 for (const auto& asset : casManifest.resources) present.insert(asset_key(asset));
+                for (const auto& asset : casManifest.chunks) present.insert(asset_key(asset));
                 const auto installChunk = region.files.front().location.installChunk;
                 for (const auto* addition : take) {
                     if (!present.insert(asset_key(addition->asset)).second) continue;
@@ -748,6 +786,7 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                             placed = carriedAt.emplace(std::pair{installChunk, addition},
                                 store.carry(installChunk, manifestArchive, addition->encoded)).first;
                         additions.push_back({addition->asset, placed->second});
+                        additions.back().carried_from=addition;
                         addedFrom.insert(addition->mod);
                     } catch (const std::exception& error) {
                         report.notes.push_back(modName + ": " + bundle.name + ": " + addition->asset.name +
@@ -782,14 +821,57 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
         // Added EBX go after this copy's own EBX and added resources after its own
         // resources, ahead of its chunks; after the indexed moves above so their
         // positions still hold.
+        // A map's replacement bundle can retain the game's GUID-ordered rows
+        // and append its own rows. Use the actual game's baseline to interpret
+        // those records; the map's whole table is not a new stock baseline.
+        const auto defaults=overrides.bundle_chunk_defaults.find(key);
+        const bool hasDefaults=defaults!=overrides.bundle_chunk_defaults.end();
+        std::vector<std::vector<std::byte>> chunkLists;
+        if (hasDefaults) chunkLists.push_back(defaults->second.metadata);
+        const auto ownList=chunkLists.size();
+        chunkLists.push_back(casManifest.chunkMetadata);
+        std::vector<ChunkRecord> chunkRecords;
+        std::vector<fb::Guid> originalChunks;
+        if (hasDefaults) originalChunks=defaults->second.chunks;
+        std::map<fb::Guid,std::size_t> stockChunks;
+        for (std::size_t index=0;index<originalChunks.size();++index) stockChunks.emplace(originalChunks[index],index);
+        for (std::size_t index=0;index<casManifest.chunks.size();++index) {
+            const auto id=casManifest.chunks[index].guid;
+            const auto shipped=stockChunks.find(id);
+            chunkRecords.push_back({id,chunkLists[ownList].empty()?ChunkRecord::none:ownList,index,
+                shipped==stockChunks.end()?ChunkRecord::none:shipped->second});
+        }
+        bool chunksAdded{};
         for (auto& addition : additions) {
-            const auto ebx = addition.asset.kind == fb::AssetKind::ebx;
-            const auto at = static_cast<std::ptrdiff_t>(1 + casManifest.ebx.size() + (ebx ? 0 : casManifest.resources.size()));
-            (ebx ? casManifest.ebx : casManifest.resources).push_back(std::move(addition.asset));
-            region.files.insert(region.files.begin() + at, addition.file);
-            inPatch.insert(inPatch.begin() + at, true);
+            auto at=1+casManifest.ebx.size();
+            if (addition.asset.kind==fb::AssetKind::ebx) casManifest.ebx.push_back(std::move(addition.asset));
+            else if (addition.asset.kind==fb::AssetKind::resource) {
+                at+=casManifest.resources.size();casManifest.resources.push_back(std::move(addition.asset));
+            } else {
+                at+=casManifest.resources.size()+casManifest.chunks.size();
+                const auto* source=addition.carried_from;
+                if (!source) throw std::runtime_error("Carried bundle chunk has no source record");
+                auto copy=ChunkRecord::none;
+                if (source->chunk_metadata && !source->chunk_metadata->empty()) {
+                    auto found=std::find(chunkLists.begin(),chunkLists.end(),*source->chunk_metadata);
+                    if (found==chunkLists.end()) found=chunkLists.insert(chunkLists.end(),*source->chunk_metadata);
+                    copy=static_cast<std::size_t>(found-chunkLists.begin());
+                }
+                const auto shipped=stockChunks.find(addition.asset.guid);
+                chunkRecords.push_back({addition.asset.guid,copy,source->chunk_index,
+                    shipped==stockChunks.end()?ChunkRecord::none:shipped->second});
+                casManifest.chunks.push_back(std::move(addition.asset));
+                chunksAdded=true;
+            }
+            region.files.insert(region.files.begin() + static_cast<std::ptrdiff_t>(at), addition.file);
+            inPatch.insert(inPatch.begin() + static_cast<std::ptrdiff_t>(at), true);
             used.emplace(addition.file.location.installChunk, addition.file.location.archive);
         }
+        // The list written for this copy has its records by the chunks' guids, while the carried
+        // chunks are listed after its own: where each chunk's record went, for the records below.
+        std::vector<std::size_t> chunkRows;
+        if (chunksAdded) casManifest.chunkMetadata=merge_chunk_metadata(chunkLists,chunkRecords,
+            hasDefaults?0:ChunkRecord::none,originalChunks,&chunkRows);
         const auto fresh = !states.contains(key);
         if (fresh) { order.push_back(bundle.name); states.emplace(key, BundleState{}); }
         auto& state = states.at(key);
@@ -859,7 +941,11 @@ fb::TocDocument combine(const fs::path& baseToc, const fs::path& baseRoot,
                 auto& record = flat[firstChunk + index].record;
                 record.guid = manifest.chunks[index].guid;
                 record.copy = copy;
-                record.index = index;
+                // Where this copy's list has the chunk's record: where the chunk is listed, unless
+                // other mods' chunks were carried in and the list was written again by guid. Read
+                // by where the chunk is listed, every chunk after the first carried one by guid
+                // took its neighbour's record, and the first mip in it.
+                record.index = index < chunkRows.size() ? chunkRows[index] : index;
                 if (isBase) record.shipped = index;
             }
         }

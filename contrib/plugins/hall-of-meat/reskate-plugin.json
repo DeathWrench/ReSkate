@@ -1,0 +1,6 @@
+{
+    "api": 1,
+    "entry": "plugin/main.lua",
+    "side": "client",
+    "permissions": ["events.skater", "events.physics", "overlay", "hud", "game.speed", "storage", "menu", "console"]
+}

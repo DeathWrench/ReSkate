@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,10 +28,44 @@ inline constexpr char manifest_file[] = "manifest.json";
 // The older name for the same information ("version" instead of
 // "version_number"), still read when a mod has no manifest.json.
 inline constexpr char info_file[] = "reskate-mod.json";
+// A plugin mod's manifest (Extension/Plugins/plugin_manifest.h). Besides what the plugin host reads,
+// the merge reads its "resident" list (ResidentAssets) from here.
+inline constexpr char plugin_manifest_file[] = "reskate-plugin.json";
 // ReSkate Studio's stamp in every mod it builds: "ReSkate Studio native Patch v1", then
 // key=value lines, of which skate_sha256=<the Skate.exe it was built for> decides whether the
 // mod loads: game data built for another Skate.exe points into that build's archives.
 inline constexpr char studio_marker_file[] = ".reskate-studio-patch";
+
+// Assets of one of the mod's bundles that the game selects at run time without an import naming them
+// (a plugin's world objects, the HUD widgets it picks by size): kept with the mod's additions when
+// another mod (a map) replaces that bundle, as imported additions are. reskate-plugin.json:
+//   "resident": [{"bundle": "win32/levels/...", "roots": ["world/...", "ui/.../"],
+//                 "shaders": [{"name": "world/.../shaderblockdepot_...", "roots": ["world/...", ...]}]}]
+// Names are lower-case asset names; a root ending in '/' keeps every asset under it. A shader block
+// depot (a resource no EBX imports) goes with its roots when all of them come from the mod.
+struct ResidentAssets {
+    std::string bundle;
+    std::vector<std::string> roots;
+    struct Shader {
+        std::string name;
+        std::vector<std::string> roots;
+    };
+    std::vector<Shader> shaders;
+};
+
+// A mod that brings several takes on the same game data, of which one is in the game at a time (a deck
+// pack's decks: the game has one deck model). reskate-plugin.json:
+//   "variants": {"folder": "decks", "order": ["standard", "wide"], "displaces": ["..._bundlereftable"]}
+// Each folder <folder>/<name>/ with a layout.toc is the variant <name> (lower-case letters, digits and
+// '_'), laid out like a mod folder. "order" is the variants the menus list first, in that order; the
+// first of them loads when none was chosen. "displaces" names the bundles a variant replaces: while one
+// loads, every other mod whose layout lists one of them (the declaring mod's own layout too) is set
+// aside for the run (mod_catalog.h).
+struct Variants {
+    std::string folder;
+    std::vector<std::string> order;
+    std::vector<std::string> displaces;
+};
 
 struct Mod {
     std::string name;                 // folder name directly under Mods/
@@ -50,6 +85,10 @@ struct Mod {
     std::vector<std::string> levels;
     // What the merge could not use from this mod. Empty once it merged cleanly.
     std::vector<std::string> problems;
+    // From reskate-plugin.json: the assets its bundles keep resident (ResidentAssets).
+    std::vector<ResidentAssets> resident;
+    // From reskate-plugin.json: the variants it holds (Variants), if it declares any.
+    std::optional<Variants> variants;
     // From .reskate-studio-patch: whether the mod has one, and the Skate.exe SHA-256 it records.
     bool studio_marker{};
     std::string skate_sha256;
@@ -100,6 +139,11 @@ struct ModList {
     // Advisory messages worth logging, such as unreadable info files.
     std::vector<std::string> notes;
 };
+
+// Whether `name` (an asset of `bundle`, either lower-case) is one the mod keeps resident, and the
+// shader block depot entry `name` is in that bundle, or null.
+bool resident_root(const Mod& mod, std::string_view bundle, std::string_view name) noexcept;
+const ResidentAssets::Shader* resident_shader(const Mod& mod, std::string_view bundle, std::string_view name) noexcept;
 
 // Folder names travel into engine paths, so only plain ASCII is accepted:
 // letters, digits, space, '_', '-' and '.', not starting with '.'.

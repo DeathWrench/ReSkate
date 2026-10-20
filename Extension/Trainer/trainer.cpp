@@ -4,6 +4,7 @@
 #include "trainer_presets.h"
 #include "trainer_session.h"
 #include "trainer_landing.h"
+#include "trainer_motion.h"
 #include "trainer_waypoint.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
@@ -18,6 +19,8 @@
 #include "Extension/Skater/client_source_spawn_internal.h"
 #include "Extension/Skater/no_bail.h"
 #include "Extension/Skater/physics_tuning.h"
+#include "Extension/Skater/skater_push.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
 #include "Extension/UI/Overlay/overlay.h"
 #include <mutex>
 #include <thread>
@@ -38,6 +41,12 @@
 namespace dingosdk::trainer {
 namespace {
 namespace tuning = dingosdk::physics_tuning;
+namespace kit = dingosdk::throwdowns::kit;
+// A plugin match blocks markers and returns, unless it lets teleports through (its own).
+bool match_blocks_markers() noexcept {
+    const auto m = kit::match();
+    return m.markers && !m.teleports;
+}
 using Vec3 = std::array<float, 3>;
 constexpr float max_coordinate = 1.0e6f;
 constexpr std::uint32_t air_states_first = 200, air_states_end = 300;
@@ -141,7 +150,7 @@ struct State {
     std::vector<std::size_t> class_entries; // the entries that are fields of those classes
     // A session whose host sets everyone's physics (session_physics.h): what the host shares
     // beyond its tuning, and what each class field holds for it. The player's own stand down.
-    bool enforced{};
+    bool enforced{}, competition{};
     std::uint64_t host_revision{};
     SessionExtras host;
     std::array<float, class_field_count> host_classes{};
@@ -668,11 +677,14 @@ void publish_extras() {
 void sync_session() {
     auto &s = state();
     const bool enforced = session_tuning_enforced();
+    const bool competition = competition_stock_physics();
+    const bool competition_changed = competition != s.competition;
     std::vector<std::uint8_t> bytes;
     bool fresh = false;
-    if (enforced) fresh = host_physics_extras(s.host_revision, bytes);
+    if (competition) { fresh = competition_changed; s.host_revision = 0; }
+    else if (enforced) fresh = host_physics_extras(s.host_revision, bytes);
     else s.host_revision = 0; // read again the next time a host sets the physics
-    if (enforced == s.enforced && !fresh) return;
+    if (enforced == s.enforced && !fresh && !competition_changed) return;
     if (fresh) {
         auto decoded = decode_session_extras(bytes);
         if (!decoded) say(logging::Level::warning, "Trainer: what the host shares beyond its tuning could not be read; the game's own is used for it.");
@@ -683,6 +695,7 @@ void sync_session() {
             say(logging::Level::info, std::format("Trainer: skating with the host's trick multipliers and {} of its class values.", s.host.classes.size()));
     }
     s.enforced = enforced;
+    s.competition = competition;
     for (const auto index : s.class_entries) want_class(s.entries[index]);
     changed(false);
 }
@@ -1022,7 +1035,11 @@ void enter_map(const std::string &level) {
 }
 MapData &current_map() { return state().maps[state().map]; }
 bool teleport_allowed(std::string &why) {
-    if (multiplayer_session_active() && !session_noclip_allowed()) {
+    if (match_blocks_markers()) {
+        why = "Quit the active match before using markers or teleporting.";
+        return false;
+    }
+    if (multiplayer_session_active() && !session_noclip_allowed() && !kit::match().teleports) {
         why = "The host has turned off teleporting in this session.";
         return false;
     }
@@ -1210,14 +1227,14 @@ void observe(std::uintptr_t base, std::uintptr_t client, std::uint64_t now) {
     }
     const auto seconds = m.valid ? clock_seconds(stamp - m.stamp) : 0.0;
     const Vec3 step{position[0] - m.position[0], position[1] - m.position[1], position[2] - m.position[2]};
-    const bool jumped = std::sqrt(step[0] * step[0] + step[1] * step[1] + step[2] * step[2]) > 25.0f;
-    if (!m.valid || seconds <= 0.0005 || seconds > 0.25 || jumped) {
+    const float distance=std::sqrt(step[0]*step[0]+step[1]*step[1]+step[2]*step[2]);
+    if (reset_motion_segment(m.valid,seconds,distance,skater_push::holding() || skater_push::pending() || local_skater_teleport_pending())) {
         // First sample, a hitch, or a teleport: nothing can be measured across it.
         m = {};
         m.valid = true;
         m.position = position;
         m.stamp = stamp;
-        t.airborne = false;
+        t.airborne = false;t.speed=0;t.vertical=0;
         t.air_time = t.height = 0;
         return;
     }
@@ -1301,7 +1318,7 @@ void observe(std::uintptr_t base, std::uintptr_t client, std::uint64_t now) {
     }
     // A bail: back to the selected marker once the skater has had time to fall.
     if (watch.valid && (!s.wipeouts_known || watch.wipeouts != s.seen_wipeouts)) {
-        if (s.wipeouts_known && s.auto_return) {
+        if (s.wipeouts_known && s.auto_return && !match_blocks_markers()) {
             const bool marked = current_map().markers[static_cast<std::size_t>(s.slot)].set;
             if (marked) s.return_at = now + static_cast<std::uint64_t>(s.return_delay * 1000.0f);
             say(logging::Level::info, marked ? std::format("Trainer: bail seen; back to marker {} in {:.1f} s.", s.slot + 1, s.return_delay)
@@ -1315,6 +1332,9 @@ void set_logging(bool on) {
     auto &s = state();
     if (s.log.is_open()) s.log.close();
     s.logging = false;
+#if defined(DINGOSDK_LEAN_PLAYTEST)
+    (void)on;
+#else
     if (!on) return;
     const auto directory = data_directory() / L"telemetry";
     std::error_code error;
@@ -1331,6 +1351,7 @@ void set_logging(bool on) {
     s.log << "seconds,x,y,z,speed_mps,vertical_mps,heading_deg,airborne,physics_state,board_turn_dps\n";
     s.log_start = clock_now();
     s.logging = true;
+#endif
 }
 void shortcuts() {
     auto &s = state();
@@ -1553,6 +1574,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
             refresh_waypoint();
         }
         if (playing) {
+            if (match_blocks_markers()) s.return_at = 0;
             observe(base, client, now);
             shortcuts();
             update_landing(now);
@@ -1591,6 +1613,8 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
         // The speeds pushes aim for are the push class's (value_links ties them to the tuning's top
         // pushing speed, which only gates whether a push may start).
         const auto *top_speed = find_entry("physicspush.maxpushablespeed");
+        if(const auto push=skater_push::peek())
+            (void)queue_skater_push_velocity(client,s.entity,*push);
         set_push_speed(client, s.entity, 1.0f, top_speed ? static_cast<float>(top_speed->stock) : 0.0f, s.boosts.cruise);
         for (TrickLaunch launch; take_trick_launch(launch);)
             if (launch.factor != 1.0f)
@@ -1734,6 +1758,8 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
     }
     if (v == "marker") {
         const auto action = lower(arg(0));
+        if ((action == "save" || action == "go") && match_blocks_markers())
+            return "error: markers are disabled during this match.";
         const auto slot = slot_argument(a, 1);
         if (!slot) return std::format("error: slots are 1 to {}.", marker_slots);
         if (s.map.empty()) return "error: load a level first.";
