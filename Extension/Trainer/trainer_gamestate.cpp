@@ -1,5 +1,6 @@
 #include "trainer_gamestate.h"
 #include "Engine/Core/Hooks/hooks.h"
+#include "Extension/Skater/client_source_spawn.h"
 #include <windows.h>
 #include <atomic>
 #include <cmath>
@@ -601,7 +602,8 @@ void state_copy_hook(std::uintptr_t object, std::uintptr_t context, std::uintptr
 // (0x10dd2f0) for its time scale clamped to the min and max it copied from its asset when it was made, and plays its
 // clips at that rate. The under part of an underflip runs on controllers made before it starts (or as it starts), so
 // "Underflip part only" scales the rate of every controller asked during it (measured 2026-10-19: one to three, the
-// underflip's own among them; the owner saw the under part turn at Underflip speed).
+// underflip's own among them; the owner saw the under part turn at Underflip speed). In the air with another gravity
+// "Animation timing" (Advanced gravity) scales them too (air_animation_rate, client_noclip.cpp).
 constexpr std::uintptr_t rate_compute = 0x10dd2f0;
 constexpr unsigned char rate_compute_bytes[]{0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x83, 0xb9, 0xac, 0x00, 0x00, 0x00, 0x00};
 using RateCompute = float (*)(std::uintptr_t self);
@@ -610,7 +612,7 @@ std::atomic<float> under_part_rate{0};
 float rate_compute_hook(std::uintptr_t self) {
     const float rate = rate_original.load(std::memory_order_acquire)(self);
     const float scale = under_part_rate.load(std::memory_order_relaxed);
-    return scale > 0 && holds_alive() ? rate * scale : rate;
+    return (scale > 0 && holds_alive() ? rate * scale : rate) * air_animation_rate();
 }
 std::uintptr_t state_lookup_hook(std::uintptr_t object, std::uintptr_t context) {
     if (object && object == underflip_timescale_object.at.load(std::memory_order_relaxed)) {

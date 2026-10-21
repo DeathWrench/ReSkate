@@ -182,7 +182,8 @@ void sync(const fs::path& mods_root) {
     std::error_code error;
     fs::create_directories(root, error);
 
-    // The list: ReSkate's, else the last one read, else ReSkate's own.
+    // The list: ReSkate's, else the last one read. Before one was ever read there is none: the
+    // launcher knows no official mod by name.
     std::vector<Mod> list;
     std::string source;
     bool authoritative = true;
@@ -197,8 +198,7 @@ void sync(const fs::path& mods_root) {
         list = parse_list(read_text(root / list_file));
         source = "the last list read";
         if (list.empty() && !fs::exists(root / list_file, error)) {
-            list = fallback_list();
-            source = "ReSkate's own list";
+            source = "no list yet";
             authoritative = false;
         }
     }
@@ -274,17 +274,6 @@ std::vector<Mod> parse_list(std::string_view json) {
         }
     } catch (...) {
         return {};
-    }
-    return list;
-}
-
-std::vector<Mod> fallback_list() {
-    std::vector<Mod> list;
-    for (const auto* name : {"Fourth_Studio-Board_Break_Pack", "Fourth_Studio-Road_Rash"}) {
-        Mod mod;
-        mod.full_name = name;
-        mod.title = title_of(name);
-        list.push_back(std::move(mod));
     }
     return list;
 }
@@ -445,7 +434,6 @@ bool official(std::string_view full_name) {
     if (mods::retired_mod(thunderstore::folder_for(full_name))) return true;
     auto& s = shared();
     std::lock_guard lock(s.mutex);
-    const auto& mods = s.state.mods.empty() ? fallback_list() : s.state.mods;
-    return std::any_of(mods.begin(), mods.end(), [&](const Mod& mod) { return mod.full_name == full_name; });
+    return std::any_of(s.state.mods.begin(), s.state.mods.end(), [&](const Mod& mod) { return mod.full_name == full_name; });
 }
 } // namespace dingosdk::official_mods

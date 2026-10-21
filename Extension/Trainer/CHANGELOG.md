@@ -1,5 +1,42 @@
 # Changelog
 
+## v0.8.6 - 2026-10-21
+
+Built on ReSkate 2.1.1, like 0.8.3.
+
+- **Animation timing is 1 by default.** Players found the flat ground landing stutter with more gravity goes away with
+  Animation timing at 1, so moving Gravity off 1 now gives tricks and landings their normal-gravity timing at once.
+  Advanced gravity is still there to change it. A 0 saved by 0.8.5 is not kept: everyone starts at 1.
+- **Tooltips in paragraphs.** The Gravity and Advanced gravity tooltips break into short paragraphs.
+
+## v0.8.5 - 2026-10-21
+
+Built on ReSkate 2.1.1, like 0.8.3.
+
+- **Advanced gravity.** A fold under Gravity (POP AND TRICKS) for the landing stutters players still saw with more
+  gravity on flat ground tricks. The game fits a trick into the time to land, but cannot hurry a catch past its own
+  speed, so in a shorter flight the catch is still playing when the wheels touch.
+  - **Animation timing**, 0 to 1. At 1 the skater's air animations play faster by just as much as the flight is shorter
+    than at the game's gravity (slower when it is longer), so tricks, catches and landings look as they do at x1, and
+    flips turn faster with it. 0 is the game's own timing; in between goes part of the way. `trainer option gravity_timing <0..1>`.
+  - **Landing gravity of its own.** The gravity the game plans landings with: the same as Gravity unless ticked. Less
+    than Gravity lands late, more reaches for the ground early. `trainer option gravity_landing_own 1`,
+    `trainer option gravity_landing <x>`.
+  - Presets carry them, RESET EVERYTHING puts them back, and they let go with Gravity under a host's physics or in a
+    session with boosts off. In a session with boosts on, Animation timing speeds up every skater's animations while
+    you are in the air (the trainer cannot tell them apart yet).
+
+## v0.8.4 - 2026-10-21
+
+Built on ReSkate 2.1.1, like 0.8.3.
+
+- **Landings at other gravities.** With Gravity at anything but x1, landings could still come late and stutter on real
+  jumps (0.8.1 fixed it only for flat ground). The game plans each landing by searching trajectories with its own
+  gravity, and the skater follows the trajectory it picks; that search now uses the trainer's gravity, so the skater
+  lands where and when the flight actually comes down. Grind searches from the air use it too.
+- **Grind lock-on 0 is no lock-on.** The dial now also sets how far grinds reach from the air, so at 0 the board is no
+  longer pulled onto a rail in flight (over a gap, over water). Above x1 grinds reach further from the air as well.
+
 ## v0.8.3 - 2026-10-20
 
 Built on ReSkate 2.1.1 (same game build as 2.1.0).

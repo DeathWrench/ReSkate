@@ -62,8 +62,8 @@ struct Page {
     std::uint64_t share_serial{}; // the last `preset export` put on the clipboard
     bool share_seen{};
     bool show_page{}, show_cheats{};
-    float gravity_edit{1};
-    bool gravity_editing{};
+    float gravity_edit{1}, gravity_landing_edit{1}, gravity_timing_edit{1};
+    bool gravity_editing{}, gravity_landing_editing{}, gravity_timing_editing{};
     // QUICK SETTINGS: what is changed (kind 0 a section's line, 1 a dial, 2 one of the trainer's settings, 3 a value).
     struct QuickItem {
         std::uint8_t kind{}, topic{};
@@ -101,7 +101,8 @@ void card_end(Page &p) {
 void clear_edits(Page &p) {
     p.manual_editing = p.hippy_editing = p.nocomply_editing = p.boneless_editing = p.offboard_editing = p.flip_editing = p.pump_editing = p.revert_editing =
         p.underflip_editing = false;
-    p.grind_side_editing = p.grind_push_editing = p.grind_range_editing = p.gravity_editing = false;
+    p.grind_side_editing = p.grind_push_editing = p.grind_range_editing = p.gravity_editing = p.gravity_landing_editing =
+        p.gravity_timing_editing = false;
     p.trick_editing = {};
     p.active.clear();
 }
@@ -675,9 +676,8 @@ void presets_card(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const 
     }
     card_end(p);
 }
-// The cheats and the addons that change how the skater plays (Skater > Cheats, Addons > Grind Exits, Board Break): listed in
-// QUICK SETTINGS, named on the MODIFIED line and turned back by RESET EVERYTHING like the trainer's own values. Road Rash and
-// Hall of Meat only show bails, so they never count.
+// The cheats that change how the skater plays (Skater > Cheats): listed in QUICK SETTINGS, named on the MODIFIED line and
+// turned back by RESET EVERYTHING like the trainer's own values.
 struct CheatLine {
     std::string name, value; // value: what it is set to, empty for a plain switch
     int addon{-1};           // where it lives: an Addons page, else Skater > Cheats
@@ -699,15 +699,7 @@ std::vector<CheatLine> cheat_lines(const Model &model) {
     boost("Off-board up boost", debug.offboard_up_velocity_speed, DebugAction::set_offboard_up_velocity_speed);
     if (debug.revert_boost)
         lines.push_back({"Revert Boost", std::format("x{:.1f}", debug.revert_boost_speed), -1, {DebugAction::set_revert_boost_enabled, false}});
-    if (const auto &grind = model.grind_exit; grind.available && grind.enabled) {
-        std::string value = grind.toe_heel ? "Toe / Heel" : "Left / Right";
-        if (grind.toe_heel) value += grind.stance == 2 ? ", goofy" : grind.stance == 1 ? ", regular" : ", no stance";
-        value += std::format(", pop-out {}%", grind.strength);
-        lines.push_back({"Grind exit triggers", value, addon_grind_exits, {}, "grindexit exits off"});
-    }
-    if (const auto &bb = model.board_break; bb.available && bb.enabled)
-        lines.push_back({"Board Break", std::format("break {}%, grip tape {}%, wear {}%, worn {:.0f}%", bb.sensitivity, bb.joined, bb.wear_rate, bb.worn * 100.0f),
-                         addon_board_break, {}, "boardbreak 0"});
+    // (Grind exits and Board Break are plugins now: their own pages say what they are set to.)
     return lines;
 }
 void cheat_off(SkateMenu &menu, const CallbacksV3 &callbacks, const CheatLine &line) {
@@ -1247,12 +1239,53 @@ void trick_heights(SkateMenu &menu, const CallbacksV3 &callbacks, Page &p, const
         ImGui::PopID();
         return true;
     };
-    if (slider("Gravity", "gravity", view.gravity, p.gravity_edit, p.gravity_editing,
-               "Gravity in the air, on the board and on foot. 1 is the game's own. At 0.5 the same pop goes twice as high and hangs twice as long; at 2 you "
-               "drop twice as fast. It acts in the air only: rolling down a hill, grinds and a bailed skater are the game's own. The game aims an air off a "
-               "ramp back at the ramp with its own gravity, so with another gravity a vert air can come down somewhere else. It takes hold at once.",
-               3.0f) && view.gravity != 1.0f && !view.gravity_live)
+    const bool gravity_shown = slider("Gravity", "gravity", view.gravity, p.gravity_edit, p.gravity_editing,
+               "Gravity in the air, on the board and on foot. 1 is the game's own.\n\n"
+               "At 0.5 the same pop goes twice as high and hangs twice as long; at 2 you drop twice as fast.\n\n"
+               "It acts in the air only: rolling down a hill, grinds and a bailed skater are the game's own. The game aims an air off a "
+               "ramp back at the ramp with its own gravity, so with another gravity a vert air can come down somewhere else.\n\n"
+               "It takes hold at once. Advanced gravity below times the tricks and landings for it.",
+               3.0f);
+    if (gravity_shown && view.gravity != 1.0f && !view.gravity_live)
         ImGui::TextDisabled("On foot this game build keeps its own gravity: the setting acts on the board only.");
+    if (gravity_shown && ImGui::TreeNodeEx("Advanced gravity", ImGuiTreeNodeFlags_SpanAvailWidth |
+                                           (view.gravity_landing_own || view.gravity_timing != 1.0f ? ImGuiTreeNodeFlags_DefaultOpen : 0))) {
+        // Animation timing: 0 .. 1, not a multiplier.
+        field(menu, view.gravity_timing != 1.0f ? "Animation timing  *" : "Animation timing",
+              "How the skater's tricks and landings are timed in the air when Gravity is not 1.\n\n"
+              "1 (the default): the skater's animations play faster by just as much as the flight is shorter (slower when it is "
+              "longer), so tricks, catches and landings look as they do at the game's own gravity. Flips turn faster with it.\n\n"
+              "0: the game's own timing. It fits a trick into the time to land but cannot hurry a catch, so with more gravity a "
+              "catch can still be playing when the wheels touch and the landing stutters.\n\n"
+              "In between: part of the way.");
+        ImGui::PushID("gravity_timing");
+        float timing = p.gravity_timing_editing ? p.gravity_timing_edit : view.gravity_timing;
+        const bool moved = console_style() ? slider_float("##timing", &timing, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp)
+                                           : ImGui::SliderFloat("##timing", &timing, 0.0f, 1.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        if (moved) {
+            p.gravity_timing_edit = timing;
+            p.gravity_timing_editing = true;
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) trainer_command(menu, callbacks, std::format("option gravity_timing {:.2f}", p.gravity_timing_edit));
+        if (!ImGui::IsItemActive() && p.gravity_timing_editing && std::abs(view.gravity_timing - p.gravity_timing_edit) < 0.005f)
+            p.gravity_timing_editing = false;
+        ImGui::PopID();
+        bool own = view.gravity_landing_own;
+        if (ImGui::Checkbox("Landing gravity of its own", &own))
+            trainer_command(menu, callbacks, std::format("option gravity_landing_own {}", own ? 1 : 0));
+        if (ImGui::IsItemHovered())
+            wrapped_tooltip("%s", "The game plans every landing (where you come down, when, and the time its animations count down to) "
+                                  "with a gravity.\n\n"
+                                  "Off: with Gravity, so the plan matches the flight.\n\n"
+                                  "On: with Landing gravity below. A plan with less gravity than the flight lands late (the board goes "
+                                  "into the ground first); with more it reaches for the ground early.");
+        if (own)
+            slider("Landing gravity", "gravity_landing", view.gravity_landing, p.gravity_landing_edit, p.gravity_landing_editing,
+                   "The gravity the game plans landings with, as a multiple of its own.\n\n"
+                   "Set it to Gravity for landings that match the flight.",
+                   3.0f, false, true);
+        ImGui::TreePop();
+    }
     slider("Manual pop height", "manual_height", view.manual_height, p.manual_edit, p.manual_editing,
            "How high you pop out of a manual or a nose manual. 1 is the game's own (lower than a riding ollie). Ollie height raises both.");
     slider("Flip trick speed", "flip_speed", view.flip_speed, p.flip_edit, p.flip_editing,

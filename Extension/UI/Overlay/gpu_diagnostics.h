@@ -42,4 +42,6 @@ void watch_addresses(ID3D12GraphicsCommandList* list) noexcept;
 // The graphics card the game renders on and its driver's version: said in the log once, and kept
 // for crash reports' tags (crash_report::set_gpu). Always on.
 void record_gpu_identity(ID3D12Device* device) noexcept;
+// The adapter the game renders on, once record_gpu_identity has seen its device.
+bool render_adapter_luid(LUID& luid) noexcept;
 }

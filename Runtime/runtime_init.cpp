@@ -1,8 +1,10 @@
 #include "runtime_internal.h"
 #include "Extension/Customization/item_browser.h"
+#include "Extension/Rendering/Capture/capture_runtime.h"
 #include "bootstrap.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
+#include "Engine/Core/Platform/game_instance.h"
 #include "Engine/Core/Profiling/profiler.h"
 #include "Extension/Settings/engine_tweaks.h"
 #include "Extension/Settings/replay_guard.h"
@@ -12,7 +14,12 @@
 #include "Extension/World/shader_permutation_guard.h"
 #include "Extension/World/shader_registry_guard.h"
 #include "Extension/World/light_table_guard.h"
+#include "Extension/World/guid_table_guard.h"
+#include "Extension/World/texture_handle_guard.h"
+#include "Extension/World/physics_wake_guard.h"
+#include "Extension/World/streaming_copy_guard.h"
 #include "Extension/World/stack_check_report.h"
+#include "Extension/World/world_entities.h"
 #include "Extension/Music/music_inject.h"
 #include "Extension/Music/spotify_web.h"
 #include "Extension/Music/plex_web.h"
@@ -29,10 +36,13 @@
 #include "Engine/Vfs/mod_catalog.h"
 #include "Extension/Assets/map_download.h"
 #include "Extension/Boot/offline_boot.h"
-#include "Extension/HallOfMeat/hall_of_meat.h"
-#include "Extension/RoadRash/road_rash.h"
-#include "Extension/BoardBreak/board_break.h"
-#include "Extension/Skater/grind_exit_control.h"
+#include "Extension/Skater/skater_physics.h"
+#include "Extension/Skater/xray.h"
+#include "Extension/UI/hud_corner.h"
+#include "Extension/UI/Overlay/game_images.h"
+#include "Extension/Plugins/plugin_runtime.h"
+#include "Extension/Skater/grind_exit.h"
+#include "Extension/Skater/trick_rewrite.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/Progression/entitlement_request_hook.h"
 #include "Extension/Skater/skater_observer.h"
@@ -102,6 +112,17 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         if (!validate_image(r.base)) {
             dingosdk::logging::write(dingosdk::logging::Level::critical, dingosdk::logging::Channel::runtime, "Game image validation failed.");
             return FALSE;
+        }
+        // Before anything is merged or opened in the folder: one game in it at a time
+        // (game_instance.h). The launcher checks first; this is two started at the same moment.
+        {
+            std::wstring game(32768, L'\0');
+            game.resize(GetModuleFileNameW(nullptr, game.data(), static_cast<DWORD>(game.size())));
+            if (!game.empty() && !dingosdk::game_instance::claim(std::filesystem::path(game).parent_path())) {
+                dingosdk::logging::write(dingosdk::logging::Level::critical, dingosdk::logging::Channel::runtime,
+                    "Another Skate is already running from this folder; this one does not start.");
+                return FALSE;
+            }
         }
         if (const auto& content = dingosdk::content_cache::catalogs(); content.available) {
             dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::assets,
@@ -245,6 +266,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         dingosdk::overlay::set_hub_callbacks(native_callbacks);
         dingosdk::overlay::set_ui_sound(dingosdk::multiplayer::queue_ui_sound);
         dingosdk::overlay::set_item_browser(dingosdk::item_browser::overlay_host());
+        dingosdk::overlay::set_frame_grab(dingosdk::capture::frame_grab());
         dingosdk::overlay::set_game_text_feed(dingosdk::multiplayer::skate_debug_text);
         dingosdk::overlay::set_skate_hud_feed(dingosdk::multiplayer::skate_hud);
         dingosdk::overlay::set_nametag_feed(dingosdk::multiplayer::custom_nametags);
@@ -339,9 +361,16 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         (void)dingosdk::shader_permutation_guard::install(r.base);
         (void)dingosdk::shader_registry_guard::install(r.base);
         (void)dingosdk::light_table_guard::install(r.base);
+        (void)dingosdk::guid_table_guard::install(r.base);
+        (void)dingosdk::texture_handle_guard::install(r.base);
+        (void)dingosdk::physics_wake_guard::install(r.base);
+        (void)dingosdk::streaming_copy_guard::install(r.base);
         (void)dingosdk::load_error_guard::install(r.base);
         (void)dingosdk::texture_handle_limit::install(r.base);
+#if !defined(DINGOSDK_LEAN_PLAYTEST)
         (void)dingosdk::stack_check_report::install(r.base);
+        dingosdk::console::start_memory_trace_from_environment();
+#endif
         (void)dingosdk::music_inject::install(r.base);
         (void)dingosdk::spotify_rows::install(r.base);
         dingosdk::spotify_device::start(); // (the game as a device in the player's Spotify app)
@@ -392,9 +421,6 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
             std::string(global_offline_requested ? "true" : "false") + "}");
         const auto neighborhood_unlock_provider_observation =
             dingosdk::neighborhood_unlock_override_observation();
-        record(neighborhood_unlock_provider_observation.json);
-        r.last_neighborhood_unlock_override_observation =
-            neighborhood_unlock_provider_observation.json;
         const bool named_settings = dingosdk::initialize_named_settings(r.base);
         record("{\"event\":\"named_settings_initialized\",\"ready\":" + std::string(named_settings ? "true" : "false") + "}");
         const bool gameplay_settings = dingosdk::initialize_gameplay_settings_override(
@@ -444,14 +470,20 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         const bool camera_hook = dingosdk::start_camera_observer(r.base);
         record("{\"event\":\"camera_observer_initialized\",\"active\":" + std::string(camera_hook ? "true" : "false") + "}");
         (void)dingosdk::start_no_bail(r.base);
-        const bool meat = dingosdk::hall_of_meat::start(r.base);
-        record("{\"event\":\"hall_of_meat_initialized\",\"active\":" + std::string(meat ? "true" : "false") + "}");
-        const bool rash = dingosdk::road_rash::start(r.base);
-        record("{\"event\":\"road_rash_initialized\",\"active\":" + std::string(rash ? "true" : "false") + "}");
-        const bool board_break = dingosdk::board_break::start(r.base);
-        record("{\"event\":\"board_break_initialized\",\"active\":" + std::string(board_break ? "true" : "false") + "}");
-        const bool grind_control = dingosdk::grind_exit_control::start(r.base);
-        record("{\"event\":\"grind_exit_control_initialized\",\"active\":" + std::string(grind_control ? "true" : "false") + "}");
+        const bool plugins = dingosdk::plugins::start(r.base);
+        record("{\"event\":\"plugins_initialized\",\"active\":" + std::string(plugins ? "true" : "false") + "}");
+        // What plugins reach of the skater's physics, its x-ray and skate.'s HUD corner; the game's
+        // pictures are read now, as the overlay builds its atlas once.
+        const bool physics = dingosdk::skater_physics::start(r.base);
+        const bool xray = dingosdk::xray::start(r.base);
+        dingosdk::hud_corner::start_hud(r.base);
+        dingosdk::overlay::prepare_game_images();
+        record("{\"event\":\"skater_physics_initialized\",\"active\":" + std::string(physics ? "true" : "false") + ",\"xray\":" +
+               std::string(xray ? "true" : "false") + "}");
+        const bool grind_exits = dingosdk::grind_exit::start(r.base);
+        record("{\"event\":\"grind_exit_initialized\",\"active\":" + std::string(grind_exits ? "true" : "false") + "}");
+        const bool trick_rewrites = dingosdk::trick_rewrite::start(r.base);
+        record("{\"event\":\"trick_rewrite_initialized\",\"active\":" + std::string(trick_rewrites ? "true" : "false") + "}");
         const bool noclip_velocity = dingosdk::start_client_noclip_velocity(r.base);
         record("{\"event\":\"noclip_velocity_initialized\",\"active\":" + std::string(noclip_velocity ? "true" : "false") + "}");
         const bool loading_screens = dingosdk::loading_screen::start(r.base);
@@ -500,6 +532,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         r.native_loading_logging = dingosdk::start_level_loading_logging(r.base,
             [](std::uintptr_t base, unsigned next) noexcept {
                 dingosdk::local_profile_before_level_transition(next);
+                dingosdk::world_entities::before_level_transition(base, next);
                 dingosdk::multiplayer::native_menu_before_level_transition(base, next);
                 dingosdk::multiplayer::throwdown_lab_before_level_transition(next);
             });

@@ -15,21 +15,25 @@ void clear_no_bail() noexcept;
 // Releasing it also leaves the skater's teleport option on the board again, since a turn's
 // teleport may have set it off (skater component +0xc0) and the SDK's own teleports keep it.
 void update_board_lock(std::uintptr_t client, std::uintptr_t entity, bool locked) noexcept;
+// Prepare the local skater's native teleport option after validating its owner.
+// This only changes how the next teleport spawns; it does not grant No Bail.
+bool prepare_on_board_teleport(std::uintptr_t client, std::uintptr_t entity) noexcept;
 // The physics state the local skater's selector last chose, for the trainer (air time, bail
 // markers). Publish the skater to watch from the client tick; it expires if ticks stop.
 struct PhysicsStateWatch {
     bool valid{};
+    bool ragdoll_known{}, ragdoll{}; // native offboard substate, distinct from walking
     std::uint32_t state{};
     std::uint32_t previous{}; // the state before this one
     float previous_seconds{}; // how long that one lasted
-    std::uint64_t changes{}, wipeouts{}; // counted since the process started
+    std::uint64_t changes{}, wipeouts{}, runouts{}; // counted since the process started
 };
 void watch_physics_state(std::uintptr_t client, std::uintptr_t entity) noexcept;
 PhysicsStateWatch watched_physics_state() noexcept;
 // Stopping flight must not discard the independent manual preference.
 void clear_no_bail_flight() noexcept;
 // The local skater as No Bail follows it (update_no_bail publishes it), for a feature that reads it
-// (Hall of Meat): any thread, its ownership chain resolved again now.
+// (the plugins' physics steps, grind exits): any thread, its ownership chain resolved again now.
 struct NoBailSkater {
     std::uintptr_t base{}, entity{}, core{}, context{}, rig{};
 };
@@ -193,8 +197,8 @@ struct DarkPopLast {
     unsigned freeze_writes{}, freeze_held{}, freeze_lost{};
 };
 DarkPopLast dark_pop_last() noexcept;
-// Further listeners on the same steps (the grind exit control, grind_exit_control.h),
-// independent of the observer above so none displaces Hall of Meat's. Same thread and timing. Adding one already there, or removing one that is not, does nothing;
+// Further listeners on the same steps (skater_events.h, grind_exit.h), independent of the observer
+// above so none displaces another. Same thread and timing. Adding one already there, or removing one that is not, does nothing;
 // false when all slots are taken.
 inline constexpr std::size_t no_bail_step_listener_slots = 4;
 bool add_no_bail_step_listener(NoBailStepObserver listener) noexcept;

@@ -5,6 +5,7 @@
 #include "trainer_presets.h"
 #include "trainer_session.h"
 #include "trainer_landing.h"
+#include "trainer_motion.h"
 #include "trainer_waypoint.h"
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
@@ -17,9 +18,10 @@
 #include "Extension/Profile/local_profile_runtime.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/client_source_spawn_internal.h"
-#include "Extension/BoardBreak/board_break.h"
 #include "Extension/Skater/no_bail.h"
 #include "Extension/Skater/physics_tuning.h"
+#include "Extension/Skater/skater_push.h"
+#include "Extension/Throwdowns/throwdown_kit.h"
 #include "Extension/Skater/skater_observer.h"
 #include "Extension/UI/Overlay/overlay.h"
 #include <mutex>
@@ -51,6 +53,12 @@ extern "C" std::uint64_t DingoSDKOverlayGrindStickLeaned() noexcept;
 namespace dingosdk::trainer {
 namespace {
 namespace tuning = dingosdk::physics_tuning;
+namespace kit = dingosdk::throwdowns::kit;
+// A plugin match blocks markers and returns, unless it lets teleports through (its own).
+bool match_blocks_markers() noexcept {
+    const auto m = kit::match();
+    return m.markers && !m.teleports;
+}
 using Vec3 = std::array<float, 3>;
 constexpr float max_coordinate = 1.0e6f;
 constexpr std::uint32_t air_states_first = 200, air_states_end = 300;
@@ -126,6 +134,12 @@ struct State {
     std::string status = "Waiting for the game.", last;
     bool ready{};
     std::map<std::string, Saved, std::less<>> saved;                                    // by key
+    // Plugins' values (plugin_tune), by key: whose, and what was there before.
+    struct PluginTune {
+        std::string owner;
+        double before{};
+    };
+    std::map<std::string, PluginTune, std::less<>> plugin_tunes;
     UserPresets user;                                                                   // presets
     std::vector<std::string> active;                                                    // presets applied since Stock
     std::map<std::string, MapData, std::less<>> maps;
@@ -189,6 +203,10 @@ struct State {
     float manual_height{1}; // the pop out of a manual
     float gravity{1};       // x the game's own gravity, in the air on the board
     bool gravity_live{true}; // this build's gravity constants are the known ones
+    // Advanced gravity: the gravity the game plans landings with (own off: the same as gravity), and how far the air
+    // animations keep the timing they have at the game's gravity (0 the game's, 1 all the way).
+    bool gravity_landing_own{};
+    float gravity_landing{1}, gravity_timing{1};
     float grind_side{1};    // the sideways part of a pop out of a grind or slide
     float grind_push{};     // Skate 3's pop: this many m/s sideways at full stick, the way the stick points (0: none)
     // Skate 3's turn on a grind: the left stick alone turns the board, up to this many degrees either way (0: off, the
@@ -284,7 +302,7 @@ struct State {
     std::vector<std::size_t> class_entries; // the entries that are fields of those classes
     // A session whose host sets everyone's physics (session_physics.h): what the host shares
     // beyond its tuning, and what each class field holds for it. The player's own stand down.
-    bool enforced{};
+    bool enforced{}, competition{};
     std::uint64_t host_revision{};
     SessionExtras host;
     std::array<float, class_field_count> host_classes{};
@@ -422,6 +440,10 @@ void load_store() {
             s.nocomply_height = std::clamp(o.value("nocomply_height", 1.0f), height_low, height_high);
             s.manual_height = std::clamp(o.value("manual_height", 1.0f), height_low, height_high);
             s.gravity = std::clamp(o.value("gravity", 1.0f), gravity_low, gravity_high);
+            s.gravity_landing_own = o.value("gravity_landing_own", false);
+            s.gravity_landing = std::clamp(o.value("gravity_landing", 1.0f), gravity_low, gravity_high);
+            // (0.8.5 saved its default 0 as "gravity_timing"; the default is 1 since 0.8.6, under a new key.)
+            s.gravity_timing = std::clamp(o.value("gravity_animation_timing", 1.0f), 0.0f, 1.0f);
             s.grind_side = std::clamp(o.value("grind_side", 1.0f), 0.0f, 1.0e6f);
             s.grind_push = std::clamp(o.value("grind_push", 0.0f), -1.0e6f, 1.0e6f);
             // (grind_lean, grind_turn and grind_tip were levers of earlier builds that did nothing: read past.)
@@ -523,6 +545,9 @@ void save_store() {
         options["nocomply_height"] = s.nocomply_height;
         options["manual_height"] = s.manual_height;
         options["gravity"] = s.gravity;
+        options["gravity_landing_own"] = s.gravity_landing_own;
+        options["gravity_landing"] = s.gravity_landing;
+        options["gravity_animation_timing"] = s.gravity_timing;
         options["grind_side"] = s.grind_side;
         options["grind_push"] = s.grind_push;
         options["grind_range"] = s.grind_range;
@@ -741,11 +766,16 @@ void remember(const Entry &e) {
     if (e.touched || e.frozen) s.saved[e.key] = {e.value, e.frozen};
     else s.saved.erase(e.key);
 }
-void set_entry(Entry &e, double value) {
+// `own`: the player's change, remembered and saved, which takes the value back from a plugin.
+// Otherwise a plugin's (plugin_tune), neither.
+void set_entry(Entry &e, double value, bool own = true) {
     e.value = sane(e, value);
     e.touched = e.value != e.stock;
     apply_entry(e);
-    remember(e);
+    if (own) {
+        remember(e);
+        state().plugin_tunes.erase(e.key);
+    }
     // A linked value scales its graphs by the same ratio (the graphs are what the game reads).
     if (!e.drives.empty() && e.stock != 0) {
         const auto ratio = e.value / e.stock;
@@ -755,7 +785,7 @@ void set_entry(Entry &e, double value) {
             if (index < s.entries.size() && !s.entries[index].frozen) {
                 auto &target = s.entries[index];
                 const bool multiplier = target.kind == Kind::curve || target.kind == Kind::graph;
-                set_entry(target, multiplier ? ratio : target.stock * ratio);
+                set_entry(target, multiplier ? ratio : target.stock * ratio, own);
             }
     }
 }
@@ -776,6 +806,7 @@ Entry *find_entry(std::string_view id) {
 }
 void build_entries() {
     auto &s = state();
+    s.plugin_tunes.clear();
     s.entries.clear();
     s.index.clear();
     s.class_entries.clear();
@@ -865,25 +896,13 @@ void build_entries() {
     s.extras_due = true;
     say(logging::Level::info, std::format("Trainer: {} tuning values and {} curves are editable.", m.fields.size(), m.curve_slots.size()));
 }
-// Board Break's wear (Extension/BoardBreak) sets four of the tuning's values itself: the game's own times
-// what wear does to a board, and none the player changed. While the player has not changed one it is
-// wear's: the trainer hands it back before each write rather than putting back the number it saw last.
-bool board_break_value(const Entry &e, double &value) {
-    if (e.class_field >= 0 || e.kind != Kind::real) return false;
-    const auto worn = board_break::handling_value(e.offset);
-    if (worn) value = *worn;
-    return worn.has_value();
-}
-// A new copy of the asset (first sight, or a level load): its values are the stock ones, but for
-// what Board Break's wear set already (stock is then the game's own, from its data).
+// A new copy of the asset (first sight, or a level load): its values are the stock ones.
 void adopt(const tuning::Values &live) {
     auto &s = state();
     s.own = live;
     s.want = live;
     for (auto &e : s.entries) {
-        double worn{};
         e.stock = e.class_field >= 0 ? class_fields[e.class_field].stock : e.kind == Kind::curve || e.kind == Kind::graph ? 1.0
-            : board_break_value(e, worn) && s.model && static_cast<std::size_t>(e.offset) + 4 <= s.model->image.size() ? read_field(s.model->image, e)
             : read_field(s.own.image, e);
         const auto found = s.saved.find(e.key);
         if (found != s.saved.end()) {
@@ -977,11 +996,14 @@ void publish_extras() {
 void sync_session() {
     auto &s = state();
     const bool enforced = session_tuning_enforced();
+    const bool competition = competition_stock_physics();
+    const bool competition_changed = competition != s.competition;
     std::vector<std::uint8_t> bytes;
     bool fresh = false;
-    if (enforced) fresh = host_physics_extras(s.host_revision, bytes);
+    if (competition) { fresh = competition_changed; s.host_revision = 0; }
+    else if (enforced) fresh = host_physics_extras(s.host_revision, bytes);
     else s.host_revision = 0; // read again the next time a host sets the physics
-    if (enforced == s.enforced && !fresh) return;
+    if (enforced == s.enforced && !fresh && !competition_changed) return;
     if (fresh) {
         auto decoded = decode_session_extras(bytes);
         if (!decoded) say(logging::Level::warning, "Trainer: what the host shares beyond its tuning could not be read; the game's own is used for it.");
@@ -992,6 +1014,7 @@ void sync_session() {
             say(logging::Level::info, std::format("Trainer: skating with the host's trick multipliers and {} of its class values.", s.host.classes.size()));
     }
     s.enforced = enforced;
+    s.competition = competition;
     for (const auto index : s.class_entries) want_class(s.entries[index]);
     changed(false);
 }
@@ -1032,10 +1055,6 @@ void hold(std::uint64_t now) {
     const bool pending = s.write_due || std::ranges::any_of(s.entries, [](const Entry &e) { return e.touched; });
     s.write_due = false;
     if (!pending) return;
-    for (const auto &e : s.entries) {
-        double worn{};
-        if (!e.touched && !e.frozen && board_break_value(e, worn)) write_field(s.want.image, e, worn);
-    }
     const auto written = tuning::write_live(s.base, s.entity, s.want);
     if (written.failed) {
         s.status = "The physics tuning could not be written.";
@@ -1191,6 +1210,9 @@ const std::vector<Setup> &setups() {
         toggle("trick.flip_pop", topic_pop, &s.flip_pop);
         toggle("trick.flip_flick", topic_pop, &s.flip_flick);
         toggle("trick.underflip_split", topic_pop, &s.underflip_split);
+        toggle("trick.gravity_landing_own", topic_pop, &s.gravity_landing_own);
+        real("trick.gravity_landing", topic_pop, &s.gravity_landing, 1.0f, gravity_low, gravity_high);
+        real("trick.gravity_timing", topic_pop, &s.gravity_timing, 1.0f, 0.0f, 1.0f);
         for (std::size_t i = 0; i < flip_tricks.size(); ++i) {
             real("trick." + std::string(flip_tricks[i].key), topic_pop, &s.flip_trick[i], 1.0f, flip_low, flip_high);
             all->back().title = std::string(flip_tricks[i].label) + (i >= first_underflip_slot ? ": underflip speed" : ": flip speed");
@@ -1237,7 +1259,8 @@ const std::vector<Setup> &setups() {
             all->back().high = high;
         }
         constexpr std::pair<std::string_view, std::string_view> titles[]{
-            {"trick.flip_speed", "Flip trick speed"}, {"trick.underflip_speed", "Underflip speed"}, {"trick.manual_height", "Manual pop height"}, {"trick.gravity", "Gravity"},
+            {"trick.flip_speed", "Flip trick speed"}, {"trick.underflip_speed", "Underflip speed"}, {"trick.manual_height", "Manual pop height"}, {"trick.gravity", "Gravity"}, {"trick.gravity_landing_own", "Gravity: landings planned with their own gravity"}, {"trick.gravity_landing", "Landing gravity"},
+            {"trick.gravity_timing", "Animation timing"},
             {"trick.nocomply_height", "No comply height"}, {"trick.boneless_height", "Boneless height"}, {"trick.hippy_height", "Hippy jump height"},
             {"trick.offboard_height", "Off-board jump height"}, {"trick.pump_power", "Pump power"}, {"trick.revert_boost", "Board bending boost"},
             {"trick.flip_advanced", "Advanced trick speed"}, {"trick.flip_pop", "Slow flips pop higher"}, {"trick.flip_flick", "Flick tricks at full speed"},
@@ -1513,7 +1536,11 @@ void enter_map(const std::string &level) {
 }
 MapData &current_map() { return state().maps[state().map]; }
 bool teleport_allowed(std::string &why) {
-    if (multiplayer_session_active() && !session_noclip_allowed()) {
+    if (match_blocks_markers()) {
+        why = "Quit the active match before using markers or teleporting.";
+        return false;
+    }
+    if (multiplayer_session_active() && !session_noclip_allowed() && !kit::match().teleports) {
         why = "The host has turned off teleporting in this session.";
         return false;
     }
@@ -1936,14 +1963,14 @@ void observe(std::uintptr_t base, std::uintptr_t client, std::uint64_t now) {
     }
     const auto seconds = m.valid ? clock_seconds(stamp - m.stamp) : 0.0;
     const Vec3 step{position[0] - m.position[0], position[1] - m.position[1], position[2] - m.position[2]};
-    const bool jumped = std::sqrt(step[0] * step[0] + step[1] * step[1] + step[2] * step[2]) > 25.0f;
-    if (!m.valid || seconds <= 0.0005 || seconds > 0.25 || jumped) {
+    const float distance=std::sqrt(step[0]*step[0]+step[1]*step[1]+step[2]*step[2]);
+    if (reset_motion_segment(m.valid,seconds,distance,skater_push::holding() || skater_push::pending() || local_skater_teleport_pending())) {
         // First sample, a hitch, or a teleport: nothing can be measured across it.
         m = {};
         m.valid = true;
         m.position = position;
         m.stamp = stamp;
-        t.airborne = false;
+        t.airborne = false;t.speed=0;t.vertical=0;
         t.air_time = t.height = 0;
         return;
     }
@@ -2039,7 +2066,7 @@ void observe(std::uintptr_t base, std::uintptr_t client, std::uint64_t now) {
     }
     // A bail: back to the selected marker once the skater has had time to fall.
     if (watch.valid && (!s.wipeouts_known || watch.wipeouts != s.seen_wipeouts)) {
-        if (s.wipeouts_known && s.auto_return) {
+        if (s.wipeouts_known && s.auto_return && !match_blocks_markers()) {
             const bool marked = current_map().markers[static_cast<std::size_t>(s.slot)].set;
             if (marked) s.return_at = now + static_cast<std::uint64_t>(s.return_delay * 1000.0f);
             say(logging::Level::info, marked ? std::format("Trainer: bail seen; back to marker {} in {:.1f} s.", s.slot + 1, s.return_delay)
@@ -2053,6 +2080,9 @@ void set_logging(bool on) {
     auto &s = state();
     if (s.log.is_open()) s.log.close();
     s.logging = false;
+#if defined(DINGOSDK_LEAN_PLAYTEST)
+    (void)on;
+#else
     if (!on) return;
     const auto directory = data_directory() / L"telemetry";
     std::error_code error;
@@ -2069,6 +2099,7 @@ void set_logging(bool on) {
     s.log << "seconds,x,y,z,speed_mps,vertical_mps,heading_deg,airborne,physics_state,board_turn_dps\n";
     s.log_start = clock_now();
     s.logging = true;
+#endif
 }
 void shortcuts() {
     auto &s = state();
@@ -2453,6 +2484,9 @@ void build_view() {
     next->manual_height = s.manual_height;
     next->gravity = s.gravity;
     next->gravity_live = s.gravity_live;
+    next->gravity_landing_own = s.gravity_landing_own;
+    next->gravity_landing = s.gravity_landing;
+    next->gravity_timing = s.gravity_timing;
     next->grind_side = s.grind_side;
     next->grind_push = s.grind_push;
     next->grind_range = s.grind_range;
@@ -2679,6 +2713,7 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
             refresh_waypoint();
         }
         if (playing) {
+            if (match_blocks_markers()) s.return_at = 0;
             observe(base, client, now);
             shortcuts();
             update_landing(now);
@@ -2805,6 +2840,8 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
         // The speeds pushes aim for are the push class's (value_links ties them to the tuning's top
         // pushing speed, which only gates whether a push may start).
         const auto *top_speed = find_entry("physicspush.maxpushablespeed");
+        if(const auto push=skater_push::peek())
+            (void)queue_skater_push_velocity(client,s.entity,*push);
         // Past the game's own ceiling the push is carried by the trainer (see trainer_push_speed):
         // the player's own setting only, like the other speed the trainer adds.
         const float push_factor = top_speed && top_speed->touched && top_speed->stock > 0 && !extras_blocked()
@@ -2889,8 +2926,12 @@ void tick(std::uintptr_t base, std::uintptr_t client, bool playing, const std::s
         }
         {
             // Gravity: the game's own under a host's physics or with boosts off. Both levers let go by themselves.
-            float board = s.enforced || (multiplayer_session_active() && !session_boosts_allowed()) ? 1.0f : s.gravity, foot = board;
-            set_air_gravity(client, s.entity, board);
+            const bool stock_gravity = s.enforced || (multiplayer_session_active() && !session_boosts_allowed());
+            float board = stock_gravity ? 1.0f : s.gravity, foot = board;
+            // Under a host's physics or with boosts off the advanced levers let go with the gravity.
+            const bool own = board != 1.0f || (s.gravity_landing_own && s.gravity_landing != 1.0f);
+            set_air_gravity(client, s.entity, board, !own || stock_gravity ? 1.0f : s.gravity_landing_own ? s.gravity_landing : 0.0f,
+                            board == 1.0f ? 0.0f : s.gravity_timing);
             air_gravity_now = board;
             if (const bool live = set_foot_gravity(foot); live != s.gravity_live) {
                 s.gravity_live = live;
@@ -3290,6 +3331,8 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
     }
     if (v == "marker") {
         const auto action = lower(arg(0));
+        if ((action == "save" || action == "go") && match_blocks_markers())
+            return "error: markers are disabled during this match.";
         const auto slot = slot_argument(a, 1);
         if (!slot) return std::format("error: slots are 1 to {}.", marker_slots);
         if (s.map.empty()) return "error: load a level first.";
@@ -3449,6 +3492,16 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             if (!value) return "error: gravity needs a multiplier, 1 = the game's own (0.5 floats, 2 drops fast).";
             if (!editable(&why)) return "error: " + why;
             s.gravity = std::clamp(static_cast<float>(*value), gravity_low, gravity_high);
+        } else if (name == "gravity_landing") {
+            const auto value = number(arg(1));
+            if (!value) return "error: gravity_landing needs a multiplier: the gravity the game plans landings with (gravity_landing_own 1 uses it).";
+            if (!editable(&why)) return "error: " + why;
+            s.gravity_landing = std::clamp(static_cast<float>(*value), gravity_low, gravity_high);
+        } else if (name == "gravity_timing") {
+            const auto value = number(arg(1));
+            if (!value) return "error: gravity_timing needs 0 (the game's animation timing) to 1 (the timing at the game's own gravity).";
+            if (!editable(&why)) return "error: " + why;
+            s.gravity_timing = std::clamp(static_cast<float>(*value), 0.0f, 1.0f);
         } else if (name == "pump_power") {
             const auto value = number(arg(1));
             if (!value) return "error: pump_power needs a multiplier, 1 = what the game's own pump gains.";
@@ -3466,7 +3519,7 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
             if (!value) return "error: return_delay needs seconds.";
             s.return_delay = std::clamp(static_cast<float>(*value), 0.0f, 3600.0f);
         } else if (!flag(arg(1), on)) {
-            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|underflip_split|log 0|1";
+            return "error: usage: trainer option hud|hud_jump|auto_return|pad|flip_advanced|flip_pop|flip_flick|underflip_split|gravity_landing_own|log 0|1";
         } else if (name == "hud") s.hud = on;
         else if (name == "hud_jump") s.hud_jump = on;
         else if (name == "auto_return") s.auto_return = on;
@@ -3486,6 +3539,9 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
         } else if (name == "underflip_split") {
             if (on && !editable(&why)) return "error: " + why;
             s.underflip_split = on;
+        } else if (name == "gravity_landing_own") {
+            if (on && !editable(&why)) return "error: " + why;
+            s.gravity_landing_own = on;
         }
         else if (name == "log") {
             set_logging(on);
@@ -3589,6 +3645,65 @@ std::string run(std::string_view verb, const std::vector<std::string> &a) {
 }
 } // namespace
 
+namespace {
+TuningValue tuning_of(const Entry &e) {
+    const auto &s = state();
+    const auto held = s.plugin_tunes.find(e.key);
+    return {e.id, e.label, e.group, e.kind, e.value, e.stock, held == s.plugin_tunes.end() ? std::string{} : held->second.owner};
+}
+} // namespace
+
+std::optional<TuningValue> tuning_value(std::string_view id, std::string *why) {
+    if (!state().model) {
+        if (why) *why = "the game's physics tuning is not read yet";
+        return std::nullopt;
+    }
+    const auto *e = find_entry(id);
+    if (!e) {
+        if (why) *why = "no tuning value is called \"" + std::string(id) + "\"";
+        return std::nullopt;
+    }
+    return tuning_of(*e);
+}
+std::vector<TuningValue> find_tuning(std::string_view text, std::size_t most) {
+    std::vector<TuningValue> found;
+    const auto pattern = lower(text);
+    for (const auto &e : state().entries)
+        if (found.size() < most && matches(e.key, pattern)) found.push_back(tuning_of(e));
+    return found;
+}
+std::string plugin_tune(std::string_view owner, std::string_view id, std::optional<double> value) {
+    auto &s = state();
+    if (!s.model) return "the game's physics tuning is not read yet";
+    auto *e = find_entry(id);
+    if (!e) return "no tuning value is called \"" + std::string(id) + "\"";
+    const auto held = s.plugin_tunes.find(e->key);
+    if (held != s.plugin_tunes.end() && held->second.owner != owner) return held->second.owner + " tunes " + e->id;
+    if (!value) {
+        if (held != s.plugin_tunes.end()) {
+            const double before = held->second.before;
+            s.plugin_tunes.erase(held);
+            set_entry(*e, before, false);
+            changed(false);
+        }
+        return {};
+    }
+    std::string why;
+    if (!editable(&why)) return why;
+    if (is_locked(*e)) return "the player has locked " + e->id + " in the trainer";
+    if (!std::isfinite(*value)) return "a tuning value is a finite number";
+    if (held == s.plugin_tunes.end()) s.plugin_tunes[e->key] = {std::string(owner), e->value};
+    set_entry(*e, *value, false);
+    changed(false);
+    return {};
+}
+void release_plugin_tunes(std::string_view owner) {
+    auto &s = state();
+    std::vector<std::string> mine;
+    for (const auto &[key, tune] : s.plugin_tunes)
+        if (tune.owner == owner) mine.push_back(key);
+    for (const auto &key : mine) (void)plugin_tune(owner, key, std::nullopt);
+}
 bool stage_import(std::string_view text) noexcept {
     try {
         const auto directory = shared_directory();

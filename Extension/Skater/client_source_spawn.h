@@ -9,6 +9,10 @@ namespace dingosdk {
 void initialize_client_source_spawn(std::uintptr_t base);
 // Installs the exact camera-reset handler guard; forwarding is unchanged until a Noclip request is queued.
 bool start_client_noclip_velocity(std::uintptr_t base) noexcept;
+// A plugin's push (skater_push.h): one horizontal velocity at the next on-board physics step,
+// in competition physics only. Uses the verified local physics owner and never enables trainer
+// boosts.
+bool queue_skater_push_velocity(std::uintptr_t client,std::uintptr_t entity,const std::array<float,3>& velocity) noexcept;
 // Trainer: at the local skater's next physics update, multiply its upward velocity by
 // `factor` if it is off the board and rising (a hippy jump that has just started). One request
 // at a time; it expires after 150 ms.
@@ -27,9 +31,21 @@ void set_physics_step_callback(void (*callback)() noexcept) noexcept;
 // rolling skater that is not braking gains speed up to it (m/s). Publish every client tick: it
 // expires after 500 ms.
 void set_push_speed(std::uintptr_t client, std::uintptr_t entity, float factor, float stock, float cruise) noexcept;
+// A plugin's cruise control (reskate.skater.cruise): a rolling skater that is not braking is carried
+// up to `speed` (m/s; 0 off, at most 30), and with `may_slow` eased down to it when not pushing. Rides
+// on the trainer's skater and expiry (set_push_speed); it expires after 300 ms, so set it every tick.
+void set_plugin_cruise(float speed, bool may_slow) noexcept;
+// A plugin's velocity (reskate.skater.set_velocity): the board's bodies set to `velocity` (or it added
+// to theirs) by the next physics step with the local skater on its board, on the ground or in the air,
+// within 500 ms; dropped after. A new one replaces one still waiting.
+void set_plugin_velocity(const std::array<float, 3>& velocity, bool add) noexcept;
 // Trainer: gravity in the air on the board as a multiple of the game's own (1 leaves the skater alone). Publish every
 // client tick: it expires after 500 ms. `air_gravity_steps` counts the physics steps it acted on.
-void set_air_gravity(std::uintptr_t client, std::uintptr_t entity, float factor) noexcept;
+// landing: the gravity the game plans landings with, as a multiple of its own (0: the same as factor). timing: 0 the game's
+// own animation timing in the air, 1 the timing the flight would have at the game's gravity (air_animation_rate is the
+// rate that gives it, 1 on the ground).
+void set_air_gravity(std::uintptr_t client, std::uintptr_t entity, float factor, float landing = 0, float timing = 0) noexcept;
+float air_animation_rate() noexcept;
 std::uint32_t air_gravity_steps() noexcept;
 // Trainer: the game has just launched a flight with this trajectory object (any skater's; any thread).
 void note_flight_record(std::uintptr_t trajectory) noexcept;
@@ -111,11 +127,16 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
     const overlay::FlightInput* flight_input = nullptr);
 bool restore_client_debug(std::uintptr_t base, std::uintptr_t client, bool camera_phase_observed);
 bool client_free_camera_active() noexcept;
+// The last verified mode-1 local view, or zero when native placement handed it
+// back. Unlike the input-capture lease above, this proves actual selection.
+std::uintptr_t client_free_camera_view() noexcept;
 // Native camera lease for the party's Spectate action. Null restores only the
 // camera acquired by this function; it never changes another debug camera. A positive
 // `fov` is applied to the spectate camera while it is held; its own comes back after.
 bool update_party_camera(std::uintptr_t base, std::uintptr_t client, bool ready, bool phase,
     const std::array<float, 16>* transform, std::string& detail, float fov = 0) noexcept;
+// The local skater's animation component (what the pose hooks are called with), or 0. Client thread.
+std::uintptr_t local_skater_component(std::uintptr_t base, std::uintptr_t client) noexcept;
 bool read_local_camera_transform(std::uintptr_t base, std::uintptr_t client, std::array<float, 16>& transform) noexcept;
 // Publishes the local view's camera (Engine/Game/UI/game_view.h) for things drawn over the
 // world. Client thread, every tick while something needs it.

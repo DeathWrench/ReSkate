@@ -1068,9 +1068,25 @@ void watch_draws(ID3D12GraphicsCommandList* list) noexcept {
     SetLastError(error);
 }
 
+namespace {
+std::atomic<std::uint64_t> render_luid{};
+}
+
+bool render_adapter_luid(LUID& luid) noexcept {
+    const auto value = render_luid.load();
+    if (!value) return false;
+    luid.LowPart = static_cast<DWORD>(value);
+    luid.HighPart = static_cast<LONG>(value >> 32);
+    return true;
+}
+
 void record_gpu_identity(ID3D12Device* device) noexcept {
     static std::atomic<bool> recorded{};
     const auto error = GetLastError();
+    if (device) {
+        const auto luid = device->GetAdapterLuid();
+        render_luid = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(luid.HighPart)) << 32) | luid.LowPart;
+    }
     try {
         ComPtr<IDXGIFactory4> factory;
         ComPtr<IDXGIAdapter1> adapter;

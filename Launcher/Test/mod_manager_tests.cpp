@@ -473,9 +473,6 @@ int main() {
               "The official list keeps what it should: no odd names, no duplicates, no downloads from elsewhere");
         check(official_mods::parse_list("<html>go away</html>").empty() && official_mods::parse_list(R"({"lobbies":3})").empty(),
               "Anything else is no list");
-        const auto fallback = official_mods::fallback_list();
-        check(fallback.size() == 2 && fallback[0].full_name == "Fourth_Studio-Board_Break_Pack" && fallback[1].full_name == "Fourth_Studio-Road_Rash",
-              "ReSkate's own list is Board Break and Road Rash");
     }
     // A copy the player installed from Thunderstore counts as the official mod where it is, rather
     // than downloaded again; the deprecated first Board Break is retired and mods.json forgets it;
@@ -490,7 +487,9 @@ int main() {
         std::ofstream(store / L"Someone-Other_Mod" / L"layout.toc") << "toc";
         std::ofstream(store / L"mods.json") << R"({"schema":1,"mods":[{"name":"Fourth_Studio-Road_Rash","enabled":true},)"
                                                R"({"name":"Fourth_Studio-Board_Break","enabled":true},{"name":"Someone-Other_Mod","enabled":false}]})";
-        const auto official = official_mods::fallback_list();
+        std::vector<official_mods::Mod> official(2);
+        official[0].full_name = "Fourth_Studio-Board_Break_Pack";
+        official[1].full_name = "Fourth_Studio-Road_Rash";
         const auto done = official_mods::adopt_and_retire(store, official);
         const auto adopted = store / L"Fourth_Studio-Road_Rash";
         check(done.size() == 2 && read(adopted / L"layout.toc") == "toc" && read(adopted / L".official-version").starts_with("1.0.0") &&

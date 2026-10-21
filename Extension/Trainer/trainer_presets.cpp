@@ -494,7 +494,11 @@ const std::vector<BuiltinPreset> &builtin_presets() {
           {"physicsmode.wipeout_ acceleration", true, 3.0}, {"physicsmode.wipeoutcheckforbadlanding", false, 0.0}}},
         {"Sticky Grinds", "Grinds lock on from further away and at higher speeds.",
          {{"physicsmode.grindlockdist", true, 2.0}, {"physicstrajectory.grindmaxspeedsqr", true, 4.0},
-          {"physicstrajectory.grindmaxspeeddownontogrind", true, 2.0}, {"physicstrajectory.grindlandingmaxangle", true, 2.0}}},
+          {"physicstrajectory.grindmaxspeeddownontogrind", true, 2.0}, {"physicstrajectory.grindlandingmaxangle", true, 2.0},
+          // The reach from the air: without these a dial at 0 still pulls the board onto an edge in flight.
+          {"physicsgrindsair.maxdist50_50", true, 2.0}, {"physicsgrindsair.maxdist5_0", true, 2.0},
+          {"physicsgrindsair.maxdisttipslide", true, 2.0}, {"physicsgrindsair.maxdistboardslide", true, 2.0},
+          {"physicstrajectory.scoregrind", true, 2.0}}},
         {"Slick Grinds", "Grinds and slides keep their speed.",
          {{"physicsgrind.commonfrictionscalar", true, 0.4}, {"physicsgrind.curbfrictionscalar", true, 0.4}}},
         {"Smooth Surfaces", "Rough ground rides like polished concrete.", {{"physicsmode.makesurfacessmooth", false, 1.0}}},

@@ -6,6 +6,7 @@
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Debug/trace.h"
+#include "Engine/Core/Platform/game_instance.h"
 #include "Engine/Vfs/mod_catalog.h"
 
 #include <algorithm>
@@ -365,7 +366,8 @@ void Launcher::run_check() {
         // checked, which download() sees to.)
         if (installed && launcher_app::game_data_mismatched(session_.paths))
             set(Phase::game_outdated, "Game files need verifying",
-                "Some of the game's files are from another version of skate. (Steam updated it, or a download did not finish). "
+                "Some of the game's files are missing, damaged or from another version of skate. (Steam updated it, a download "
+                "did not finish, or a cloud folder such as OneDrive keeps them online only). "
                 "Press DOWNLOAD: every file is checked and only the wrong ones are downloaded.");
         else if (installed) set(Phase::game_outdated, "Steam updated Skate",
             "ReSkate needs the build below. Only the files that differ are downloaded.");
@@ -378,9 +380,14 @@ void Launcher::run_check() {
         fail("ReSkate.dll is missing from the game folder.");
         return;
     }
-    set(Phase::ready, "Ready to skate", !config ? "Offline: update check skipped."
+    std::string detail = !config ? "Offline: update check skipped."
         : !settings_.updates ? (newer ? "ReSkate updates are off; keeping your ReSkate files." : "ReSkate updates are off.")
-        : "Up to date.");
+        : "Up to date.";
+    if (const auto advice = launcher_app::memory_advice(); !advice.empty()) {
+        logging::write(logging::Level::info, logging::Channel::launcher, advice);
+        detail += " " + advice;
+    }
+    set(Phase::ready, "Ready to skate", std::move(detail));
 }
 
 void Launcher::run_updates() {
@@ -521,6 +528,11 @@ bool Launcher::run_mod_merge() {
 }
 
 void Launcher::run_play() {
+    // (Before the merge, which would write into the patch the running game reads: game_instance.h.)
+    if (game_instance::running(session_.paths.directory)) {
+        fail("Skate is already running from this folder. Close it before starting it again.");
+        return;
+    }
     // The official mods first (official_mods.h): the merge takes them in.
     if (!official_mods::wait(std::chrono::milliseconds(0))) {
         set(Phase::merging, "Official mods", "Finishing the official mods being installed", -1.0f);

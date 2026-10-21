@@ -1,6 +1,6 @@
 #include "no_bail.h"
+#include "Extension/Skater/skater_events.h"
 #include "Engine/Game/Input/controller_bindings.h"
-#include "Extension/BoardBreak/board_break.h"
 #include "Engine/Core/Hooks/hooks.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/memory.h"
@@ -8,6 +8,7 @@
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/engine.h"
 #include "Engine/Game/Build/20260929/no_bail.h"
+#include "Engine/Game/Build/20260929/skater_state.h"
 #include <array>
 #include <algorithm>
 #include <atomic>
@@ -75,7 +76,10 @@ struct Protection {
 Protection& protection() { static auto* value = new Protection; return *value; }
 struct StateWatch {
     std::atomic<std::uintptr_t> selector{}, causes{}; // the watched skater's selector and cause collector
+    std::atomic<std::uintptr_t> core{};
     std::atomic<std::uint64_t> until{}, changes{}, wipeouts{};
+    std::atomic<std::uint64_t> runouts{};
+    std::atomic<bool> runout{};
     std::atomic<std::uint32_t> state{}, previous{};
     std::atomic<std::int64_t> since{}, previous_ticks{}; // performance-counter ticks
 };
@@ -303,7 +307,9 @@ bool suppress_cause(std::uintptr_t causes, std::int32_t reason, std::uintptr_t c
 }
 void record_cause(std::uintptr_t causes, std::int32_t reason, float magnitude) {
     const auto caller = reinterpret_cast<std::uintptr_t>(_ReturnAddress());
-    if (causes == state_watch().causes.load(std::memory_order_acquire)) board_break::note_cause(reason, magnitude);
+    if (causes == state_watch().causes.load(std::memory_order_acquire)) {
+        skater_events::note_cause(reason, magnitude);
+    }
     const bool protect = suppress_cause(causes, reason, caller);
     // Do not force the native recovery/stumble predicate (recovery_predicate). Its
     // result is also exported to animation at +0x9e, even without a collision.
@@ -2032,7 +2038,7 @@ std::uint32_t choose_state(std::uintptr_t selector, std::uint32_t current) {
             w.changes.fetch_add(1, std::memory_order_relaxed);
             if (chosen == wipeout_physics_state) {
                 // Before the count: the tick that sees the new wipeout finds its cause there.
-                board_break::note_wipeout(w.causes.load(std::memory_order_acquire));
+                skater_events::note_wipeout(w.causes.load(std::memory_order_acquire));
                 w.wipeouts.fetch_add(1, std::memory_order_relaxed);
             }
         }
@@ -2095,6 +2101,20 @@ void publish_animation(std::uintptr_t core) {
     (void)filter_requests(core, &Owner::core);
     protection().publish_original(core);
     filter_contact_animation(core);
+    // Sample the game's own failed-landing/runout result at its publication
+    // boundary. It may be true for only one physics frame, between mode ticks.
+    // Counting its rising edge retains that event without forcing a native bail
+    // or treating an ordinary voluntary dismount as a failed landing.
+    LastError error;
+    auto& w=state_watch();
+    if(core==w.core.load(std::memory_order_acquire) && GetTickCount64()<w.until.load(std::memory_order_acquire) &&
+       pointer(core,0x440)==w.selector.load(std::memory_order_acquire)) {
+        const auto animation=pointer(pointer(core,addr::skater_state::trick_state_offset),recovery_animation_output);
+        std::uint8_t runout{};
+        if(animation && read(animation+recovery_animation_flag,runout) && runout<=1 &&
+           w.runout.exchange(runout!=0,std::memory_order_acq_rel)!=(runout!=0) && runout)
+            w.runouts.fetch_add(1,std::memory_order_relaxed);
+    }
 }
 bool compatible(std::uintptr_t base) noexcept {
     if (base < 0x10000 || base > highest - supported_build::game_image_size) return false;
@@ -2208,6 +2228,17 @@ bool set_teleport_on_board(std::uintptr_t component) noexcept {
         *reinterpret_cast<volatile std::uint8_t*>(component + 0xc0) = 1;
         return true;
     } __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+bool prepare_on_board_teleport(std::uintptr_t client, std::uintptr_t entity) noexcept {
+    LastError error;
+    Owner owner;
+    if(!protection().ready.load(std::memory_order_acquire) || !resolve(client,entity,owner))return false;
+    std::uint8_t board{};
+    if(!read(owner.component+0xc0,board))return false;
+    if(board==1)return true;
+    if(!set_teleport_on_board(owner.component))return false;
+    logging::write(logging::Level::info,logging::Channel::skater,"Match countdown: native on-board spawn option prepared.");
+    return true;
 }
 void update_board_lock(std::uintptr_t client, std::uintptr_t entity, bool locked) noexcept {
     LastError error;
@@ -2435,9 +2466,12 @@ void watch_physics_state(std::uintptr_t client, std::uintptr_t entity) noexcept 
     auto& w = state_watch();
     Owner owner;
     if (!protection().ready.load(std::memory_order_acquire) || !resolve(client, entity, owner)) return;
-    if (w.selector.exchange(owner.selector, std::memory_order_acq_rel) != owner.selector)
+    if (w.selector.exchange(owner.selector, std::memory_order_acq_rel) != owner.selector) {
         w.state.store(0, std::memory_order_release);
+        w.runout.store(false,std::memory_order_release);
+    }
     w.causes.store(owner.causes, std::memory_order_release);
+    w.core.store(owner.core, std::memory_order_release);
     w.until.store(GetTickCount64() + 500, std::memory_order_release);
 }
 PhysicsStateWatch watched_physics_state() noexcept {
@@ -2451,6 +2485,26 @@ PhysicsStateWatch watched_physics_state() noexcept {
     result.previous_seconds = static_cast<float>(static_cast<double>(w.previous_ticks.load(std::memory_order_relaxed)) / frequency);
     result.changes = w.changes.load(std::memory_order_relaxed);
     result.wipeouts = w.wipeouts.load(std::memory_order_relaxed);
+    result.runouts = w.runouts.load(std::memory_order_relaxed);
+    if(result.valid) {
+        // Failed-trick animated/simulated ragdolls commonly stay in 504, just
+        // like ordinary walking. The selector's 300 counter alone misses them.
+        // Revalidate the published core/selector pair before reading the native
+        // offboard flag; retain unknown on a transient unreadable owner.
+        const auto core=w.core.load(std::memory_order_acquire);
+        if(pointer(core,0x440)==w.selector.load(std::memory_order_acquire)) {
+            if(result.state!=offboard_physics_state)result.ragdoll_known=true;
+            else {
+                namespace live=addr::skater_state;
+                const auto trick=pointer(core,live::trick_state_offset);
+                const auto offboard=pointer(trick,live::offboard_state_offset);
+                std::uint8_t flag{};
+                if(offboard && read(offboard+live::ragdoll_offset,flag) && flag<=1) {
+                    result.ragdoll_known=true;result.ragdoll=flag!=0;
+                }
+            }
+        }
+    }
     return result;
 }
 void clear_no_bail_flight() noexcept {

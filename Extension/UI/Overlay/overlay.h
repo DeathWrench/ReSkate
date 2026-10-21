@@ -20,9 +20,50 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
+namespace dingosdk::plugins {
+struct DialogSpec;
+}
 namespace dingosdk::overlay {
+// The overlay's menu, console or a dialog has the input (input_capture.cpp).
+bool interface_open() noexcept;
+// A plugin dialog (reskate.ui.dialog) is open: the overlay keeps the input while it is.
+void set_plugin_dialog_active(bool active) noexcept;
+// Game input a plugin's game layer holds (input_capture.cpp): pad buttons kept from the game, held
+// down for it, or all game input paused for half a second; the keyboard as the overlay reads it,
+// and the mouse wheel's notches since the last call.
+void hide_game_buttons(std::uint16_t buttons) noexcept;
+void hold_game_buttons(std::uint16_t held) noexcept;
+void pause_game_input(bool paused) noexcept;
+bool key_down(int virtual_key) noexcept;
+int take_mouse_wheel() noexcept;
+// The mouse since the last call, whatever the game does with it: raw counts right and down, and the
+// wheel in 120 a notch (away from you positive). False and zeros while the game is not in front or a
+// menu, the console or chat is open (what moved meanwhile is dropped). One reader: the plugin runtime.
+struct MouseLook {
+    long x = 0, y = 0, wheel = 0;
+};
+bool read_mouse_look(MouseLook& look) noexcept;
+// The mouse while a plugin's screen is open (plugin_overlay.cpp): where it is in the window's pixels,
+// its buttons, the wheel's notches since the last read, and whether it is over the screen's panel.
+// False while no plugin screen is open.
+struct PluginCursor {
+    float x{}, y{}, wheel{};
+    bool left{}, right{}, middle{}, over_screen{};
+};
+bool read_plugin_cursor(PluginCursor& cursor) noexcept;
+// What was typed (UTF-8, printable characters only) while a plugin's screen is open and it takes the
+// typing, since the last call; `capture` keeps it taking the typing for the next 300 ms, during which
+// Esc is the plugin's instead of closing the screen.
+std::string take_plugin_text(bool capture) noexcept;
+// reskate.ui.dialog (plugin_dialog.cpp): one dialog at a time over the game, input captured while it
+// is open. The same plugin and id again updates it and keeps what was typed. Empty when shown, else
+// why not. Answers reach the plugin as throwdown kit events (action "dialog", throwdown_kit.h).
+std::string open_plugin_dialog(std::string_view plugin, const plugins::DialogSpec& spec);
+// An empty id closes any of the plugin's.
+void close_plugin_dialog(std::string_view plugin, std::string_view id);
 struct Level {
     std::string asset;
     std::string display_name;
@@ -78,7 +119,6 @@ enum class DebugAction {
     set_first_person_camera_cycle,
     reset_first_person_arm,
     set_free_camera_fov,  // 0 = the game's own FOV
-    set_drone_follow,     // the drone flies itself behind the skater, and the view is its camera
     set_revert_boost_enabled,
     set_revert_boost_speed,
     set_probe_enabled,
@@ -120,7 +160,7 @@ struct FlightInput {
 
 // May change what the GAME reads from an XInput pad (never what ReSkate itself reads). `user` is
 // the XInput slot. Called on whatever thread the game polls from, once per poll that returns a
-// pad. The grind exit control's grab and lean guards (grind_exit_control.h).
+// pad. Plugins' hidden pad controls (Extension/Skater/grind_exit.h, reskate.input.hide).
 struct GamepadValues {
     std::uint16_t buttons = 0;
     std::uint8_t left_trigger = 0, right_trigger = 0;
@@ -134,7 +174,6 @@ struct DebugModel {
     bool ui_available = false;
     bool free_camera = false;
     bool first_person = false;
-    bool drone_follow = false;  // the drone flies itself behind the skater (Skater/drone_follow.h)
     // Vertical degrees applied to the first-person view; 0 keeps the camera's own.
     float first_person_fov = 0;
     float free_camera_fov = 0;  // 0 = the game's own FOV
@@ -269,42 +308,6 @@ struct MissionRow {
     int completed = -1;
 };
 
-// Hall of Meat's switch (Extension/HallOfMeat/hall_of_meat.h): started, and switched on.
-struct HallOfMeatModel {
-    bool available = false, enabled = false;
-};
-
-// Road Rash's switches (Extension/RoadRash/road_rash.h): started, switched on, and whether its
-// worst wounds bleed. `off`: its official mod is turned off in the launcher, and no menu lists it.
-struct RoadRashModel {
-    bool available = false, enabled = false, blood = false;
-    bool off = false;
-};
-
-// Board Break's switch (Extension/BoardBreak/board_break.h): started, switched on, and which of
-// its decks is the one in the game (none: no deck pack loads, and no board can break). `off`: its
-// official mod is turned off in the launcher, and no menu lists it.
-struct BoardBreakModel {
-    bool available = false, enabled = false, has_deck = false;
-    std::string deck = "None";
-    bool off = false;
-    // Its settings (Extension/BoardBreak/board_break_feel.h) and how worn the board is (0 to 1, and
-    // its word).
-    bool always = false, rails = true, wear = true, crack_sounds = true, body_sounds = true;
-    int sensitivity = 100, joined = 50, wear_rate = 100;
-    float worn = 0;
-    std::string condition = "new";
-};
-
-// Grind exit control's switches (Extension/Skater/grind_exit_control.h): started, switched on,
-// LT/RT toe/heel (else left/right of travel), and the player's stance (0 not set, 1 regular,
-// 2 goofy).
-struct GrindExitModel {
-    bool available = false, enabled = false, toe_heel = true;
-    int stance = 0;
-    int strength = 100; // pop-out strength, percent (10-100)
-};
-
 // Keyframe smoothing (Extension/ReplayKeyframes/replay_keyframes.h): started, switched on, and how
 // smooth (0..1) when on.
 struct KeyframeSmoothingModel {
@@ -332,10 +335,6 @@ struct Model {
     WorldControlsModel world_controls;
     ProgressionModel progression;
     PlayerCardModel player_card;
-    HallOfMeatModel hall_of_meat;
-    RoadRashModel road_rash;
-    BoardBreakModel board_break;
-    GrindExitModel grind_exit;
     KeyframeSmoothingModel keyframe_smoothing;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
@@ -505,7 +504,8 @@ struct Nametag {
     std::string tag;                  // role badge before the name ("Dev", "ReSkate Admin", "Content Creator", "Centrix", "Homie", "Admin", "Host", "Friend")
     float distance{};                 // metres from the local skater
     bool talking{};
-    bool flying_drone{};              // flying the FPV drone: a FLYING DRONE label above the name
+    std::string extra;                // a plugin's short tag above the name ("" for none)
+    std::uint32_t extra_color{0xffffffffU};
     // Recent chat lines to show as bubbles above the head, oldest first ("" = none).
     std::vector<NametagBubble> bubbles;
     bool self{};                      // the local player: bubbles only, never a name or dot
@@ -545,6 +545,30 @@ struct ItemBrowserHost {
 };
 // `host` must stay valid for the life of the process.
 void set_item_browser(const ItemBrowserHost *host) noexcept;
+// A presented frame as the game drew it, before ReSkate's own UI goes on top: 8-bit RGBA rows
+// (BGRA when `bgra`), `pitch` bytes apart. Valid only during the call it is handed to.
+struct GrabbedFrame {
+    const std::uint8_t *data{};
+    std::uint32_t width{}, height{}, pitch{};
+    bool bgra{};
+    // The game's depth for the same frame, when it was found (depth_probe.cpp): 32-bit floats,
+    // reversed (1 near, 0 at the far plane), `depth_pitch` bytes a row, the size of the frame.
+    const std::uint8_t *depth{};
+    std::uint32_t depth_pitch{};
+};
+// Screen captures (Extension/Rendering/Capture, reskate.capture): asked on every presented frame, on
+// the render thread, whether they want its pixels, and handed them when they do. While `active` says
+// so the overlay keeps working even with nothing of its own on screen.
+struct FrameGrabHost {
+    bool (*active)() noexcept {};
+    bool (*wants_frame)() noexcept {};
+    void (*take_frame)(const GrabbedFrame &frame) noexcept {};
+};
+// `host` must stay valid for the life of the process.
+void set_frame_grab(const FrameGrabHost *host) noexcept;
+// Research aid for captures (`capture depth`): the game's depth buffers over the next two frames are
+// copied and written to `folder` as pictures, with depth-probe.txt (depth_probe.cpp).
+void request_depth_probe(const wchar_t *folder) noexcept;
 using ParkSurfaceQueue = bool (*)(const EditorSurfaceRequest &);
 void set_park_surface_queue(ParkSurfaceQueue) noexcept;
 using ParkPreviewQueue = bool (*)(const EditorPreviewRequest &);
@@ -615,7 +639,7 @@ extern "C" __declspec(dllexport) bool DingoSDKOverlayStartV3(
 namespace dingosdk::overlay {
 // The first Xbox (XInput) or PlayStation (DualShock 4 / DualSense) controller, read directly.
 // Sticks are -1..1 (up and right positive), triggers 0..1; `buttons` is XInput's wButtons bit mask.
-// Used by the FPV drone's controller selection (Skater/drone_radio.h); safe from any thread.
+// Plugins read it (reskate.input.gamepad); safe from any thread.
 struct Gamepad {
     bool valid = false;
     bool playstation = false;
@@ -647,8 +671,8 @@ inline std::atomic<bool>& menu_open_flag() {
     return value;
 }
 // Reads of a controller between these two calls see the real device even while ReSkate keeps
-// the game from reading it (freecam or drone controller capture). Same thread, paired.
-// The FPV drone reads its controller this way (Skater/drone_radio.h).
+// the game from reading it (freecam, or a plugin's input capture). Same thread, paired.
+// Plugins read controllers this way (Extension/Plugins/plugin_joystick.h).
 void begin_input_access() noexcept;
 void end_input_access() noexcept;
 }
@@ -665,6 +689,11 @@ extern "C" void DingoSDKOverlaySetFreecamInputCapture(bool active);
 // The same hold on the game's input while a card asks something of the player and a
 // controller answers it (the map download's): the buttons that answer must not also skate.
 extern "C" void DingoSDKOverlaySetPromptInputCapture(bool active);
+namespace dingosdk::overlay {
+// Route gameplay Start/Escape through the custom challenge's single menu
+// request. Our independent controller/key readers continue seeing the press.
+void capture_challenge_menu_input(bool active,bool native_panel=false,bool opening_key_down=false) noexcept;
+}
 // The keyboard keys such a card answers to, read past that hold: bit 0 left, 1 right, 2 Enter,
 // 3 Esc. Nothing while the game is not in front or the menu, console or chat has the keys.
 extern "C" unsigned DingoSDKOverlayReadPromptKeys();

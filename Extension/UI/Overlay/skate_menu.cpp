@@ -1,6 +1,5 @@
 #include "Engine/Core/Platform/launcher_support.h"
 #include "skate_menu_internal.h"
-#include "Extension/Skater/drone_flight.h"
 #include "skate_menu.h"
 #include "modding_menu.h"
 #include "skate_style.h"
@@ -930,21 +929,20 @@ ImFont* embedded_font(const wchar_t* name, float size, const ImWchar* ranges) {
 }
 
 constexpr std::array<const char*, page_count> page_names{
-    "HOME", "MAP", "BUILD", "SKATER", "SANDBOX", "ADDONS", "ONLINE", "PROGRESS", "MODS", "SETTINGS", "DEVELOPER"};
+    "HOME", "MAP", "BUILD", "SKATER", "SANDBOX", "ADDONS", "PLUGINS", "ONLINE", "PROGRESS", "MODS", "SETTINGS", "DEVELOPER"};
 constexpr std::array<const char*, page_count> page_subtitles{
     "Everything, a button away.", "Pick your spot. Set the vibe.", "Make the park yours.", "Ride it your way.",
-    "Tune it. Drill it.", "What ReSkate adds to skate.", "Bring your crew.", "Pick up where you want.",
+    "Tune it. Drill it.", "What ReSkate adds to skate.", "What your plugins add.", "Bring your crew.", "Pick up where you want.",
     "Bring your own.", "Your controls, your screen.", "Under the hood."};
-constexpr std::array<const char*, addon_count> addon_names{"ADDONS", "DRONE", "BOARD BREAK", "ROAD RASH", "HALL OF MEAT", "GRIND EXITS", "MUSIC"};
-constexpr std::array<const char*, addon_count> addon_subtitles{
-    "What ReSkate adds to skate.", "Take it to the sky.", "Slams snap your board.", "Bails leave their mark.", "Every bone counts.", "Pick the side you pop out.",
-    "Your sound, in the game."};
+constexpr std::array<const char*, addon_count> addon_names{"ADDONS", "MUSIC"};
+constexpr std::array<const char*, addon_count> addon_subtitles{"What ReSkate adds to skate.", "Your sound, in the game."};
 // The side rail's groups: the heading above the page that starts each.
 const char* group_of(int page) {
     switch (page) {
     case page_map: return "PLAY";
     case page_skater: return "RIDE";
     case page_addons: return "EXTRAS";
+    case page_plugins: return "PLUGINS";
     case page_online: return "CREW";
     case page_mods: return "SYSTEM";
     default: return nullptr;
@@ -977,6 +975,8 @@ void load_skate_fonts(SkateMenu& menu) {
     menu.bold = font(L"FONT_HEADING", "arialbd.ttf", 17);
     menu.heading = font(L"FONT_HEADING", "arialbd.ttf", 22);
     menu.title = font(L"FONT_BRUSH", "arialbi.ttf", 44);
+    static const ImWchar digits[]{'0','9',0};
+    menu.countdown=embedded_font(L"FONT_BRUSH",240.f,digits);
     menu.mono = font(nullptr, "consola.ttf", 15);
     // Full screen's larger set. The brushed titles are page and section names: plain Latin is enough.
     static const ImWchar latin[]{0x0020, 0x00FF, 0};
@@ -1011,12 +1011,31 @@ namespace {
 bool page_hidden(const SkateMenu& menu, const Model& model, int page) {
     // Developer (the network view) is hidden for now; offline there is no Online. HOME is the
     // full screen menu's: a window has its side rail instead.
+    // PLUGINS shows while a plugin has a page.
+    if (page == page_plugins) {
+        const auto pages = plugin_pages();
+        if (!pages || pages->empty()) return true;
+    }
     return page == page_developer || (page == page_home && !menu.fullscreen_drawn) || (model.steam_offline && page == page_online);
 }
-const char* page_title(const SkateMenu& menu) {
+// A plugin's page is titled with its name, and says whose it is.
+const char* page_title(SkateMenu& menu) {
+    if (menu.page == page_plugins && !menu.fullscreen_drawn)
+        if (const auto* shown = shown_plugin_page(menu)) {
+            static std::string title;
+            title = shown->title;
+            std::transform(title.begin(), title.end(), title.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+            return title.c_str();
+        }
     return menu.page == page_addons && menu.addon > addon_all ? addon_names[static_cast<std::size_t>(menu.addon)] : page_names[static_cast<std::size_t>(menu.page)];
 }
-const char* page_subtitle(const SkateMenu& menu) {
+const char* page_subtitle(SkateMenu& menu) {
+    if (menu.page == page_plugins && !menu.fullscreen_drawn)
+        if (const auto* shown = shown_plugin_page(menu)) {
+            static std::string subtitle;
+            subtitle = "A plugin: " + shown->plugin;
+            return subtitle.c_str();
+        }
     return menu.page == page_addons ? addon_subtitles[static_cast<std::size_t>(menu.addon)] : page_subtitles[static_cast<std::size_t>(menu.page)];
 }
 void step_page(SkateMenu& menu, const Model& model, int step) {
@@ -1100,6 +1119,7 @@ void draw_page_body(SkateMenu& menu, const Model& model, const CallbacksV3& call
     case page_skater: skater_page(menu, model, callbacks); break;
     case page_sandbox: trainer_page(menu, model, callbacks); break;
     case page_addons: addons_page(menu, model, callbacks); break;
+    case page_plugins: plugins_page(menu); break;
     case page_online:
         if (console_style()) {
             const auto at = ImGui::GetCursorScreenPos();
@@ -1174,7 +1194,7 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
         const auto origin = ImGui::GetWindowPos();
         auto* draw = ImGui::GetWindowDrawList();
         const float sidebar = px(190.0f);
-        if (menu.page == page_addons && menu.addon == addon_all) menu.addon = addon_drone;
+        if (menu.page == page_addons && menu.addon == addon_all) menu.addon = addon_first;
 
         // Side rail: brushed wordmark, then the pages in their groups like the HUB's tab icons.
         draw->AddRectFilled(origin, ImVec2(origin.x + sidebar, origin.y + size.y), IM_COL32(10, 10, 11, 250));
@@ -1190,9 +1210,9 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
             int rows = 0, groups = 0;
             for (int i = 0; i < page_count; ++i) {
                 if (page_hidden(menu, model, i)) continue;
-                if (i != page_addons) ++rows;
-                else
-                    for (int a = addon_drone; a < addon_count; ++a) rows += !addon_hidden(model, a);
+                if (i == page_addons) rows += addon_count - addon_first;
+                else if (i == page_plugins) rows += static_cast<int>(plugin_pages()->size());
+                else ++rows;
                 if (group_of(i)) ++groups;
             }
             const float spacing = ImGui::GetStyle().ItemSpacing.y;
@@ -1228,12 +1248,24 @@ void draw_windowed(SkateMenu& menu, const Model& model, const CallbacksV3& callb
             }
             ImGui::PushID(i);
             if (i == page_addons) {
-                for (int a = addon_drone; a < addon_count; ++a) {
-                    if (addon_hidden(model, a)) continue;
+                for (int a = addon_first; a < addon_count; ++a) {
                     ImGui::PushID(a);
                     if (row("##addon", addon_names[static_cast<std::size_t>(a)], menu.page == page_addons && menu.addon == a, row_height, 0,
                             menu.bold, px(16)))
                         open_page(menu, page_addons, a);
+                    ImGui::PopID();
+                }
+            } else if (i == page_plugins) {
+                // A row for each plugin with a page, by its name.
+                const auto pages = plugin_pages();
+                for (const auto& entry : *pages) {
+                    ImGui::PushID(entry.plugin.c_str());
+                    std::string name = entry.title;
+                    std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+                    if (row("##plugin", name.c_str(), menu.page == page_plugins && menu.plugin_page == entry.plugin, row_height, 0, menu.bold, px(16))) {
+                        open_page(menu, page_plugins);
+                        menu.plugin_page = entry.plugin;
+                    }
                     ImGui::PopID();
                 }
             } else if (row("##page", page_names[static_cast<std::size_t>(i)], menu.page == i, row_height, 0, menu.bold, px(16))) {
@@ -1488,7 +1520,6 @@ void draw_skate_menu(SkateMenu& menu, const Model& model, const CallbacksV3& cal
         open_page(menu, page_skater);
         menu.skater_tab = 2;
     }
-    if (dingosdk::drone::menu_flag().exchange(false)) open_page(menu, page_addons, addon_drone); // `dronemenu`
     menu.page = std::clamp(menu.page, 0, static_cast<int>(page_count) - 1);
     if (page_hidden(menu, model, menu.page)) menu.page = full ? page_home : page_map;
     menu_page_owns_pad().store(full && (menu.page == page_online || menu.recording_bind));

@@ -104,8 +104,7 @@ struct Runtime {
     std::string last_readiness, last_client_content, last_gameplay_settings_override_observation,
         last_skater_slot_override_observation,
         last_main_mission_override_observation,
-        last_fixed_stop_entitlement_provider_observation,
-        last_neighborhood_unlock_override_observation;
+        last_fixed_stop_entitlement_provider_observation;
     std::uint64_t console_delivered_sequence{}; // Single, serialized overlay reader.
     dingosdk::ConsoleActivityFeed console_activity;
 };

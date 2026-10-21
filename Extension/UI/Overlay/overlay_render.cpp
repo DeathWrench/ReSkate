@@ -3,8 +3,9 @@
 #include "Engine/Core/Profiling/profiler.h"
 #include "overlay_internal.h"
 #include "Extension/Trainer/trainer_page.h"
-#include "Extension/Skater/drone_flight.h"
-#include "Extension/HallOfMeat/hall_of_meat_overlay.h"
+#include "Extension/UI/Overlay/game_images.h"
+#include "plugin_overlay.h"
+#include "screen_look.h"
 #include "park_previews.h"
 #include "chat_emotes.h"
 #include "input_capture.h"
@@ -15,6 +16,11 @@
 #include <imgui_internal.h>
 
 namespace dingosdk::overlay::detail {
+void draw_plugin_dialog(); // reskate.ui.dialog (plugin_dialog.cpp)
+namespace {
+// The overlay's output transfer (setup_graphics), for the screen look: it grades colour in SDR only.
+int output_transfer{};
+}
 
 // ImGui draws into the swapchain's back buffer, so its display is the buffer, in the buffer's
 // pixels. The Win32 backend sizes the display by the window's client area and places the mouse in
@@ -81,6 +87,11 @@ void destroy_graphics() {
     menu_map_pixels_lost();
     s.mod_icon_texture.Reset(); s.mod_icon_upload.Reset();
     mod_icon_lost();
+    release_frame_grab();
+    for (auto& texture : s.plugin_textures) texture.Reset();
+    for (auto& upload : s.plugin_uploads) upload.Reset();
+    plugin_images_lost();
+    screen_look::release();
     s.commands.Reset(); s.rtvs.Reset(); s.srvs.Reset(); s.fence.Reset(); s.device.Reset();
     if (s.fence_event) CloseHandle(s.fence_event);
     s.fence_event = nullptr;
@@ -288,7 +299,9 @@ bool setup_graphics() {
         return false;
     }
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    heap.NumDescriptors = 4; // ImGui's atlas, the map download card's icon, the menu's map pictures, an item's mod icon (upload_image)
+    // ImGui's atlas, the map download card's icon, the menu's map pictures, an item's mod icon,
+    // plugins' pictures (upload_image), and the screen look's
+    heap.NumDescriptors = screen_look_slot + screen_look_slots;
     heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     graphics_result = s.device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&s.srvs));
     if (FAILED(graphics_result)) {
@@ -355,6 +368,7 @@ bool setup_graphics() {
     s.commands->SetName(L"ReSkate overlay draw");
     dingosdk::overlay::watch_draws(s.commands.Get());
     dingosdk::overlay::watch_addresses(s.commands.Get());
+    install_depth_probe(s.commands.Get());
     s.fence->SetName(L"ReSkate overlay fence");
     s.fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!s.fence_event) return false;
@@ -378,10 +392,10 @@ bool setup_graphics() {
             std::chrono::duration_cast<std::chrono::milliseconds>(waited_until - std::chrono::steady_clock::now()));
     };
     const auto emote_count = reserve_chat_emotes(*ImGui::GetIO().Fonts, left());
-    reserve_hall_of_meat_images(*ImGui::GetIO().Fonts, left());
+    reserve_game_images(*ImGui::GetIO().Fonts, left());
     const auto preview_count = load_park_previews(*ImGui::GetIO().Fonts, left());
     fill_chat_emotes(*ImGui::GetIO().Fonts);
-    fill_hall_of_meat_images(*ImGui::GetIO().Fonts);
+    fill_game_images(*ImGui::GetIO().Fonts);
     if (emote_count)
         dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::graphics,
             "Chat emotes: %zu ready.", emote_count);
@@ -412,6 +426,7 @@ bool setup_graphics() {
         const int transfer = format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 1
                            : format == DXGI_FORMAT_R10G10B10A2_UNORM && hdr_display ? 2 : 0;
         ImGui_ImplDX12_SetOutputTransfer(transfer, hdr_display ? hdr_white_nits : 80.0f);
+        output_transfer = transfer;
         dingosdk::logging::printf(dingosdk::logging::Level::info, dingosdk::logging::Channel::graphics,
             "Overlay output: %s (buffer format %d, display %s).",
             transfer == 1 ? "scRGB" : transfer == 2 ? "HDR10" : "SDR", static_cast<int>(format), hdr_display ? "in HDR" : "in SDR");
@@ -693,6 +708,22 @@ void upload_mod_icon(State& s) {
     if (const auto id = upload_image(s, pixels, 3, s.mod_icon_texture, s.mod_icon_upload)) mod_icon_uploaded(id, pixels.serial);
 }
 
+// A plugin's picture (plugin_images.cpp), one a frame, into the slot the cache chose.
+void upload_plugin_image(State& s) {
+    if (!s.device || !s.srvs) return;
+    auto next = take_plugin_image();
+    if (!next) return;
+    const auto slot = static_cast<std::size_t>(next->slot);
+    // A texture in the slot may still be sampled by frames on the GPU.
+    if (s.plugin_textures[slot] && s.next_fence && !completed(s.next_fence, render_fence_timeout_ms)) {
+        plugin_image_uploaded(next->path, next->slot, {}, true);
+        return;
+    }
+    const auto id = upload_image(s, next->pixels, plugin_image_first_slot + static_cast<UINT>(slot), s.plugin_textures[slot],
+                                 s.plugin_uploads[slot]);
+    plugin_image_uploaded(next->path, next->slot, id);
+}
+
 void render(IDXGISwapChain* presented, UINT flags) {
     auto& s = state();
     if (flags & DXGI_PRESENT_TEST) return;
@@ -736,15 +767,16 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool chat_frame = chat_pending();
     const bool map_download_frame = map_download_pending();
     const bool game_text_frame = game_text_pending();
-    const bool drone_hud_frame = drone_hud_pending();
     const bool skate_hud_frame = skate_hud_pending();
     const bool nametag_frame = nametags_pending();
-    const bool meat_frame = hall_of_meat_pending();
+    const bool plugins_frame = plugins_pending();
     const bool item_browser_frame = item_browser_pending();
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
     const bool hub_frame = hub_page_pending();
+    const bool grab_frame = frame_grab_pending() || depth_probe_pending();
+    // A plugin's screen look is drawn under every frame it asks for (reskate.screen.look).
+    const bool look_frame = screen_look::pending();
     if (trainer_open_requested()) s.visible.store(true);
-    if (dingosdk::drone::menu_flag().load()) s.visible.store(true); // `dronemenu`: the menu opens on its DRONE page
     if (dingosdk::overlay::menu_open_flag().exchange(false)) s.visible.store(true); // `menu`, or its controller bind
     const bool menu_frame = interactive_visible(s);
     if (!menu_frame) {
@@ -761,8 +793,9 @@ void render(IDXGISwapChain* presented, UINT flags) {
             sync_menu_cursor();
         }
         // Hidden, the overlay still draws while a notice or chat line is on screen.
-        if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !drone_hud_frame && !skate_hud_frame &&
-            !nametag_frame && !meat_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame) return;
+        if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !skate_hud_frame &&
+            !nametag_frame && !plugins_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame && !look_frame &&
+            !grab_frame) return;
     } else if (!s.ui_was_interactive) {
         s.ui_was_interactive = true;
         s.last_model = {}; // Reopening immediately reads fresh state.
@@ -784,6 +817,16 @@ void render(IDXGISwapChain* presented, UINT flags) {
         restore_input(true);
         return;
     }
+    // A screen capture takes the game's frame before anything of ReSkate's is drawn on it.
+    {
+        const auto size = frame.buffer->GetDesc();
+        const bool grabbing = frame_grab_pending();
+        depth_tap_present(s, static_cast<std::uint32_t>(size.Width), size.Height, grabbing);
+        if (grab_frame) {
+            if (grabbing) grab_presented_frame(s, frame.buffer.Get());
+            depth_probe_present(s, static_cast<std::uint32_t>(size.Width), size.Height);
+        }
+    }
     ImGuiContext* previous = ImGui::GetCurrentContext();
     ImGui::SetCurrentContext(s.context);
     {
@@ -800,7 +843,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     // (Watching the pointer for the pause menu's browser keeps the mouse state between frames,
     // or every frame would look like a fresh click.)
     if (!interactive) { ImGui::GetIO().ClearInputKeys(); if (!hub_frame) ImGui::GetIO().ClearInputMouse(); }
-    feed_menu_gamepad(interactive && s.visible.load() && !s.editor_visible.load());
+    feed_menu_gamepad(interactive && (s.visible.load() || s.plugin_dialog_visible.load()) && !s.editor_visible.load());
     ImGui::GetIO().MouseDrawCursor = owns_menu_cursor(s);
     ImGui_ImplDX12_NewFrame();
     { OverlayInputAccess access; ImGui_ImplWin32_NewFrame(); }
@@ -809,24 +852,25 @@ void render(IDXGISwapChain* presented, UINT flags) {
     ImGui::NewFrame();
     if (menu_frame) {
         draw_menu();
+        draw_plugin_screen();
         draw_console();
         draw_perf_window();
     }
     draw_hub_page();
-    draw_hall_of_meat();
+    draw_plugins();
     draw_nametags();
     draw_game_text();
-    draw_drone_hud();
     draw_skate_hud();
     draw_perf_hud();
     draw_trainer_hud();
     draw_notices();
     draw_item_browser();
+    draw_plugin_dialog();
     draw_chat();
     draw_map_download();
     sync_menu_cursor(); // close buttons also change visibility, without a key message
     ImGui::Render();
-    if (ImGui::GetDrawData()->TotalVtxCount == 0) { ImGui::SetCurrentContext(previous); return; }
+    if (ImGui::GetDrawData()->TotalVtxCount == 0 && !look_frame) { ImGui::SetCurrentContext(previous); return; }
     const auto upload_slot = static_cast<std::size_t>(s.submitted_draws % s.upload_fences.size());
     // The ImGui backend rotates upload buffers by submitted draw count, while
     // command allocators rotate by swapchain index. Wait for both exact owners
@@ -845,6 +889,23 @@ void render(IDXGISwapChain* presented, UINT flags) {
     upload_card_image(s);
     upload_menu_map_image(s);
     upload_mod_icon(s);
+    upload_plugin_image(s);
+    if (look_frame) {
+        // Drawn first, so ImGui draws over it. It leaves the back buffer in PRESENT, as it found it.
+        ID3D12DescriptorHeap* look_heaps[] = {s.srvs.Get()};
+        s.commands->SetDescriptorHeaps(1, look_heaps);
+        screen_look::Target look;
+        look.device = s.device.Get();
+        look.commands = s.commands.Get();
+        look.buffer = frame.buffer.Get();
+        look.rtv = frame.rtv;
+        look.srvs = s.srvs.Get();
+        look.slot = screen_look_slot;
+        look.format = frame.buffer->GetDesc().Format;
+        look.transfer = output_transfer;
+        look.wait_idle = [] { return completed(state().next_fence, render_fence_timeout_ms); };
+        (void)screen_look::record(look);
+    }
     D3D12_RESOURCE_BARRIER barrier{};
     barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
     barrier.Transition.pResource = frame.buffer.Get();
