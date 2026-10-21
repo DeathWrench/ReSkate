@@ -17,8 +17,8 @@
 --     next bake has it.
 --   - Saved animations are the recording as a clip file and the keys beside it in the data folder
 --     (anims/<name>.fas and .json). With Custom tricks in game on, each plays on its trick and pop.
---   - The game's own tricks, made with tools/make_trick_library.py into library/ in the data folder,
---     are listed in TRICKS to start from.
+--   - The game's own tricks, its clips read out of its data (reskate.animation.game_clips, "game:"
+--     clips), are listed in TRICKS to start from.
 --   - The studio opens in its room, the character room of the game menu's Skaters page
 --     (reskate.room walks the game's menu there and shows the skater in it), or where the skater is
 --     with the Studio room setting off or when the walk fails.
@@ -293,7 +293,7 @@ local function bake()
     end
     baked_clip = clip
     local played, why = reskate.animation.play(clip, {paused = not studio.playing, at = clamp(studio.time, 0, info.duration),
-        loop = anim.loop, blend = 0, speed = anim.speed})
+        loop = anim.loop, blend = 0, speed = anim.speed, floor = true})
     if played then
         preview_due = false
         last_bake = reskate.time.now()
@@ -460,21 +460,72 @@ local function copy_to_pops()
     anim.name, anim.pop = name, pop
     return "Saved a low, a mid and a high pop copy."
 end
--- The game's own tricks (tools/make_trick_library.py into library/ in the data folder).
-local game_tricks = nil
+-- The game's own tricks: its clips, read out of its data (reskate.animation.game_clips), one for each pop.
+-- {the clip's family, the game's name for the trick in the air, the name shown, the category}.
+local trick_table = {
+    {"o_ollie", "ollie", "Ollie", "Flip tricks"},
+    {"o_kickflip", "kickflip", "Kickflip", "Flip tricks"},
+    {"o_heelflip", "heelflip", "Heelflip", "Flip tricks"},
+    {"o_popshuv_bs", "popshuvit", "Pop Shuv-it", "Flip tricks"},
+    {"o_popshuv_fs", "fspopshuvit", "FS Pop Shuv-it", "Flip tricks"},
+    {"o_360popshuv_bs", "360popshuvit", "360 Pop Shuv-it", "Flip tricks"},
+    {"o_360popshuv_fs", "fs360popshuvit", "FS 360 Pop Shuv-it", "Flip tricks"},
+    {"o_varialflip", "varialkickflip", "Varial Kickflip", "Flip tricks"},
+    {"o_varialheel", "varialheelflip", "Varial Heelflip", "Flip tricks"},
+    {"o_360flip", "360flip", "360 Flip", "Flip tricks"},
+    {"o_hardflip", "hardflip", "Hardflip", "Flip tricks"},
+    {"o_inwardheel", "inwardheelflip", "Inward Heelflip", "Flip tricks"},
+    {"o_360inwardheel", "360inwardheelflip", "360 Inward Heelflip", "Flip tricks"},
+    {"o_360hardflip", "360hardflip", "360 Hardflip", "Flip tricks"},
+    {"o_laserflip", "laserflip", "Laser Flip", "Flip tricks"},
+    {"o_impossible", "bsimpossible", "BF Impossible", "Flip tricks"},
+    {"o_frontfoot_impossible", "fsimpossible", "FF Impossible", "Flip tricks"},
+    {"n_nollie", "nollie", "Nollie", "Nollie tricks"},
+    {"n_kickflip", "nolliekickflip", "Nollie Kickflip", "Nollie tricks"},
+    {"n_heelflip", "nollieheelflip", "Nollie Heelflip", "Nollie tricks"},
+    {"n_popshuv_bs", "n_popshuvit", "Nollie Pop Shuv-it", "Nollie tricks"},
+    {"n_popshuv_fs", "n_fspopshuvit", "Nollie FS Pop Shuv-it", "Nollie tricks"},
+    {"n_360popshuv_bs", "n_360popshuvit", "Nollie 360 Pop Shuv-it", "Nollie tricks"},
+    {"n_360popshuv_fs", "n_fs360popshuvit", "Nollie FS 360 Pop Shuv-it", "Nollie tricks"},
+    {"n_varialflip", "nollievarialkickflip", "Nollie Varial Kickflip", "Nollie tricks"},
+    {"n_varialheel", "nollievarialheelflip", "Nollie Varial Heelflip", "Nollie tricks"},
+    {"n_360flip", "nollie360flip", "Nollie 360 Flip", "Nollie tricks"},
+    {"n_hardflip", "nolliehardflip", "Nollie Hardflip", "Nollie tricks"},
+    {"n_inwardheel", "nollieinwardheelflip", "Nollie Inward Heelflip", "Nollie tricks"},
+    {"n_360inwardheel", "nollie360inwardheelflip", "Nollie 360 Inward Heelflip", "Nollie tricks"},
+    {"n_360hardflip", "nollie360hardflip", "Nollie 360 Hardflip", "Nollie tricks"},
+    {"n_laserflip", "nollielaserflip", "Nollie Laser Flip", "Nollie tricks"},
+    {"n_impossible", "nolliebsimpossible", "Nollie BF Impossible", "Nollie tricks"},
+}
+local game_tricks, game_tricks_why, game_tricks_at = nil, "the game's animations are still being read", -1e9
 local function catalog()
     if game_tricks then return game_tricks end
-    game_tricks = {}
-    local ok, list = pcall(reskate.json.decode, reskate.files.read("library/catalog.json") or "")
-    if ok and type(list) == "table" then
-        for _, t in list do
-            if type(t) == "table" and t.trick and t.pop and t.file and t.label then table.insert(game_tricks, t) end
+    if reskate.time.now() - game_tricks_at < 1000 then return {} end
+    game_tricks_at = reskate.time.now()
+    -- An older ReSkate has no game clips: the studio works without them.
+    if not reskate.animation.game_clips then
+        game_tricks_why = "this ReSkate does not read the game's animations; update it"
+        return {}
+    end
+    local names, why = reskate.animation.game_clips("c_proto_onb_trick_")
+    if not names then
+        game_tricks_why = why
+        return {}
+    end
+    local have = {}
+    for _, name in names do have[name] = true end
+    local list = {}
+    for _, t in trick_table do
+        for _, pop in {"low", "mid", "high"} do
+            local asset = "animation/dingo/c_proto_onb_trick_" .. t[1] .. "_" .. pop
+            if have[asset] then table.insert(list, {trick = t[2], label = t[3], category = t[4], pop = pop, clip = "game:" .. asset}) end
         end
     end
-    return game_tricks
+    game_tricks = list
+    return list
 end
 local function load_game_trick(t)
-    local data = "data:library/" .. t.file
+    local data = t.clip
     local ok, why = pcall(reskate.animation.info, data)
     if not ok then return "The game's " .. t.label .. " cannot be read: " .. tostring(why) end
     anim.name, anim.trick, anim.pop, anim.speed, anim.loop = t.label .. " " .. t.pop, t.trick, t.pop, 1, true
@@ -557,11 +608,19 @@ local function begin_leave()
         loading = {what = "leaving", since = t, until_ = t + 0.8, close = true}
     end
 end
+local last_bail = -1e9 -- now() of the skater's last bail
+reskate.on("bail", function() last_bail = now() end)
 local function open_studio()
     if studio.open then return end
     local s = reskate.skater.get()
     if not s then
         reskate.ui.toast("The studio needs a skater.", "warn")
+        return
+    end
+    -- Held still in the middle of a bail, the skater is lost when the game takes the hold away, and he
+    -- goes on bailing behind the studio. A bail lasts about 3.5 s.
+    if reskate.skater.state() == "wipeout" or now() - last_bail < 4 then
+        reskate.ui.toast("Get back on your board first: the studio opens once the bail is over.", "warn")
         return
     end
     anchor = {s.position.x, s.position.y + 0.9, s.position.z}
@@ -2559,9 +2618,9 @@ reskate.console.command("studio", "Animator Studio: open, close, record, save <n
         reskate.console.print("studio: custom tricks in game " .. (if settings.in_game then "on" else "off"))
     elseif word == "list" then reskate.console.print("studio: " .. table.concat(library(), ", "))
     elseif word == "status" then
-        reskate.console.print(string.format("studio: %s; %s; %d saved", if studio.open then "open" else "closed",
+        reskate.console.print(string.format("studio: %s; %s; %d saved; %d game tricks", if studio.open then "open" else "closed",
             if anim.source then (if anim.trick ~= "" then anim.trick else "a trick") .. string.format(", %.2f s", info.duration) else "nothing recorded",
-            #library()))
+            #library(), #catalog()))
     else reskate.console.print("studio: say open, close, record, save <name>, ingame on|off, list or status") end
 end)
 reskate.menu.page(title, function(page)
@@ -2569,6 +2628,6 @@ reskate.menu.page(title, function(page)
     page:note("F8 (or L3 + R3) opens the studio. Record a trick, key the joints on the timeline, save it, and doing that trick plays your version.")
     if page:button("open", "Open the studio", true) then open_studio() end
     page:info("Saved", tostring(#library()))
-    page:info("Game tricks", if #catalog() > 0 then tostring(#catalog()) .. " (library/catalog.json)" else "none: see tools/make_trick_library.py")
+    page:info("Game tricks", if #catalog() > 0 then tostring(#catalog()) .. " from the game's data" else "none yet: " .. game_tricks_why)
 end)
 reskate.on("unload", function() if studio.open then finish_close() end end)

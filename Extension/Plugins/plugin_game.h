@@ -509,7 +509,19 @@ public:
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.
     using ClipRef = std::shared_ptr<const anim_studio::Clip>;
     // `at`: seconds into the clip it starts from; `paused`: held there (seek and pause move it).
-    virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/, float /*at*/, bool /*paused*/) {
+    // The game's own animations (Extension/AnimationStudio/game_clips.h): the names containing `containing`
+    // (lower case), at most `most`; and one read as a clip. Empty, and why, while they are still read or
+    // when that one is not a clip on the skater's rig.
+    virtual std::vector<std::string> game_clip_names(std::string_view /*containing*/, std::size_t /*most*/, std::string& why) {
+        why = unavailable;
+        return {};
+    }
+    virtual ClipRef game_clip(std::string_view /*name*/, std::string& why) {
+        why = unavailable;
+        return nullptr;
+    }
+    virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/, float /*at*/, bool /*paused*/,
+                                  bool /*floor*/) {
         return unavailable;
     }
     virtual void stop_clip(std::string_view /*plugin*/) {}

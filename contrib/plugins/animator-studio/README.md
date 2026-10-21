@@ -42,18 +42,12 @@ Console: `studio open|close|record|save <name>|ingame on|off|list|status|test`.
 
 ## The game's own tricks
 
-The pull request made a list of the game's own trick animations with `tools/make_trick_library.py`
-(here beside this README, with `clip.py` and `fbxbin.py`). It needs ReSkate Studio's command line
-(`reskate_cli`, or `RESKATE_CLI` naming it) and Python with numpy:
-
-```
-python tools/make_trick_library.py "<the game's folder>" "<the game's folder>/Mods/.reskate_plugin_data/animator-studio/library"
-```
-
-The clips and `catalog.json` it writes there are listed in TRICKS by category: choose a trick, then
-its pop, and it opens in the studio. The pull request hid the list for a reason that still holds: in
-flips the game places the board with its physics, which those clips do not hold, so a recording is
-the better way in.
+TRICKS lists the game's own flip and nollie tricks by category, read out of the game's data
+(`reskate.animation.game_clips`): choose a trick, then its pop, and it opens in the studio, on the
+floor with the board under the feet. The pull request made this list with a Python script and ReSkate
+Studio's command line; nothing has to be made now. The pull request hid the list for a reason that
+still holds: in flips the game places the board with its physics, which those clips do not hold, so a
+recording is the better way in.
 
 ## How it works
 
@@ -66,6 +60,10 @@ It is built on general plugin APIs, so another plugin can do the same:
   shows the baked clip on the skater, held at the playhead (`reskate.animation.play` with `paused`,
   then `seek`, `pause` and `time`). A change shows at once through `reskate.skater.pose` (a joint's
   turn and offset) until the next bake has it.
+- The game's tricks are its own clips, read out of its data: `reskate.animation.game_clips` lists
+  them and `"game:animation/dingo/c_proto_onb_trick_o_kickflip_high"` names one. The studio plays a
+  clip with `reskate.animation.play`'s `floor`, which stands it on the floor the way the pull request
+  did.
 - The screen is a `reskate.ui.screen` with no panel: the plugin draws it all in its draw handler
   (`d:rough_rect`, `d:halftone`, `d:scribble`, `d:clip`, `d:measure`, `d:game_image` for the loading
   screen's grain, tape, tiles and `loading_board`), reading `reskate.input.cursor`, the keys and the

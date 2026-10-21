@@ -62,7 +62,12 @@ struct Clip {
     // The board each frame, relative to the skater's placement joint (1); empty when not recorded.
     std::vector<Joint> board;
     float takeoff{-1}, landing{-1}; // seconds, -1 when not seen
+    // For each joint, 1 when the clip only turns it: its position stays the skater's own, as the game
+    // keeps a joint's place (the skater's build) for a joint its own clips have no position for. Empty:
+    // every joint's position is the clip's, as in a recording.
+    std::vector<std::uint8_t> turned_only;
     bool empty() const noexcept { return times.empty() || !joints; }
+    bool keeps_position(std::size_t joint) const noexcept { return joint < turned_only.size() && turned_only[joint]; }
     float duration() const noexcept { return times.empty() ? 0.0f : times.back(); }
     std::span<const Joint> frame(std::size_t i) const noexcept { return {frames.data() + i * joints, joints}; }
     // The pose at `seconds` (clamped), each joint blended between the two frames around it.

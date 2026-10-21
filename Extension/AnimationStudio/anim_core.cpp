@@ -400,9 +400,12 @@ std::vector<std::uint8_t> clip_bytes(const Clip& clip) {
     put(&frames, 4);
     put(&clip.takeoff, 4);
     put(&clip.landing, 4);
-    const std::uint8_t has_board = board ? 1 : 0;
-    put(&has_board, 1);
+    // Bit 1: the board follows the frames. Bit 2: which joints the clip only turns, after the times.
+    const bool turned = clip.turned_only.size() == clip.joints;
+    const std::uint8_t flags = (board ? 1 : 0) | (turned ? 2 : 0);
+    put(&flags, 1);
     put(clip.times.data(), clip.times.size() * 4);
+    if (turned) put(clip.turned_only.data(), clip.turned_only.size());
     std::vector<std::uint8_t> moves(clip.joints, 0);
     const auto same = [](const Joint& a, const Joint& b) {
         for (std::size_t i = 0; i < 3; ++i)
@@ -449,13 +452,20 @@ Clip clip_from_bytes(std::span<const std::uint8_t> bytes) {
     get(&clip.takeoff, 4);
     get(&clip.landing, 4);
     require(clip.joints > 0 && clip.joints <= 512 && frames <= 20000, "the clip is too large");
+    bool turned = false;
     if (v3) {
-        std::uint8_t has_board{};
-        get(&has_board, 1);
-        board = has_board != 0;
+        std::uint8_t flags{};
+        get(&flags, 1);
+        require(flags <= 3, "the clip file is a newer one");
+        board = (flags & 1) != 0;
+        turned = (flags & 2) != 0;
     }
     clip.times.resize(frames);
     get(clip.times.data(), frames * 4ull);
+    if (turned) {
+        clip.turned_only.resize(clip.joints);
+        get(clip.turned_only.data(), clip.turned_only.size());
+    }
     for (std::size_t i = 0; i < clip.times.size(); ++i)
         require(std::isfinite(clip.times[i]) && clip.times[i] >= 0 && (i == 0 || clip.times[i] >= clip.times[i - 1]), "the clip's times are out of order");
     clip.frames.resize(static_cast<std::size_t>(frames) * clip.joints);

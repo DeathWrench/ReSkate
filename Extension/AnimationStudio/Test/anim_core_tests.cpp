@@ -128,6 +128,11 @@ void clips_read_back_and_broken_ones_are_refused() {
     bool refused = false;
     try { (void)clip_from_bytes(cut); } catch (const std::runtime_error&) { refused = true; }
     check(refused, "A cut-short clip is refused");
+    // A game clip: its joints with no position of their own read back as such.
+    clip.turned_only = {0, 1, 1};
+    const auto game = clip_from_bytes(clip_bytes(clip));
+    check(game.turned_only.size() == 3 && !game.keeps_position(0) && game.keeps_position(2) && near(game.frames[4].position[2], 3),
+          "Which joints a clip only turns reads back");
 }
 } // namespace
 

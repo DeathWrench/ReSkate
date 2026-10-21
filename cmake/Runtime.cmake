@@ -103,6 +103,7 @@ add_library(dingosdk_runtime SHARED
     Extension/World/guid_table_guard.cpp
     Extension/Skater/bone_cam.cpp
     Extension/Skater/trick_gestures.cpp
+    Extension/AnimationStudio/game_clips.cpp
     Extension/Skater/trick_feed.cpp
     Extension/Rendering/console_commands.cpp
     Extension/Progression/console_commands.cpp

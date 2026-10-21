@@ -12,6 +12,7 @@
 #include "Extension/Multiplayer/Hud/native_party.h"
 #include "Extension/Skater/client_source_spawn.h"
 #include "Extension/Skater/skater_animation.h"
+#include "Extension/AnimationStudio/game_clips.h"
 #include "Extension/Plugins/plugin_joystick.h"
 #include "plugin_sound.h"
 #include "Extension/Skater/skater_events.h"
@@ -841,11 +842,34 @@ public:
         return !capturer_.empty() && camera_mine(capturer_) && GetTickCount64() < capture_until_;
     }
     // ---- skater.animation ---------------------------------------------------------------------------
-    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop, float at, bool paused) override {
+    // The game's own clips, read in the background from the first ask.
+    static std::shared_ptr<const anim_studio::game_clips::Library> game_clips_library(std::string& why) {
+        auto library = anim_studio::game_clips::library();
+        if (!library) {
+            const auto failed = anim_studio::game_clips::failure();
+            why = failed.empty() ? "the game's animations are still being read" : "the game's animations cannot be read: " + failed;
+        }
+        return library;
+    }
+    std::vector<std::string> game_clip_names(std::string_view containing, std::size_t most, std::string& why) override {
+        const auto library = game_clips_library(why);
+        return library ? library->names(containing, most) : std::vector<std::string>{};
+    }
+    ClipRef game_clip(std::string_view name, std::string& why) override {
+        const auto library = game_clips_library(why);
+        if (!library) return nullptr;
+        try {
+            return std::make_shared<const anim_studio::Clip>(library->load(name));
+        } catch (const std::exception& e) {
+            why = e.what();
+            return nullptr;
+        }
+    }
+    std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop, float at, bool paused, bool floor) override {
         if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
         if (!player_.empty() && player_ != plugin && skater_animation::playing()) return player_ + " is playing a clip";
         player_ = plugin;
-        skater_animation::play(skater_animation::Play{std::move(clip), speed, blend, loop, at, paused});
+        skater_animation::play(skater_animation::Play{std::move(clip), speed, blend, loop, at, paused, floor});
         return {};
     }
     void seek_clip(std::string_view plugin, float seconds) override {

@@ -360,6 +360,11 @@ if(DINGOSDK_BUILD_TRAINER_TESTS)
     add_executable(dingosdk_trainer_asset_list Extension/Trainer/Test/asset_list.cpp)
     target_include_directories(dingosdk_trainer_asset_list PRIVATE "${PROJECT_SOURCE_DIR}")
     target_link_libraries(dingosdk_trainer_asset_list PRIVATE dingosdk_game_archives)
+    # The game's own clips read out of its data (needs the game: <Skate folder> [<clip file> <asset>]).
+    add_executable(dingosdk_game_clips_tests Extension/AnimationStudio/Test/game_clips_tests.cpp
+        Extension/AnimationStudio/game_clips.cpp Extension/AnimationStudio/anim_core.cpp)
+    target_include_directories(dingosdk_game_clips_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_game_clips_tests PRIVATE dingosdk_game_archives dingosdk_json)
 endif()
 option(DINGOSDK_BUILD_ANIMATION_STUDIO_TESTS "Build Animation Studio regression tests" OFF)
 if(DINGOSDK_BUILD_ANIMATION_STUDIO_TESTS)

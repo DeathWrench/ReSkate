@@ -49,6 +49,9 @@ constexpr std::uint64_t post_retry_ms = 250, step_deadline_ms = 4000;
 constexpr std::uint64_t page_settle_ms = 300, queue_settle_ms = 1500;
 constexpr std::uint64_t tab_wait_ms = 1500, skater_wait_ms = 10000;
 constexpr std::uint64_t open_wait_ms = 30000, leave_wait_ms = 2000;
+// The walk back ends by then whatever happens: without a skater ready (a bail's respawn, a load) it
+// cannot step, and the room is left behind rather than waited on.
+constexpr std::uint64_t leave_give_up_ms = 8000;
 constexpr int max_scans = 3;
 constexpr std::uint64_t scan_gap_ms = 15000;
 // The way back to the world: the Skaters page's Back closes the menu. ToggleMenu is for a menu that is still open.
@@ -75,7 +78,7 @@ struct State {
     std::uint64_t page_shown_at{};
     int leave_steps_left{};
     bool leave_pressed{};
-    std::uint64_t leave_step_deadline{};
+    std::uint64_t leave_step_deadline{}, leave_deadline{};
     std::string failure;
 };
 State& state() { static auto* value = new State; return *value; }
@@ -337,6 +340,7 @@ void leave() noexcept {
     skater_animation::watch_room(false);
     s.leave_steps_left = static_cast<int>(way_back.size());
     s.leave_pressed = false;
+    s.leave_deadline = GetTickCount64() + leave_give_up_ms;
     s.phase.store(Phase::leaving, std::memory_order_release);
 }
 Phase phase() noexcept { return state().phase.load(std::memory_order_acquire); }
@@ -362,6 +366,12 @@ void tick(std::uintptr_t base, std::uintptr_t skater, bool ready, bool prepare) 
             }
             s.skater = skater;
             s.skater_since = GetTickCount64();
+        }
+        if (s.phase.load(std::memory_order_acquire) == Phase::leaving && now >= s.leave_deadline) {
+            s.leave_steps_left = 0;
+            s.leave_pressed = false;
+            s.phase.store(Phase::idle, std::memory_order_release);
+            return;
         }
         if (!ready || !base) return;
         const auto p = s.phase.load(std::memory_order_acquire);

@@ -675,6 +675,15 @@ struct WorldApi {
         if (const auto found = plugin.clips_.find(name); found != plugin.clips_.end()) return found->second;
         if (name.starts_with("rec:") || name.starts_with("clip:") || name.starts_with("edit:")) luaL_error(L, "there is no clip %s", name.c_str());
         std::string error, bytes;
+        // The game's own: read out of its data, not a file.
+        if (name.starts_with("game:")) {
+            auto clip = game(plugin).game_clip(std::string_view(name).substr(5), error);
+            if (!clip) luaL_error(L, "the clip %s cannot be read: %s", name.c_str(), error.c_str());
+            if (pose_bytes(*clip) + plugin.clip_bytes_ > plugin.limits_.clip_bytes)
+                luaL_error(L, "a plugin's clips hold at most %d MB of poses", static_cast<int>(plugin.limits_.clip_bytes >> 20));
+            plugin.clip_bytes_ += pose_bytes(*clip);
+            return plugin.clips_.emplace(name, std::move(clip)).first->second;
+        }
         if (name.starts_with("data:")) {
             need(L, plugin, "files", "a data: clip");
             lua_pushlstring(L, name.data() + 5, name.size() - 5);
@@ -731,15 +740,35 @@ struct WorldApi {
         need(L, plugin, "skater.animation", what);
         return plugin;
     }
-    // play(clip, {speed, blend, loop}): the clip on the skater's body from now, in place.
+    // play(clip, {speed, blend, loop, at, paused, floor}): the clip on the skater's body from now, in place
+    // (with floor: on the floor where he stands, its board's lowest point on it).
     static int animation_play(lua_State* L) {
         auto& plugin = animating(L, "reskate.animation.play");
         auto clip = clip_at(L, plugin, 1);
         const float speed = number_field(L, 2, "speed", 1, 0.1f, 4), blend = number_field(L, 2, "blend", 0.15f, 0, 2);
-        const bool loop = flag_field(L, 2, "loop"), paused = flag_field(L, 2, "paused");
+        const bool loop = flag_field(L, 2, "loop"), paused = flag_field(L, 2, "paused"), floor = flag_field(L, 2, "floor");
         const float at = number_field(L, 2, "at", 0, 0, clip->duration());
         if (!within(plugin.services_.now_ms(), plugin.control_second_, plugin.controls_, 4)) return result(L, "asked more than 4 times in a second");
-        return result(L, game(plugin).play_clip(plugin.id(), std::move(clip), speed, blend, loop, at, paused));
+        return result(L, game(plugin).play_clip(plugin.id(), std::move(clip), speed, blend, loop, at, paused, floor));
+    }
+    // game_clips(containing): the names of the game's own animations that contain it (all with none), at
+    // most 2000, each played as "game:<name>"; nil and why while they are still read.
+    static int animation_game_clips(lua_State* L) {
+        auto& plugin = animating(L, "reskate.animation.game_clips");
+        const auto containing = lua_isnoneornil(L, 1) ? std::string{} : checked_text(L, 1, 64, "a part of a name");
+        std::string why;
+        const auto names = game(plugin).game_clip_names(containing, 2000, why);
+        if (!why.empty()) {
+            lua_pushnil(L);
+            lua_pushlstring(L, why.data(), why.size());
+            return 2;
+        }
+        lua_createtable(L, static_cast<int>(names.size()), 0);
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            lua_pushlstring(L, names[i].data(), names[i].size());
+            lua_rawseti(L, -2, static_cast<int>(i + 1));
+        }
+        return 1;
     }
     static int animation_stop(lua_State* L) {
         auto& plugin = animating(L, "reskate.animation.stop");
@@ -925,6 +954,7 @@ struct WorldApi {
         if (!(from >= 0 && to > from)) luaL_error(L, "a trim is from 0 or more to later than that");
         auto clip = std::make_shared<anim_studio::Clip>();
         clip->joints = source->joints;
+        clip->turned_only = source->turned_only;
         const bool board = source->board.size() == source->times.size();
         float first = -1;
         for (std::size_t i = 0; i < source->times.size(); ++i) {
@@ -2328,7 +2358,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
                                    {"record", animation_record}, {"recorded", animation_recorded}, {"forget", animation_forget}, {"trick", animation_trick},
                                    {"seek", animation_seek}, {"pause", animation_pause}, {"time", animation_time}, {"info", animation_info},
                                    {"sample", animation_sample}, {"joints", animation_joints}, {"trim", animation_trim}, {"edit", animation_edit},
-                                   {"save", animation_save}});
+                                   {"save", animation_save}, {"game_clips", animation_game_clips}});
     add_functions(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
     add_functions(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
     add_functions(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},

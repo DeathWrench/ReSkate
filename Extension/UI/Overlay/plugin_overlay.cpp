@@ -3,6 +3,7 @@
 #include "Extension/Plugins/plugin_ui.h"
 #include "Extension/UI/Overlay/game_images.h"
 #include "Extension/UI/Overlay/overlay_internal.h"
+#include "Extension/UI/Overlay/input_capture.h"
 #include "Extension/UI/Overlay/xray_overlay.h"
 #include "Extension/UI/Overlay/overlay.h"
 #include "Extension/UI/Overlay/skate_style.h"
@@ -133,7 +134,17 @@ static void note_cursor(bool open, bool over_screen) {
     c.now.y = io.MousePos.y;
     c.now.left = io.MouseDown[0];
     c.now.right = io.MouseDown[1];
-    c.now.middle = io.MouseDown[2];
+    // The middle button also as Windows and raw input have it: in game it did not reach ImGui's state
+    // while the left and right ones did (a plugin's pan never started).
+    bool middle = io.MouseDown[2];
+    if (!middle) {
+        auto& s = detail::state();
+        const auto raw_at = s.raw_mouse_time.load();
+        detail::OverlayInputAccess real;
+        middle = (GetAsyncKeyState(VK_MBUTTON) & 0x8000) != 0 ||
+                 (raw_at && GetTickCount64() < raw_at + 10000 && (s.raw_mouse_buttons.load() & 4u) != 0);
+    }
+    c.now.middle = middle;
     c.now.wheel += io.MouseWheel;
     c.now.over_screen = over_screen;
 }

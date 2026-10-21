@@ -26,6 +26,12 @@ struct Play {
     bool loop{};
     float at{};     // seconds into the clip it starts from
     bool paused{};  // held at `at` until resumed (seek, pause)
+    // On the skater's floor (PR 297's studio): the clip's rise and turn since its first frame go onto
+    // the body, and the whole clip moves up or down so its board's lowest point lies on the floor
+    // before the takeoff and after the landing, with a jump as long as its air between them for a clip
+    // that does not rise by itself (the game's own trick clips stay in place); on the ground its board
+    // lies under the feet. Without it the body hangs from where the skater is, as the clip has it.
+    bool floor{};
 };
 // A clip the game's own trick plays as, from its takeoff: the clip's air (its takeoff to its
 // landing) stretched to the trick's. `trick` is the game's name ("kickflip"); `pop` "", "low",

@@ -114,6 +114,92 @@ const std::array<bool, skeleton_joints>& body_joints() {
     return mask;
 }
 
+// ---- a clip on the floor (Play::floor; PR 297's anim_studio.cpp) ------------------------------------------
+// The board under the feet, as when riding. The game's clips leave the board where the animators had it,
+// and the game's foot placement puts the feet on it: before the pop and after the landing their feet
+// sink into the board or float over it by up to 6 cm. Riding, the feet (joints 343 and 10) are 0.104 m
+// above the board's mount. So on the ground the board goes that far under the lower foot; in the air it
+// is the clip's own, with a short blend at the pop and the landing.
+constexpr float feet_above_board = 0.104f, board_blend = 0.06f;
+constexpr std::uint16_t left_foot_joint = 343, right_foot_joint = 10;
+float on_ground_share(const Clip& clip, float seconds) noexcept {
+    const float up = clip.takeoff, down = clip.landing;
+    if (up < 0 || down <= up || seconds <= up || seconds >= down) return 1;
+    if (seconds < up + board_blend) return 1 - (seconds - up) / board_blend;
+    if (seconds > down - board_blend) return (seconds - (down - board_blend)) / board_blend;
+    return 0;
+}
+// Where a board touches the ground, in its mount's frame: the tips of its nose and tail (the kicks rise
+// a little) and the bottoms of its four wheels; a board at rest stands on its wheels with its mount
+// 0.087 m up. Its up is the axis nearest the placement joint's up, its length the one nearest the line
+// of the feet, both from the board at the clip's start. Kept per clip.
+struct BoardShape {
+    std::array<Vec3, 6> points{};
+    Vec3 up{0, 1, 0};
+};
+const BoardShape& board_shape(const Clip& clip) {
+    thread_local const Clip* cached = nullptr;
+    thread_local BoardShape shape;
+    if (cached == &clip) return shape;
+    cached = &clip;
+    std::vector<Joint> pose(clip.joints);
+    clip.sample(0, pose);
+    Joint board;
+    (void)clip.sample_board(0, board);
+    const auto placed = world(pose, placement_joint);
+    const auto left = relative(placed, world(pose, left_foot_joint)).position, right = relative(placed, world(pose, right_foot_joint)).position;
+    const Vec3 feet{left[0] - right[0], 0, left[2] - right[2]};
+    std::size_t up = 1, along = 0;
+    float best_up = -1, best_along = -1;
+    std::array<Vec3, 3> axes{};
+    for (std::size_t i = 0; i < 3; ++i) {
+        Vec3 e{};
+        e[i] = 1;
+        axes[i] = rotate(board.rotation, e);
+        if (std::abs(axes[i][1]) > best_up) best_up = std::abs(axes[i][1]), up = i;
+    }
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (i == up) continue;
+        const float d = std::abs(axes[i][0] * feet[0] + axes[i][2] * feet[2]);
+        if (d > best_along) best_along = d, along = i;
+    }
+    const std::size_t side = 3 - up - along;
+    const float up_sign = axes[up][1] >= 0 ? 1.0f : -1.0f;
+    const auto point = [&](float l, float u, float w) {
+        Vec3 v{};
+        v[along] = l;
+        v[up] = u * up_sign;
+        v[side] = w;
+        return v;
+    };
+    shape.up = point(0, 1, 0);
+    constexpr float tip = 0.40f, kick = 0.04f, wheelbase = 0.18f, track = 0.09f, wheels = 0.087f;
+    shape.points = {point(tip, kick, 0), point(-tip, kick, 0), point(wheelbase, -wheels, track), point(wheelbase, -wheels, -track),
+                    point(-wheelbase, -wheels, track), point(-wheelbase, -wheels, -track)};
+    return shape;
+}
+// The lowest point of a board (its mount in the world): what touches the ground first.
+float lowest_point(const Joint& board, const BoardShape& shape) noexcept {
+    float low = board.position[1];
+    for (const auto& pt : shape.points) low = std::min(low, board.position[1] + rotate(board.rotation, pt)[1]);
+    return low;
+}
+// `board` (under the placement joint) under the feet of `pose` (the clip's at `seconds`), only while it
+// lies flat: at the pop the back foot stands on the tail and the board is steep. Full up to 8 degrees of
+// tilt, none from 20.
+Joint board_on_feet(const Clip& clip, float seconds, std::span<const Joint> pose, Joint board) noexcept {
+    const float tilt_cos = rotate(board.rotation, board_shape(clip).up)[1];
+    const float flat = std::clamp((tilt_cos - 0.9397f) / (0.9903f - 0.9397f), 0.0f, 1.0f);
+    const float share = on_ground_share(clip, seconds) * flat;
+    if (share <= 0 || pose.size() <= left_foot_joint) return board;
+    const auto placed = world(pose, placement_joint);
+    const float left = relative(placed, world(pose, left_foot_joint)).position[1];
+    const float right = relative(placed, world(pose, right_foot_joint)).position[1];
+    const float want = std::min(left, right) - feet_above_board;
+    if (std::isfinite(want)) board.position[1] += (want - board.position[1]) * share;
+    return board;
+}
+
 // ---- the skater ------------------------------------------------------------------------------------
 // The local skater's physics state (no_bail.cpp's selector): component +0x70 the core, core +0x3c0 its
 // context, context +0x1414 the state. In the air on the board: 200, 201.
@@ -223,9 +309,13 @@ std::atomic<bool> record_running{};
 struct Live {
     std::atomic<std::uintptr_t> base{}, component{}, board_holder{};
     std::vector<NativeBone> bones;
-    std::vector<Joint> pose, custom;
+    std::vector<Joint> pose, custom, scratch;
     std::array<NativeBone, board_bones> board{};
     bool board_ok{};
+    // A clip played on the floor (Play::floor): the floor's height, taken again for each new clip.
+    float floor{};
+    bool floor_valid{};
+    const Clip* floor_clip{};
     // A game trick played as a replacement.
     bool game_air{};
     double game_takeoff{}, game_landing{-1};
@@ -309,6 +399,68 @@ void record_frame(Live& l, double at, const std::optional<bool>& air) {
     if (!up && l.was_air && l.taking.takeoff >= 0 && l.taking.landing < 0) l.taking.landing = t;
     l.was_air = up;
     if (at >= l.record_until || l.taking.times.size() >= 900) finish_recording(l);
+}
+
+// The clip sampled at `seconds` (l.custom, its board `board`) moved onto the floor where the skater stands
+// (Play::floor): the joints hanging from the placement joint get the clip's rise and turn since its first
+// frame, as the game places the skater from that joint and it is never written; the rise puts the board's
+// lowest point on the floor before the takeoff and after the landing, and between them follows the arc
+// of a jump as long as the clip's air, unless the clip rises by itself (as a recording does), never under
+// the floor. The floor is the Ground joint's height, taken again for each new clip and while in the air.
+void place_on_floor(Live& l, const Clip& clip, float seconds, const Joint& placement, Joint* board, bool airborne) {
+    if (&clip != l.floor_clip) {
+        l.floor_clip = &clip;
+        l.floor_valid = false;
+    }
+    if (!l.floor_valid || airborne) {
+        l.floor = world(l.pose, ground_joint).position[1];
+        l.floor_valid = std::isfinite(l.floor);
+    }
+    const auto& shape = board_shape(clip);
+    // The height of the board's lowest point at `t` in the clip's own space, and its placement joint's.
+    const auto board_y = [&](float t, float& placed_y) {
+        l.scratch.resize(clip.joints);
+        clip.sample(t, l.scratch);
+        const auto placed = world(l.scratch, placement_joint);
+        placed_y = placed.position[1];
+        Joint rel;
+        return clip.sample_board(t, rel) ? lowest_point(compose(placed, board_on_feet(clip, t, l.scratch, rel)), shape)
+                                         : world(l.scratch, right_foot_joint).position[1] - 0.18f;
+    };
+    const std::span<const Joint> sampled(l.custom.data(), std::min<std::size_t>(l.custom.size(), clip.joints));
+    if (board) *board = board_on_feet(clip, seconds, sampled, *board);
+    const auto& start = clip.frame(0)[placement_joint];
+    const auto& now_clip = l.custom[placement_joint];
+    const auto turn = normalised(multiply(conjugate(start.rotation), now_clip.rotation));
+    float placed_now{}, placed_up{}, placed_down{};
+    const float low_now = board_y(seconds, placed_now);
+    float rise_y = now_clip.position[1] - start.position[1];
+    if (l.floor_valid) {
+        const float up = std::max(clip.takeoff, 0.0f), down = clip.landing > up ? clip.landing : up;
+        if (seconds <= up || seconds >= down || down <= up) rise_y = l.floor - low_now;
+        else {
+            const float s_up = l.floor - board_y(up, placed_up), s_down = l.floor - board_y(down, placed_down);
+            const float u = (seconds - up) / (down - up);
+            const bool own_jump = placed_now - (placed_up + (placed_down - placed_up) * u) > 0.12f;
+            const float air = down - up;
+            const float arc = own_jump ? 0.0f : 9.81f * air * air / 8.0f * 4 * u * (1 - u);
+            rise_y = std::max(s_up + (s_down - s_up) * u + arc, l.floor - low_now);
+        }
+        rise_y += placed_now - placement.position[1];
+    }
+    const auto rise = rotate(conjugate(l.pose[placement_joint].rotation), {0, rise_y, 0});
+    for (std::size_t i = 2; i < sampled.size(); ++i) {
+        if (parent(static_cast<std::uint16_t>(i)) != placement_joint) continue;
+        auto& j = l.custom[i];
+        const auto moved = rotate(turn, j.position);
+        for (std::size_t a = 0; a < 3; ++a) j.position[a] = rise[a] + moved[a];
+        j.rotation = normalised(multiply(turn, j.rotation));
+    }
+    if (board) {
+        const auto moved = rotate(turn, board->position);
+        for (std::size_t a = 0; a < 3; ++a) board->position[a] = rise[a] + moved[a];
+        board->rotation = normalised(multiply(turn, board->rotation));
+    }
 }
 
 // ---- the animation thread ------------------------------------------------------------------------
@@ -455,7 +607,14 @@ void on_animation(std::uintptr_t component) noexcept {
             l.custom.resize(layout.count);
             std::copy(l.pose.begin(), l.pose.end(), l.custom.begin());
             clip->sample(t, std::span<Joint>(l.custom.data(), std::min<std::size_t>(l.custom.size(), clip->joints)));
-            if (Joint rel; clip->sample_board(t, rel)) {
+            // A joint the clip only turns stands where the skater's own build has it.
+            for (std::size_t i = 0; i < std::min<std::size_t>(l.custom.size(), clip->joints); ++i)
+                if (clip->keeps_position(i)) l.custom[i].position = l.pose[i].position;
+            Joint rel;
+            const bool has_board = clip->sample_board(t, rel);
+            if (snap->play && snap->play->floor && clip == snap->play->clip.get() && clip->joints > left_foot_joint)
+                place_on_floor(l, *clip, t, placement, has_board ? &rel : nullptr, air && *air);
+            if (has_board) {
                 board_target = compose(placement, rel);
                 board_weight = weight;
             }
@@ -465,6 +624,7 @@ void on_animation(std::uintptr_t component) noexcept {
                 auto& j = l.pose[i];
                 const auto& c = l.custom[i];
                 j.rotation = slerp(j.rotation, c.rotation, weight);
+                if (clip->keeps_position(i)) continue; // the skater's own build
                 for (std::size_t k = 0; k < 3; ++k) j.position[k] += (c.position[k] - j.position[k]) * weight;
             }
             first = 2;
@@ -599,7 +759,10 @@ void hide_in_room(std::uintptr_t animation_interface, bool skater) noexcept {
         if (!(std::abs(at[i] - room_spot[i]) < room_reach[i])) return;
     if (skater) {
         room_seen_at.store(now_seconds(), std::memory_order_release);
-        if (b[1].scale[0] >= 0.01f) {
+        // Its facing is taken while the walk looks for it, not once our skater shows: the Skaters page
+        // still turns its own skater when the mouse drags (the plugin orbiting its camera), and ours
+        // turned with it and sprang back when the drag ended.
+        if (b[1].scale[0] >= 0.01f && !hide) {
             const auto placed = compose(joint_of(b[0]), joint_of(b[1]));
             std::lock_guard lock(room_facing_mutex);
             room_facing = placed.rotation;
@@ -683,10 +846,22 @@ void on_board_render(std::uintptr_t animation_interface, std::uintptr_t /*render
                 weight = pb.weight;
             }
         }
+        // The trucks and wheels (every bone under the deck's mount) as they were when a clip took the
+        // board: the game's board physics goes on moving them for its own deck, which the clip turns and
+        // flips somewhere else, and they shook. Held, they ride the deck. The render thread's own.
+        static std::array<NativeBone, board_bones> held{};
+        static bool holding = false;
+        if (weight <= 0) holding = false;
         if (weight > 0) {
             const auto layout = multiplayer::read_native_pose_layout(peek, l.base.load(std::memory_order_acquire), bh, 64);
             std::array<NativeBone, board_bones> b{};
             if (layout.buffer && layout.count == board_bones && peek(layout.buffer, b.data(), sizeof(b))) {
+                if (!holding) {
+                    held = b;
+                    holding = true;
+                }
+                (void)poke(layout.buffer + (board_mount + 1) * sizeof(NativeBone), &held[board_mount + 1],
+                           (board_bones - board_mount - 1) * sizeof(NativeBone));
                 const auto now_mount = compose(board_parent(b), joint_of(b[board_mount]));
                 Joint want = target;
                 want.rotation = slerp(now_mount.rotation, target.rotation, weight);
