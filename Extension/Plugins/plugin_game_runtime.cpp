@@ -855,6 +855,21 @@ public:
         const auto library = game_clips_library(why);
         return library ? library->names(containing, most) : std::vector<std::string>{};
     }
+    std::optional<bool> clip_goofy(const ClipRef& clip) override {
+        std::string why;
+        const auto library = game_clips_library(why);
+        return library && clip ? library->goofy(*clip) : std::nullopt;
+    }
+    ClipRef mirror_clip(const ClipRef& clip, std::string& why) override {
+        const auto library = game_clips_library(why);
+        if (!library || !clip) return nullptr;
+        try {
+            return std::make_shared<const anim_studio::Clip>(library->mirror(*clip));
+        } catch (const std::exception& e) {
+            why = e.what();
+            return nullptr;
+        }
+    }
     ClipRef game_clip(std::string_view name, std::string& why) override {
         const auto library = game_clips_library(why);
         if (!library) return nullptr;

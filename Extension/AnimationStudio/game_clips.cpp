@@ -238,7 +238,10 @@ struct Rig {
     std::map<std::uint32_t, Dof> dofs;
     std::vector<Joint> rest;           // each joint's default (parent-local)
     std::vector<std::int16_t> parents; // the skeleton's own: anim_core's table hangs Skateboard_Root elsewhere
+    std::vector<std::string> names;    // each joint's, as the skeleton has them
     std::uint16_t board{};             // Skateboard_Root
+    std::vector<std::uint16_t> mirror_of; // each joint's counterpart (Left* and Right* trade), else itself
+    std::uint16_t left_foot{}, right_foot{}, front_truck{}, back_truck{};
 };
 // `child` in `parent`'s frame, put into the frame `parent` is in.
 Joint compose(const Joint& parent, const Joint& child) {
@@ -304,7 +307,8 @@ void Library::Data::read_rig() {
     for (std::size_t i = 0; i < joints.size(); ++i) {
         const auto* joint = object_of(joints[i]);
         if (!joint) throw std::runtime_error("a skeleton joint is not one");
-        joint_of.emplace(string_at(table, index_of(field(*joint, "Name")), table.size()), static_cast<std::uint16_t>(i));
+        rig.names.push_back(string_at(table, index_of(field(*joint, "Name")), table.size()));
+        joint_of.emplace(rig.names.back(), static_cast<std::uint16_t>(i));
         const auto parent = number(*joint, "Parent");
         if (!(parent >= -1 && parent < static_cast<double>(i))) throw std::runtime_error("the skeleton's joints are out of order");
         rig.parents.push_back(static_cast<std::int16_t>(parent));
@@ -312,6 +316,24 @@ void Library::Data::read_rig() {
     const auto board = joint_of.find("Skateboard_Root");
     if (board == joint_of.end()) throw std::runtime_error("the skeleton has no Skateboard_Root");
     rig.board = board->second;
+    rig.mirror_of.resize(rig.names.size());
+    for (std::size_t i = 0; i < rig.names.size(); ++i) {
+        rig.mirror_of[i] = static_cast<std::uint16_t>(i);
+        auto other = rig.names[i];
+        if (const auto at = other.find("Left"); at != std::string::npos) other.replace(at, 4, "Right");
+        else if (const auto at2 = other.find("Right"); at2 != std::string::npos) other.replace(at2, 5, "Left");
+        else continue;
+        if (const auto pair = joint_of.find(other); pair != joint_of.end()) rig.mirror_of[i] = pair->second;
+    }
+    const auto named = [&](std::string_view name) {
+        const auto found = joint_of.find(name);
+        if (found == joint_of.end()) throw std::runtime_error("the skeleton has no " + std::string(name));
+        return found->second;
+    };
+    rig.left_foot = named("LeftFoot");
+    rig.right_foot = named("RightFoot");
+    rig.front_truck = named("Truck_Front");
+    rig.back_truck = named("Truck_Back");
     // Each DOF set's names (its LayoutData: a header, 32 bytes a DOF, then the names), against the ids.
     const auto& sets = array(root, "DofSets");
     const auto& starts = array(root, "DofSetIdIndices");
@@ -391,6 +413,163 @@ Library::Library(const std::filesystem::path& game_root) : data_(std::make_uniqu
     d.read_rig();
 }
 Library::~Library() = default;
+
+namespace {
+// A joint's place with no scale, for the mirror: a turn, then a move.
+struct Rigid {
+    Quat r{0, 0, 0, 1};
+    Vec3 t{};
+};
+Rigid rigid(const Joint& j) { return {j.rotation, j.position}; }
+Rigid then(const Rigid& a, const Rigid& b) {
+    const auto m = rotate(a.r, b.t);
+    return {normalised(multiply(a.r, b.r)), {a.t[0] + m[0], a.t[1] + m[1], a.t[2] + m[2]}};
+}
+Rigid inverse(const Rigid& a) {
+    const auto c = conjugate(a.r);
+    const auto t = rotate(c, a.t);
+    return {c, {-t[0], -t[1], -t[2]}};
+}
+float dot3(const Vec3& a, const Vec3& b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+// `a` reflected across the plane through the origin with normal `n`: S a S, still a turn and a move
+// (a turn's axis is a pseudovector: it comes out reflected and reversed).
+Rigid reflect(const Rigid& a, const Vec3& n) {
+    const Vec3 v{a.r[0], a.r[1], a.r[2]};
+    const float dv = 2 * dot3(v, n), dt = 2 * dot3(a.t, n);
+    return {normalised({-(v[0] - dv * n[0]), -(v[1] - dv * n[1]), -(v[2] - dv * n[2]), a.r[3]}),
+            {a.t[0] - dt * n[0], a.t[1] - dt * n[1], a.t[2] - dt * n[2]}};
+}
+// A board mirrored across `n` (placement frame) as its own geometry is: the board is symmetric across
+// its length (its local Z) and up (local Y), so its turn becomes S * R * Sb, Sb reflecting its local X.
+// A flat board keeps its nose ahead; a board rolling one way rolls the other.
+Rigid mirror_board(const Rigid& b, const Vec3& n) {
+    const auto& q = b.r;
+    // The turn as a matrix (columns: where local X, Y, Z go).
+    const float x = q[0], y = q[1], z = q[2], w = q[3];
+    float m[3][3] = {{1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)},
+                     {2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)},
+                     {2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)}};
+    // S * M (each column reflected), then * Sb (local X's column reversed).
+    for (int c = 0; c < 3; ++c) {
+        const float d = 2 * (n[0] * m[0][c] + n[1] * m[1][c] + n[2] * m[2][c]);
+        for (int r = 0; r < 3; ++r) m[r][c] -= d * n[static_cast<std::size_t>(r)];
+    }
+    for (int r = 0; r < 3; ++r) m[r][0] = -m[r][0];
+    // Back to a quaternion.
+    Quat out;
+    const float trace = m[0][0] + m[1][1] + m[2][2];
+    if (trace > 0) {
+        const float s = std::sqrt(trace + 1) * 2;
+        out = {(m[2][1] - m[1][2]) / s, (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s, 0.25f * s};
+    } else if (m[0][0] > m[1][1] && m[0][0] > m[2][2]) {
+        const float s = std::sqrt(1 + m[0][0] - m[1][1] - m[2][2]) * 2;
+        out = {0.25f * s, (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s, (m[2][1] - m[1][2]) / s};
+    } else if (m[1][1] > m[2][2]) {
+        const float s = std::sqrt(1 + m[1][1] - m[0][0] - m[2][2]) * 2;
+        out = {(m[0][1] + m[1][0]) / s, 0.25f * s, (m[1][2] + m[2][1]) / s, (m[0][2] - m[2][0]) / s};
+    } else {
+        const float s = std::sqrt(1 + m[2][2] - m[0][0] - m[1][1]) * 2;
+        out = {(m[0][2] + m[2][0]) / s, (m[1][2] + m[2][1]) / s, 0.25f * s, (m[1][0] - m[0][1]) / s};
+    }
+    const float dt = 2 * dot3(b.t, n);
+    return {normalised(out), {b.t[0] - dt * n[0], b.t[1] - dt * n[1], b.t[2] - dt * n[2]}};
+}
+// Every joint under the placement joint (1) in its frame, down the skeleton's own parents.
+void in_placement(std::span<const Joint> local, const std::vector<std::int16_t>& parents, std::vector<Rigid>& out) {
+    out.assign(local.size(), Rigid{});
+    for (std::size_t j = 2; j < local.size(); ++j) {
+        const auto p = parents[j];
+        out[j] = p > static_cast<int>(placement_joint) ? then(out[static_cast<std::size_t>(p)], rigid(local[j])) : rigid(local[j]);
+    }
+}
+}
+
+std::optional<bool> Library::goofy(const Clip& clip) const {
+    const auto& rig = data_->rig;
+    if (clip.empty() || clip.joints != skeleton_joints) return std::nullopt;
+    std::vector<Rigid> placed;
+    in_placement(clip.frame(0), rig.parents, placed);
+    const auto apart = [&](std::uint16_t a, std::uint16_t b) {
+        const auto &p = placed[a].t, &q = placed[b].t;
+        return std::sqrt((p[0] - q[0]) * (p[0] - q[0]) + (p[2] - q[2]) * (p[2] - q[2]));
+    };
+    const float left = apart(rig.left_foot, rig.front_truck), right = apart(rig.right_foot, rig.front_truck);
+    // Feet more than a board's length from the trucks are not on it.
+    if (!(std::max(left, right) < 1.2f) || std::abs(left - right) < 0.05f) return std::nullopt;
+    return right < left;
+}
+
+Clip Library::mirror(const Clip& clip) const {
+    const auto& rig = data_->rig;
+    if (clip.empty() || clip.joints != skeleton_joints) throw std::runtime_error("only a clip of the skater's 395 joints can be mirrored");
+    std::vector<Rigid> rest, placed;
+    in_placement(rig.rest, rig.parents, rest);
+    in_placement(clip.frame(0), rig.parents, placed);
+    // The plane: upright, along the board from its back truck to its front one at the first frame.
+    Vec3 along{placed[rig.front_truck].t[0] - placed[rig.back_truck].t[0], 0, placed[rig.front_truck].t[2] - placed[rig.back_truck].t[2]};
+    const float length = std::sqrt(dot3(along, along));
+    if (!(length > 0.1f)) throw std::runtime_error("the clip has no board to mirror it along");
+    const Vec3 n{along[2] / length, 0, -along[0] / length}; // along x up
+    const Rigid first_place = rigid(clip.frame(0)[placement_joint]);
+    const auto n_root = rotate(first_place.r, n); // the same plane, seen from the root
+    Clip out = clip;
+    if (!clip.turned_only.empty()) {
+        for (std::size_t j = 0; j < clip.turned_only.size(); ++j) out.turned_only[rig.mirror_of[j]] = clip.turned_only[j];
+    }
+    // The board's joints (Skateboard_Root and everything under it): the board mirrored as itself, the rest
+    // of it (trucks, wheels, the feet's deck effectors) in its frame, Left and Right trading there.
+    std::vector<bool> on_board(skeleton_joints, false);
+    for (std::size_t j = rig.board; j < skeleton_joints; ++j)
+        for (int at = static_cast<int>(j); at >= 0; at = rig.parents[static_cast<std::size_t>(at)])
+            if (at == rig.board) {
+                on_board[j] = true;
+                break;
+            }
+    const Vec3 board_side{1, 0, 0}; // the board's own mirror: across its local X
+    std::vector<Rigid> mirrored(skeleton_joints);
+    for (std::size_t f = 0; f < clip.times.size(); ++f) {
+        const auto frame = clip.frame(f);
+        in_placement(frame, rig.parents, placed);
+        // Each joint's way from its rest, mirrored, from its counterpart's rest.
+        for (std::size_t j = 2; j < skeleton_joints; ++j) {
+            if (on_board[j]) continue;
+            const auto m = rig.mirror_of[j];
+            mirrored[m] = then(reflect(then(placed[j], inverse(rest[j])), n), rest[m]);
+        }
+        const auto board_now = placed[rig.board], board_mirrored = mirror_board(board_now, n);
+        for (std::size_t j = rig.board; j < skeleton_joints; ++j) {
+            if (!on_board[j]) continue;
+            if (j == rig.board) {
+                mirrored[j] = board_mirrored;
+                continue;
+            }
+            mirrored[rig.mirror_of[j]] = then(board_mirrored, reflect(then(inverse(board_now), placed[j]), board_side));
+        }
+        auto* dst = out.frames.data() + f * skeleton_joints;
+        for (std::size_t k = 2; k < skeleton_joints; ++k) {
+            const auto p = rig.parents[k];
+            const auto local = p > static_cast<int>(placement_joint) ? then(inverse(mirrored[static_cast<std::size_t>(p)]), mirrored[k]) : mirrored[k];
+            dst[k].rotation = local.r;
+            dst[k].position = local.t;
+            dst[k].scale = frame[rig.mirror_of[k]].scale;
+        }
+        // The placement joint's turn and travel since the first frame go the other way round.
+        const auto since = then(rigid(frame[placement_joint]), inverse(first_place));
+        const auto place = then(reflect(since, n_root), first_place);
+        dst[placement_joint].rotation = place.r;
+        dst[placement_joint].position = place.t;
+        // The board, under the placement joint as Skateboard_Root is.
+        if (f < clip.board.size()) {
+            const auto b = mirror_board(rigid(clip.board[f]), n);
+            out.board[f].rotation = b.r;
+            out.board[f].position = b.t;
+        }
+    }
+    return out;
+}
+std::string_view Library::joint_name(std::uint16_t joint) const {
+    return joint < data_->rig.names.size() ? std::string_view(data_->rig.names[joint]) : std::string_view{};
+}
 
 std::vector<std::string> Library::names(std::string_view containing, std::size_t most) const {
     const auto wanted = lower(containing);

@@ -310,6 +310,9 @@ struct Live {
     std::atomic<std::uintptr_t> base{}, component{}, board_holder{};
     std::vector<NativeBone> bones;
     std::vector<Joint> pose, custom, scratch;
+    // In the room: the placement written for the last render, and the game's own one before it.
+    Joint room_written, game_placement;
+    bool room_written_valid{}, game_placement_valid{};
     std::array<NativeBone, board_bones> board{};
     bool board_ok{};
     // A clip played on the floor (Play::floor): the floor's height, taken again for each new clip.
@@ -463,6 +466,71 @@ void place_on_floor(Live& l, const Clip& clip, float seconds, const Joint& place
     }
 }
 
+// What a clip's pose did, for one log line every 2 s while a clip plays (the size of a game trick's
+// skater changed back and forth fast in the room): animation updates, renders that drew the clip's pose
+// and renders that did not (it was stale or the buffer had moved), the scale and height written, and
+// other skeletons the room hid.
+struct Probe {
+    std::mutex mutex;
+    int updates{}, drawn{}, stale{}, moved{}, hidden{};
+    float place_scale[2]{1e9f, -1e9f}, hips_scale[2]{1e9f, -1e9f}, hips_y[2]{1e9f, -1e9f}, root_scale[2]{1e9f, -1e9f};
+    // From one update to the next: the most the hips moved, and the body's size (head to right foot).
+    float size[2]{1e9f, -1e9f}, times[2]{1e9f, -1e9f};
+    // The live skater's placement joint above his Ground joint, and the hips above the placement, as
+    // the game posed him (a game clip holds its placement at the hips).
+    float place_above[2]{1e9f, -1e9f}, hips_above[2]{1e9f, -1e9f};
+    float hips_step{}, size_step{}, last_size{-1};
+    Vec3 last_hips{1e9f, 1e9f, 1e9f};
+    // Per joint, the most its local turn (degrees) and place (mm) changed from one update to the next:
+    // in the game's pose as it came in, and in the pose written.
+    std::vector<Joint> last_in, last_out;
+    std::vector<float> in_turn, in_move, out_turn, out_move;
+    static float angle(const Quat& a, const Quat& b) {
+        const float d = std::abs(a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3]);
+        return 2 * std::acos(std::min(d, 1.0f)) * 57.29578f;
+    }
+    static float apart(const Vec3& a, const Vec3& b) {
+        return std::sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2])) * 1000;
+    }
+    static void step(std::span<const Joint> now, std::vector<Joint>& last, std::vector<float>& turn, std::vector<float>& move) {
+        turn.resize(now.size());
+        move.resize(now.size());
+        if (last.size() == now.size())
+            for (std::size_t i = 0; i < now.size(); ++i) {
+                turn[i] = std::max(turn[i], angle(now[i].rotation, last[i].rotation));
+                move[i] = std::max(move[i], apart(now[i].position, last[i].position));
+            }
+        last.assign(now.begin(), now.end());
+    }
+    // The three joints that changed most, as "joint:turn/move".
+    static std::string worst(const std::vector<float>& turn, const std::vector<float>& move) {
+        std::vector<std::size_t> order(turn.size());
+        for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](auto a, auto b) { return turn[a] + move[a] * 0.1f > turn[b] + move[b] * 0.1f; });
+        std::string out;
+        for (std::size_t k = 0; k < std::min<std::size_t>(3, order.size()); ++k)
+            out += std::format("{}{}:{:.1f}deg/{:.0f}mm", k ? " " : "", order[k], turn[order[k]], move[order[k]]);
+        return out;
+    }
+    void range(float (&r)[2], float v) {
+        r[0] = std::min(r[0], v);
+        r[1] = std::max(r[1], v);
+    }
+    void reset() {
+        updates = drawn = stale = moved = hidden = 0;
+        for (auto* r : {&place_scale, &hips_scale, &hips_y, &root_scale, &size, &times, &place_above, &hips_above}) (*r)[0] = 1e9f, (*r)[1] = -1e9f;
+        hips_step = size_step = 0;
+        std::fill(in_turn.begin(), in_turn.end(), 0.0f);
+        std::fill(in_move.begin(), in_move.end(), 0.0f);
+        std::fill(out_turn.begin(), out_turn.end(), 0.0f);
+        std::fill(out_move.begin(), out_move.end(), 0.0f);
+    }
+};
+Probe& probe() {
+    static auto* p = new Probe;
+    return *p;
+}
+
 // ---- the animation thread ------------------------------------------------------------------------
 void on_animation(std::uintptr_t component) noexcept {
     auto& l = live();
@@ -498,8 +566,34 @@ void on_animation(std::uintptr_t component) noexcept {
         }
         l.bones.resize(layout.count);
         if (!peek(layout.buffer, l.bones.data(), l.bones.size() * sizeof(NativeBone))) throw std::runtime_error("the skater's pose is unreadable");
+        // The room's placement that the last render wrote stays in this buffer when the animation update
+        // leaves joint 1 alone, and the body physics reads the buffer next: it took the skater for 269 m
+        // below where he is and bailed him every 3.5 s. The game's own placement goes back first.
+        const auto read_placement = joint_of(l.bones[placement_joint]);
+        if (l.room_written_valid && read_placement.scale == l.room_written.scale && read_placement.rotation == l.room_written.rotation &&
+            read_placement.position == l.room_written.position) {
+            if (l.game_placement_valid) {
+                auto& b = l.bones[placement_joint];
+                std::memcpy(b.scale.data(), l.game_placement.scale.data(), 12);
+                b.rotation = l.game_placement.rotation;
+                std::memcpy(b.position.data(), l.game_placement.position.data(), 12);
+                (void)poke(layout.buffer + placement_joint * sizeof(NativeBone), &b, sizeof(NativeBone));
+            }
+        } else {
+            l.game_placement = read_placement;
+            l.game_placement_valid = true;
+        }
+        if (!room_shown.load(std::memory_order_acquire)) l.room_written_valid = false;
         l.pose.resize(layout.count);
         for (std::size_t i = 0; i < layout.count; ++i) l.pose[i] = joint_of(l.bones[i]);
+        if (snap->play) {
+            auto& pr = probe();
+            std::lock_guard probe_lock(pr.mutex);
+            Probe::step(l.pose, pr.last_in, pr.in_turn, pr.in_move);
+            const auto placed = world(l.pose, placement_joint);
+            pr.range(pr.place_above, placed.position[1] - world(l.pose, ground_joint).position[1]);
+            pr.range(pr.hips_above, world(l.pose, hips_joint).position[1] - placed.position[1]);
+        }
         const double at = now_seconds();
         const auto air = in_the_air(base, component);
         // Recording: the pose as the game animated it, before anything here changes it.
@@ -688,6 +782,10 @@ void on_animation(std::uintptr_t component) noexcept {
                 b.rotation = j.rotation;
                 std::memcpy(b.position.data(), j.position.data(), 12);
             }
+            if (in_room && first <= placement_joint && placement_joint < last) {
+                l.room_written = joint_of(l.bones[placement_joint]);
+                l.room_written_valid = true;
+            }
             // Written when the pose goes to the renderer (on_render): the body physics rebuild this
             // buffer after the animation update.
             {
@@ -698,6 +796,30 @@ void on_animation(std::uintptr_t component) noexcept {
                 p.last = static_cast<std::uint32_t>(last);
                 p.bones.assign(l.bones.begin() + static_cast<std::ptrdiff_t>(first), l.bones.begin() + static_cast<std::ptrdiff_t>(last));
                 p.at = at;
+            }
+            if (clip) {
+                auto& pr = probe();
+                std::lock_guard probe_lock(pr.mutex);
+                ++pr.updates;
+                pr.range(pr.root_scale, l.pose[0].scale[0]);
+                pr.range(pr.place_scale, world(l.pose, placement_joint).scale[0]);
+                const auto hips = world(l.pose, hips_joint);
+                pr.range(pr.hips_scale, hips.scale[0]);
+                pr.range(pr.hips_y, hips.position[1]);
+                const auto head = world(l.pose, 103).position, foot = world(l.pose, 10).position;
+                const float size = std::sqrt((head[0] - foot[0]) * (head[0] - foot[0]) + (head[1] - foot[1]) * (head[1] - foot[1]) +
+                                             (head[2] - foot[2]) * (head[2] - foot[2]));
+                pr.range(pr.size, size);
+                pr.range(pr.times, t);
+                if (pr.last_hips[0] < 1e8f) {
+                    float d = 0;
+                    for (std::size_t a = 0; a < 3; ++a) d += (hips.position[a] - pr.last_hips[a]) * (hips.position[a] - pr.last_hips[a]);
+                    pr.hips_step = std::max(pr.hips_step, std::sqrt(d));
+                }
+                if (pr.last_size >= 0) pr.size_step = std::max(pr.size_step, std::abs(size - pr.last_size));
+                pr.last_hips = hips.position;
+                pr.last_size = size;
+                Probe::step(l.pose, pr.last_out, pr.out_turn, pr.out_move);
             }
             // Other players are never sent the room: from joint 2 on only.
             const std::size_t sent_first = std::max<std::size_t>(first, 2);
@@ -770,6 +892,11 @@ void hide_in_room(std::uintptr_t animation_interface, bool skater) noexcept {
         }
         const float scale = hide ? 0.001f : 1.0f;
         if ((b[1].scale[0] < 0.01f) == hide) return;
+        if (hide) {
+            auto& pr = probe();
+            std::lock_guard probe_lock(pr.mutex);
+            ++pr.hidden;
+        }
         const std::array<float, 3> s3{scale, scale, scale};
         (void)poke(layout.buffer + sizeof(NativeBone), s3.data(), sizeof(s3));
         return;
@@ -798,15 +925,23 @@ void on_render(std::uintptr_t animation_interface) noexcept {
         }
         auto& p = pending();
         std::lock_guard lock(p.mutex);
+        const auto count = [](int Probe::*n) {
+            auto& pr = probe();
+            std::lock_guard probe_lock(pr.mutex);
+            ++(pr.*n);
+        };
         if (p.bones.empty() || now_seconds() - p.at > 0.1) {
+            if (!p.bones.empty()) count(&Probe::stale);
             SetLastError(error);
             return;
         }
         const auto layout = multiplayer::read_native_pose_layout(peek, l.base.load(std::memory_order_acquire), *holder, 512);
         if (layout.buffer != p.buffer || layout.count != skeleton_joints || p.last > layout.count || p.first >= p.last) {
+            count(&Probe::moved);
             SetLastError(error);
             return;
         }
+        count(&Probe::drawn);
         thread_local std::vector<NativeBone> current;
         current.resize(p.last - p.first);
         if (!peek(layout.buffer + p.first * sizeof(NativeBone), current.data(), current.size() * sizeof(NativeBone))) {
@@ -860,8 +995,10 @@ void on_board_render(std::uintptr_t animation_interface, std::uintptr_t /*render
                     held = b;
                     holding = true;
                 }
-                (void)poke(layout.buffer + (board_mount + 1) * sizeof(NativeBone), &held[board_mount + 1],
-                           (board_bones - board_mount - 1) * sizeof(NativeBone));
+                // The deck's mount too: placed from a mount the physics had moved, the deck and the
+                // trucks under it came apart.
+                for (std::uint32_t i = board_mount; i < board_bones; ++i) b[i] = held[i];
+                (void)poke(layout.buffer + board_mount * sizeof(NativeBone), &held[board_mount], (board_bones - board_mount) * sizeof(NativeBone));
                 const auto now_mount = compose(board_parent(b), joint_of(b[board_mount]));
                 Joint want = target;
                 want.rotation = slerp(now_mount.rotation, target.rotation, weight);
@@ -890,6 +1027,7 @@ std::uint64_t serial{};
 
 void watch_room(bool on) noexcept { room_watch.store(on, std::memory_order_release); }
 bool room_skater_seen() noexcept { return now_seconds() - room_seen_at.load(std::memory_order_acquire) < 0.5; }
+bool shown_in_room() noexcept { return room_shown.load(std::memory_order_acquire); }
 void show_in_room(bool on) noexcept {
     if (room_shown.exchange(on, std::memory_order_acq_rel) && !on) room_restore_until.store(now_seconds() + 3, std::memory_order_release);
 }
@@ -1015,6 +1153,26 @@ void tick(std::uintptr_t base, std::uintptr_t component, bool allowed) {
     if (allowed != plan_draft.allowed) {
         plan_draft.allowed = allowed;
         publish();
+    }
+    {
+        static double next_probe = 0;
+        const double t = now_seconds();
+        if (plan_draft.play && t >= next_probe) {
+            next_probe = t + 2;
+            auto& pr = probe();
+            std::lock_guard probe_lock(pr.mutex);
+            if (pr.updates || pr.drawn || pr.stale || pr.moved)
+                logging::log(Level::info, Channel::skater,
+                             "Clip pose (2 s): {} updates, {} renders drew it, {} stale, {} on another buffer, {} room hides; root scale {:.4f}..{:.4f}, "
+                             "placement {:.4f}..{:.4f}, hips {:.4f}..{:.4f} at height {:.3f}..{:.3f}; clip time {:.3f}..{:.3f}; head to foot {:.3f}..{:.3f} m; "
+                             "most in one update: hips {:.3f} m, head to foot {:.3f} m; most changed coming in {}, written {}; live placement {:.3f}..{:.3f} m above the ground, hips {:.3f}..{:.3f} m above it{}",
+                             pr.updates, pr.drawn, pr.stale, pr.moved, pr.hidden, pr.root_scale[0], pr.root_scale[1], pr.place_scale[0],
+                             pr.place_scale[1], pr.hips_scale[0], pr.hips_scale[1], pr.hips_y[0], pr.hips_y[1], pr.times[0], pr.times[1],
+                             pr.size[0], pr.size[1], pr.hips_step, pr.size_step, Probe::worst(pr.in_turn, pr.in_move),
+                             Probe::worst(pr.out_turn, pr.out_move), pr.place_above[0], pr.place_above[1], pr.hips_above[0], pr.hips_above[1],
+                             room_shown.load(std::memory_order_acquire) ? " (in the room)" : "");
+            pr.reset();
+        }
     }
     // A play that finished is over.
     if (plan_draft.play && finished_serial.load(std::memory_order_acquire) == plan_draft.serial) {

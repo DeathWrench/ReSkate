@@ -329,6 +329,21 @@ struct FakeGame final : Game {
         return clip;
     }
     bool game_clips_ready{};
+    // The fake's clips stand regular, and a mirror is the clip with its takeoff moved, to tell it apart.
+    std::optional<bool> clip_goofy(const ClipRef& clip) override {
+        if (!game_clips_ready || !clip) return std::nullopt;
+        return clip->takeoff > 0.07f;
+    }
+    ClipRef mirror_clip(const ClipRef& clip, std::string& why) override {
+        if (!game_clips_ready) {
+            why = "the game's animations are still being read";
+            return nullptr;
+        }
+        auto out = std::make_shared<dingosdk::anim_studio::Clip>(*clip);
+        out->takeoff += 0.05f;
+        calls.push_back("mirror");
+        return out;
+    }
     std::string play_clip(std::string_view plugin, ClipRef clip, float speed, float blend, bool loop, float at, bool paused, bool floor) override {
         calls.push_back(std::format("play {} {} frames {:.1f} {:.2f} {}", plugin, clip->times.size(), speed, blend, loop) +
                         (at > 0 || paused ? std::format(" at {:.2f}{}", at, paused ? " paused" : "") : std::string{}) + (floor ? " floor" : ""));
@@ -1348,6 +1363,9 @@ void plugins_use_the_games_clips() {
             assert(#reskate.animation.game_clips() == 3, "all of them")
             local info = reskate.animation.info("game:" .. names[1])
             assert(info.frames == 3 and info.joints == 395 and math.abs(info.takeoff - 0.05) < 1e-6 and math.abs(info.landing - 0.15) < 1e-6, "a clip")
+            assert(info.stance == "regular", "its stance: " .. tostring(info.stance))
+            local mirrored = reskate.animation.mirror("game:" .. names[1])
+            assert(mirrored and mirrored:sub(1, 5) == "clip:" and reskate.animation.info(mirrored).stance == "goofy", "mirrored, the other stance")
             assert(reskate.animation.play("game:" .. names[1], {floor = true}))
             local ok, err = pcall(reskate.animation.info, "game:" .. names[2])
             assert(not ok and err:find("SequenceContainerAsset, not a clip"), err)
@@ -2359,7 +2377,7 @@ void animator_studio_records_and_saves() {
     game.state = 301;
     environment.lines.clear();
     check(host.run_console("studio open") && host.run_console("studio status") && environment.printed("studio: closed") &&
-              !game.called("freeze animator-studio on"),
+              !game.called("room open animator-studio"),
           "It does not open during a bail:\n" + printed_lines(environment) + environment.all());
     game.state.reset();
     environment.local_skater = SkaterState{{1, 0, 2}, 0, 0, 0, false, 0};
@@ -2368,6 +2386,8 @@ void animator_studio_records_and_saves() {
     environment.lines.clear();
     check(host.run_console("studio status") && environment.printed("studio: open; kickflip, 0.50 s; 0 saved"),
           "and opens on the trick:\n" + printed_lines(environment) + environment.all());
+    check(game.called("velocity animator-studio 0.0 0.0 0.0") && !game.called("freeze animator-studio on"),
+          "The skater's board is stopped, and he stays on it (no noclip)\n" + environment.all());
     ticks(host, environment, 2);
     check(game.called("play animator-studio 3 frames 1.0 0.00 true at 0.00 paused floor"), "held on the skater\n" + environment.all());
     // The game's own tricks, once its animations are read: one for each pop the game has a clip for.
@@ -2433,6 +2453,11 @@ void animator_studio_records_and_saves() {
     check(host.run_console("studio open"), "studio open");
     ticks(host, environment, 260); // past the walk's loading screen
     running(host, "animator-studio", environment);
+    // The room gone from under it (the game's menu closed): the studio closes with it.
+    game.room_phase = "failed";
+    ticks(host, environment, 2);
+    environment.lines.clear();
+    check(host.run_console("studio status") && environment.printed("studio: closed"), "The studio closes with the room:\n" + printed_lines(environment));
     // Started again, it puts it back in game.
     game.calls.clear();
     host.apply({});

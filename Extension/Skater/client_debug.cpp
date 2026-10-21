@@ -1,6 +1,7 @@
 #include "client_source_spawn.h"
 #include "client_source_spawn_internal.h"
 #include "no_bail.h"
+#include "skater_animation.h"
 #include "offboard_flight.h"
 #include "Engine/Core/Log/logging.h"
 #include "Engine/Core/Platform/launcher_support.h"
@@ -1007,7 +1008,10 @@ overlay::DebugModel on_client_debug_tick(std::uintptr_t base, std::uintptr_t cli
         } else if (debug.offboard_up_velocity.valid) {
             model.offboard_up_velocity_unavailable = "Off-board Up Boost is being applied.";
         }
-        model.no_bail_available = can_control && update_no_bail(client, model.skater_identity, debug.no_bail && no_bail_allowed,
+        // Drawn in the character room, the skater is far from where the game has him, and it bailed him
+        // every few seconds: No Bail holds him meanwhile (he stands still behind the game's menu).
+        model.no_bail_available = can_control && update_no_bail(client, model.skater_identity,
+            (debug.no_bail && no_bail_allowed) || skater_animation::shown_in_room(),
             debug.noclip && debug.noclip_velocity.valid, debug.noclip_velocity.expires);
         if (model.camera_available) {
             if (!model.no_bail_available) model.noclip_unavailable = "Waiting for local No Bail protection.";

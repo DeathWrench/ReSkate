@@ -79,6 +79,8 @@ struct State {
     int leave_steps_left{};
     bool leave_pressed{};
     std::uint64_t leave_step_deadline{}, leave_deadline{};
+    // Once there: when the room was last seen on screen (the menu on its Skaters page), and checked.
+    std::uint64_t room_seen_at{}, next_room_check{};
     std::string failure;
 };
 State& state() { static auto* value = new State; return *value; }
@@ -251,6 +253,7 @@ void step_way(std::uintptr_t base, State& s, std::uint64_t now) {
     const auto settled = [&] { return !navigation_pending(base) || now > s.way_started + queue_settle_ms; };
     if (skaters && skater_animation::room_skater_seen()) {
         s.way = Way::none;
+        s.room_seen_at = now;
         s.phase.store(Phase::arrived, std::memory_order_release);
         logging::log(Level::info, Channel::skater, "Character room: the room is open (the menu's Skaters page).");
     } else if (now > s.open_deadline) fail(s, "it took too long");
@@ -384,6 +387,19 @@ void tick(std::uintptr_t base, std::uintptr_t skater, bool ready, bool prepare) 
             start_scan(s);
         }
         if (leave_step(s, base, now)) return;
+        // There, the player can still close the game's menu (Esc) or go to another of its pages: the room
+        // is gone then, and the skater must not be drawn where it was.
+        if (p == Phase::arrived && now >= s.next_room_check) {
+            s.next_room_check = now + 250;
+            if (multiplayer::sample_game_ui_state(base).in_menu && skaters_page(menu_page(base))) s.room_seen_at = now;
+            else if (now > s.room_seen_at + 750) {
+                skater_animation::watch_room(false);
+                s.failure = "The character room closed: the game's menu left the Skaters page.";
+                s.phase.store(Phase::failed, std::memory_order_release);
+                logging::log(Level::info, Channel::skater, "Character room: {}", s.failure);
+                return;
+            }
+        }
         if (p == Phase::leaving) {
             s.phase.store(Phase::idle, std::memory_order_release);
             return;

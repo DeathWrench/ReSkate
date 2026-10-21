@@ -119,7 +119,7 @@ local undo_stack, redo_stack = {}, {}
 local orbit = {yaw = 0.6, pitch = 0.18, distance = 3.4, pan = {0, 0, 0}, focus = nil}
 local anchor = nil        -- the skater's middle, where the studio opened (before his pose is read)
 local in_room, room_walk = false, false -- the studio shows in the character room; the walk there goes on
-local face_skater = false -- the orbit turns to face the skater once his placement is read
+local face_skater = false -- now() from which the orbit turns to face the skater, once his placement is read
 local camera = nil        -- {position, forward, right, up, fov} as last set
 local recording = nil     -- {trick, air, status} while a recording is going on
 local stale_recording = false -- a recording given up on: its clip is let go when it comes
@@ -528,12 +528,23 @@ local function load_game_trick(t)
     local data = t.clip
     local ok, why = pcall(reskate.animation.info, data)
     if not ok then return "The game's " .. t.label .. " cannot be read: " .. tostring(why) end
+    -- The game's clips stand one way and the game mirrors them for the other stance: so does the studio,
+    -- or the trick turned round on the skater's board in game.
+    local note = ""
+    local goofy = reskate.skater.goofy()
+    if goofy ~= nil and why.stance and (why.stance == "goofy") ~= goofy then
+        local mirrored = reskate.animation.mirror(data)
+        if mirrored then
+            data = mirrored
+            note = ", mirrored for your " .. (if goofy then "goofy" else "regular") .. " stance"
+        end
+    end
     anim.name, anim.trick, anim.pop, anim.speed, anim.loop = t.label .. " " .. t.pop, t.trick, t.pop, 1, true
     anim.tracks = {}
     undo_stack, redo_stack = {}, {}
     use_source(data)
     studio.dirty = false
-    return "Opened the game's " .. t.label .. " (" .. t.pop .. " pop)."
+    return "Opened the game's " .. t.label .. " (" .. t.pop .. " pop" .. note .. ")."
 end
 
 -- ---- the camera: an orbit round the skater, placed in the free space beside the menu --------------------
@@ -545,9 +556,11 @@ local function focus_point()
     local place, hips = reskate.skater.joint(1), reskate.skater.joint(7)
     local centre = if place and hips then {place.position.x, hips.position.y + 0.05, place.position.z} else anchor
     if not centre then return nil end
-    if face_skater and place then
-        local f = rotate(place.rotation, {0, 0, 1})
-        orbit.yaw = math.atan2(f[1], f[3]) + 0.6
+    if face_skater and now() >= face_skater and place then
+        -- The PR's facing_yaw: a camera on the placement joint's -Z side shows the skater's left side, so
+        -- his front is a quarter turn from it; the orbit starts 0.6 rad round from his front.
+        local f = rotate(place.rotation, {0, 0, -1})
+        orbit.yaw = math.atan2(f[1], f[3]) - math.pi / 2 + 0.6
         face_skater = false
     end
     if orbit.focus ~= nil then
@@ -591,7 +604,6 @@ local function finish_close()
     end
     reskate.camera.release()
     reskate.hud.hide(false)
-    reskate.skater.freeze(false)
     if in_room or room_walk then
         reskate.room.leave()
         in_room, room_walk = false, false
@@ -625,8 +637,10 @@ local function open_studio()
     end
     anchor = {s.position.x, s.position.y + 0.9, s.position.z}
     orbit.yaw = s.heading + 0.6
-    eased, face_skater = nil, true
-    reskate.skater.freeze(true)
+    eased, face_skater = nil, now()
+    -- The board stopped where it is, as the PR's studio has the skater: on his board, stood still. Held
+    -- with noclip instead, he left his board and the game's flight pose showed through the clip.
+    pcall(reskate.skater.set_velocity, vector.create(0, 0, 0))
     reskate.ui.open(title)
     studio.open = true
     studio.playing = false
@@ -2358,7 +2372,8 @@ reskate.on("tick", function()
         local state, why = reskate.room.state()
         if state == "open" then
             room_walk, in_room = false, true
-            eased, face_skater = nil, true
+            -- A quarter second on: the joints read then are the room's, not where he stood.
+            eased, face_skater = nil, now() + 0.25
             reskate.hud.hide(true)
             if loading then loading.until_ = t + 3.8 end
         elseif state == "failed" or state == "idle" then
@@ -2368,6 +2383,16 @@ reskate.on("tick", function()
             if loading then loading.until_ = t + 0.3 end
         elseif loading then
             loading.until_ = math.max(loading.until_, t + 0.5)
+        end
+    end
+    -- The room gone from under the studio (Esc closed the game's menu, or it went to another page): the
+    -- skater is back where he is, and the studio closes with the room.
+    if in_room and not room_walk and not loading then
+        local state, why = reskate.room.state()
+        if state ~= "open" then
+            reskate.ui.toast((why or "The character room closed.") .. " The studio closed with it.", "warn")
+            finish_close()
+            return
         end
     end
     if loading and loading.close and t >= loading.until_ then

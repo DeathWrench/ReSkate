@@ -83,6 +83,9 @@ std::optional<arm_reach::Placed> hand(arm_reach::Hand side);
 void watch_room(bool on) noexcept;
 bool room_skater_seen() noexcept;
 void show_in_room(bool on) noexcept;
+// Whether the local skater is drawn in the room now. The game takes the room's floor, far under where he
+// is, for a fall and bails him (client_debug.cpp guards him with No Bail meanwhile).
+bool shown_in_room() noexcept;
 // The game's name for the trick the skater is doing now, or empty.
 std::string current_trick() noexcept;
 // Each client tick: the local skater's animation component (0 for none), and whether clips may be

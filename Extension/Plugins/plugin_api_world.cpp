@@ -882,6 +882,24 @@ struct WorldApi {
         lua_pushboolean(L, clip->board.size() == clip->times.size() && !clip->board.empty());
         lua_setfield(L, -2, "board");
         push_marks(L, clip->takeoff, clip->landing);
+        if (const auto goofy = game(plugin).clip_goofy(clip)) {
+            lua_pushstring(L, *goofy ? "goofy" : "regular");
+            lua_setfield(L, -2, "stance");
+        }
+        return 1;
+    }
+    // mirror(clip): the clip for the other stance, as a new clip ("clip:<n>"); nil and why without one.
+    static int animation_mirror(lua_State* L) {
+        auto& plugin = animating(L, "reskate.animation.mirror");
+        const auto source = clip_at(L, plugin, 1);
+        std::string why;
+        auto clip = game(plugin).mirror_clip(source, why);
+        if (!clip) {
+            lua_pushnil(L);
+            lua_pushlstring(L, why.data(), why.size());
+            return 2;
+        }
+        keep_clip(L, plugin, "clip:" + std::to_string(++plugin.recordings_), std::move(clip));
         return 1;
     }
     // sample(clip, joint, seconds): the joint in its parent's frame at that time, {position, rotation, scale}.
@@ -2358,7 +2376,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
                                    {"record", animation_record}, {"recorded", animation_recorded}, {"forget", animation_forget}, {"trick", animation_trick},
                                    {"seek", animation_seek}, {"pause", animation_pause}, {"time", animation_time}, {"info", animation_info},
                                    {"sample", animation_sample}, {"joints", animation_joints}, {"trim", animation_trim}, {"edit", animation_edit},
-                                   {"save", animation_save}, {"game_clips", animation_game_clips}});
+                                   {"save", animation_save}, {"game_clips", animation_game_clips},
+                                   {"mirror", animation_mirror}});
     add_functions(L, "outfit", {{"set", outfit_set}, {"clear", outfit_clear}, {"find", outfit_find}, {"slots", outfit_slots}, {"status", outfit_status}});
     add_functions(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
     add_functions(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},

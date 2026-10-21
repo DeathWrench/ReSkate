@@ -520,6 +520,14 @@ public:
         why = unavailable;
         return nullptr;
     }
+    // The stance a clip of the skater stands in at its first frame (true: goofy), from the skeleton the
+    // game's clips are read with; empty when it cannot be told, or before the game's animations are read.
+    virtual std::optional<bool> clip_goofy(const ClipRef&) { return std::nullopt; }
+    // The clip mirrored for the other stance (game_clips.h Library::mirror), or empty and why.
+    virtual ClipRef mirror_clip(const ClipRef&, std::string& why) {
+        why = unavailable;
+        return nullptr;
+    }
     virtual std::string play_clip(std::string_view /*plugin*/, ClipRef, float /*speed*/, float /*blend*/, bool /*loop*/, float /*at*/, bool /*paused*/,
                                   bool /*floor*/) {
         return unavailable;
