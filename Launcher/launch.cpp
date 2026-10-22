@@ -852,14 +852,15 @@ DWORD start_game(const Session& session, const launcher::LaunchOptions& options,
     }
     set_environment(L"RESKATE_GPU_DIAGNOSTICS", options.gpu_diagnostics ? L"1" : L"0");
     // -map: the game loads it once it is up, as the console's "load" would (client_tick.cpp),
-    // ahead of any startup commands already asked for.
-    if (!options.map.empty()) {
-        std::wstring commands = L"load " + options.map;
-        std::wstring already(4096, L'\0');
-        const auto length = GetEnvironmentVariableW(L"RESKATE_STARTUP_COMMANDS", already.data(), 4096);
-        if (length && length < 4096) commands += L";" + already.substr(0, length);
-        set_environment(L"RESKATE_STARTUP_COMMANDS", commands.c_str());
-    }
+    // ahead of any startup commands already asked for. Those are the launcher's own, read once: a
+    // launcher kept open sets the variable again at each launch, and must not add to the last one.
+    static const std::wstring asked = [] {
+        std::wstring value(4096, L'\0');
+        const auto length = GetEnvironmentVariableW(L"RESKATE_STARTUP_COMMANDS", value.data(), 4096);
+        return length && length < 4096 ? value.substr(0, length) : std::wstring{};
+    }();
+    std::wstring commands = options.map.empty() ? asked : L"load " + options.map + (asked.empty() ? L"" : L";" + asked);
+    set_environment(L"RESKATE_STARTUP_COMMANDS", commands.empty() ? nullptr : commands.c_str());
     set_environment(L"RESKATE_DISCORD", options.discord ? L"1" : L"0");
     if (options.menu_key == options.console_key)
         throw std::runtime_error("The menu and console need different keys. Change one in Settings.");
