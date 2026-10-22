@@ -23,8 +23,8 @@ the launcher, the runtime that loads into the game, and the dedicated server.
   - The **Park Editor**: place, move and save objects with freecam, snapping and undo. Save a selection as a
     set and place it again anywhere, on any map.
   - Skater options: first person, movement, boosts, noclip.
-  - Hall of Meat, grind exit triggers, Board Break, Road Rash and the FPV drone are plugin mods now
-    ([contrib/plugins](contrib/plugins)). Board Break and Road Rash ship inside their asset mods.
+  - Hall of Meat, grind exit triggers, Board Break, Road Rash and the FPV drone are plugin mods now,
+    installed like any other mod. Board Break and Road Rash ship inside their asset mods.
   - Progression, controls, graphics and multiplayer settings.
 - **Mods.**
   - Drop a mod in `Mods/` and it is merged into the game at launch. Mods can add custom maps, loading
@@ -297,13 +297,16 @@ The source tree loosely follows Frostbite's own layout.
 | `assets/`, `config/` | files built into the binaries: launcher art, emotes, default profile settings |
 | `cmake/` | the build, split by area |
 
-### Supporting a new game build
+### The supported game build
 
-Feature code never contains addresses. Everything tied to one `Skate.exe` lives in
-`Engine/Game/Build/<build>/` and in the pins of
-[supported_build.h](Engine/Game/Build/supported_build.h): file hashes, the Steam depot and manifest, and
-the content cache. A new game build means a new table and new pins. Most hooks and patches check the
-bytes they expect before touching them, so code from the wrong build is refused rather than patched.
+ReSkate supports one `Skate.exe`, build 20260929, and stays on it: it does not follow newer Steam
+builds. The launcher downloads that build, pinned in
+[supported_build.h](Engine/Game/Build/supported_build.h) by file hashes, the Steam depot and manifest, and
+the content cache.
+
+Feature code never contains addresses. Everything tied to the game's code lives in
+`Engine/Game/Build/20260929/`. Most hooks and patches check the bytes they expect before touching them,
+so a different `Skate.exe` is refused rather than patched.
 
 ## Crash reports and privacy
 

@@ -55,7 +55,7 @@ ReSkate/
 ├── External/              vendored third-party code, pinned and hashed
 ├── assets/                files embedded into the binaries
 ├── config/defaults/       default profile/settings JSON embedded into ReSkate.dll
-├── contrib/               plugin mods, server hosting files, design notes, release script
+├── contrib/               server hosting files, design notes, release script
 ├── README.md, MACOS-SETUP.md, MUSIC-SETUP.md, LICENSE
 └── .clangd, .gitattributes, .gitignore
 ```
@@ -238,14 +238,17 @@ Valve's Steam networking headers, and fonts (Montserrat, Permanent Marker).
 
 | Path | Contents |
 |---|---|
-| `plugins/` | plugin mods: ports of former built-in features (`hall-of-meat`, `grind-exits`, `road-rash`, `board-break`, `fpv-drone`), test plugins (`reskate-test`, `reskate-hostile`, `throwdown-modes-test`), `server-starter`, and `tools/`. See [contrib/plugins/README.md](contrib/plugins/README.md) |
 | `pterodactyl/` | Pterodactyl egg for hosting the server |
 | `reskate-server.service`, `setup-linux-server-libs.sh` | Linux server setup |
 | `package_release_zip.py` | packs release zips |
 | `*.md` | design notes for individual features |
 | `Test/` | tests for contrib scripts |
 
-Each plugin folder looks like:
+Plugin mods (the ports of former built-in features, the test plugins, Fit Check, Animator Studio) are not
+in the repository. Maintainers keep them in `contrib/plugins/`, which is ignored, and
+`dingosdk_plugin_tests` runs the test plugins from there when they are present.
+
+A plugin mod's folder looks like:
 
 ```
 <plugin>/
