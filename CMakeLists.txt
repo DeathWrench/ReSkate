@@ -4,6 +4,10 @@ if(WIN32)
     if(NOT MSVC OR NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR "DingoSDK on Windows requires MSVC and the x64 platform.")
     endif()
+    # ReSkate uses no vcpkg packages. A user-wide "vcpkg integrate install" still hooks every
+    # project and runs its DLL copy after each link, with PowerShell 7 ("'pwsh.exe' is not
+    # recognized" where it is not installed); the preset's VCLibPackagePath only covers configure.
+    set(CMAKE_VS_GLOBALS "VCPkgLocalAppDataDisabled=true")
 else()
     if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
         message(FATAL_ERROR "DingoSDK on Linux requires a 64-bit platform.")
@@ -116,15 +120,16 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
         Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Net/delta_codec.cpp
         Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Remote/playback_buffers.cpp
         Extension/Multiplayer/Session/password.cpp Server/server_activity.cpp Server/server_votes.cpp Server/server_commands.cpp
-        Server/server_parks.cpp Extension/Throwdowns/throwdown_wire.cpp)
+        Server/server_parks.cpp Extension/Throwdowns/throwdown_wire.cpp Server/server_plugins.cpp)
     target_include_directories(dingosdk_server_park_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_include_directories(dingosdk_server_park_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
     if(WIN32)
         target_link_libraries(dingosdk_server_park_tests PRIVATE dingosdk_launcher_support dingosdk_world_layer_scan dingosdk_json
-            dingosdk_lz4 dingosdk_zstd dingosdk_logging dingosdk_miniz dingosdk_word_filter dingosdk_https winhttp bcrypt winmm)
+            dingosdk_lz4 dingosdk_zstd dingosdk_logging dingosdk_miniz dingosdk_word_filter dingosdk_https winhttp bcrypt winmm
+            dingosdk_plugins)
     else()
         target_link_libraries(dingosdk_server_park_tests PRIVATE dingosdk_launcher_support dingosdk_world_layer_scan dingosdk_json
-            dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dl pthread)
+            dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dingosdk_plugins dl pthread)
     endif()
     add_test(NAME server_park_mods COMMAND dingosdk_server_park_tests "${PROJECT_SOURCE_DIR}/Server/Test/fixtures/park_mods")
     # Tools locked for single players (lock, throwdown_locks), as each player's game reads its roster.
@@ -134,15 +139,16 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
         Extension/Multiplayer/word_lists.cpp Extension/Multiplayer/Net/protocol.cpp Extension/Multiplayer/Net/delta_codec.cpp
         Extension/Multiplayer/Net/wire_codec.cpp Extension/Multiplayer/Remote/playback_buffers.cpp
         Extension/Multiplayer/Session/password.cpp Server/server_activity.cpp Server/server_votes.cpp Server/server_commands.cpp
-        Server/server_parks.cpp Extension/Throwdowns/throwdown_wire.cpp)
+        Server/server_parks.cpp Extension/Throwdowns/throwdown_wire.cpp Server/server_plugins.cpp)
     target_include_directories(dingosdk_server_lock_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     target_include_directories(dingosdk_server_lock_tests SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/steam_networking")
     if(WIN32)
         target_link_libraries(dingosdk_server_lock_tests PRIVATE dingosdk_launcher_support dingosdk_world_layer_scan dingosdk_json
-            dingosdk_lz4 dingosdk_zstd dingosdk_logging dingosdk_miniz dingosdk_word_filter dingosdk_https winhttp bcrypt winmm)
+            dingosdk_lz4 dingosdk_zstd dingosdk_logging dingosdk_miniz dingosdk_word_filter dingosdk_https winhttp bcrypt winmm
+            dingosdk_plugins)
     else()
         target_link_libraries(dingosdk_server_lock_tests PRIVATE dingosdk_launcher_support dingosdk_world_layer_scan dingosdk_json
-            dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dl pthread)
+            dingosdk_lz4 dingosdk_zstd dingosdk_miniz dingosdk_word_filter OpenSSL::Crypto dingosdk_plugins dl pthread)
     endif()
     add_test(NAME server_locks COMMAND dingosdk_server_lock_tests)
     add_executable(dingosdk_server_release_tests Server/Test/server_release_tests.cpp Server/server_release.cpp)
