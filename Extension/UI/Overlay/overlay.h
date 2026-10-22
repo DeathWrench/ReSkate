@@ -19,6 +19,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +36,9 @@ void set_plugin_dialog_active(bool active) noexcept;
 // down for it, or all game input paused for half a second; the keyboard as the overlay reads it,
 // and the mouse wheel's notches since the last call.
 void hide_game_buttons(std::uint16_t buttons) noexcept;
+// Keys (virtual key codes) the game does not see go down until this is called again: their presses
+// are dropped from every way it reads the keyboard, releases pass. ReSkate's own reads see them. Any thread.
+void hide_game_keys(std::span<const std::uint8_t> keys) noexcept;
 void hold_game_buttons(std::uint16_t held) noexcept;
 void pause_game_input(bool paused) noexcept;
 bool key_down(int virtual_key) noexcept;
@@ -546,6 +550,13 @@ struct ItemBrowserHost {
 };
 // `host` must stay valid for the life of the process.
 void set_item_browser(const ItemBrowserHost *host) noexcept;
+// Where the item grids' own search bar and prompts end, as the overlay last drew them, in pixels: a
+// plugin's own prompts go under them. `unit` is the prompts' scale (a keycap is 20 units high). All
+// zero while no grid is open. Any thread.
+struct ItemPrompts {
+    float left{}, top{}, width{}, unit{};
+};
+ItemPrompts item_browser_prompts() noexcept;
 // A presented frame as the game drew it, before ReSkate's own UI goes on top: 8-bit RGBA rows
 // (BGRA when `bgra`), `pitch` bytes apart. Valid only during the call it is handed to.
 struct GrabbedFrame {

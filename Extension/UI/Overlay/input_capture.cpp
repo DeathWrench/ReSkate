@@ -36,6 +36,20 @@ bool challenge_menu_key(int key) noexcept {
 bool challenge_panel_owns_input() noexcept {
     return challenge_native_panel.load(std::memory_order_relaxed);
 }
+// Keys kept from the game (hide_game_keys): their presses are dropped from every way it reads the
+// keyboard. Releases pass, so a key the game saw go down still comes up.
+std::array<std::atomic<std::uint64_t>, 4> hidden_keys{};
+bool key_hidden(unsigned key) noexcept {
+    return key < 256 && !overlay_input_access && (hidden_keys[key / 64].load(std::memory_order_relaxed) >> (key % 64) & 1) != 0;
+}
+namespace {
+bool hidden_press(const RAWKEYBOARD& keyboard) noexcept { return !(keyboard.Flags & RI_KEY_BREAK) && key_hidden(keyboard.VKey); }
+// The DirectInput keyboard's scan code (DIK_) of a hidden key.
+bool scan_hidden(DWORD scan) noexcept {
+    const auto key = MapVirtualKeyW(scan, MAPVK_VSC_TO_VK_EX);
+    return key && key_hidden(key);
+}
+}
 namespace {
 std::atomic<unsigned> prompt_xinput{}, prompt_direct{}, prompt_hid{}, prompt_raw{};
 // A read the game made while a card held its input: counted, by the way it read.
@@ -451,16 +465,19 @@ void keep_xinput_capture_first() {
 }
 SHORT WINAPI captured_async_key(int key) {
     const auto value = original<SHORT(WINAPI*)(int)>(input_hooks().async_key)(key);
-    return block_polled_input() || challenge_menu_key(key) ? 0 : value;
+    return block_polled_input() || challenge_menu_key(key) || key_hidden(static_cast<unsigned>(key)) ? 0 : value;
 }
 SHORT WINAPI captured_key(int key) {
     const auto value = original<SHORT(WINAPI*)(int)>(input_hooks().key)(key);
-    return block_polled_input() || challenge_menu_key(key) ? 0 : value;
+    return block_polled_input() || challenge_menu_key(key) || key_hidden(static_cast<unsigned>(key)) ? 0 : value;
 }
 BOOL WINAPI captured_keyboard(PBYTE keys) {
     const auto result = original<BOOL(WINAPI*)(PBYTE)>(input_hooks().keyboard)(keys);
     if (result && keys && block_polled_input()) std::memset(keys, 0, 256);
     else if(result && keys && challenge_menu_key(VK_ESCAPE))keys[VK_ESCAPE]=0;
+    if (result && keys)
+        for (unsigned key = 0; key < 256; ++key)
+            if (key_hidden(key)) keys[key] = 0;
     return result;
 }
 UINT WINAPI captured_raw_data(HRAWINPUT input, UINT command, LPVOID data, PUINT size, UINT header_size) {
@@ -478,7 +495,7 @@ UINT WINAPI captured_raw_data(HRAWINPUT input, UINT command, LPVOID data, PUINT 
         const bool mouse = raw->header.dwType == RIM_TYPEMOUSE && result >= offsetof(RAWINPUT, data) + sizeof(RAWMOUSE);
         const bool keyboard =
             raw->header.dwType == RIM_TYPEKEYBOARD && result >= offsetof(RAWINPUT, data) + sizeof(RAWKEYBOARD);
-        if(keyboard && challenge_menu_key(raw->data.keyboard.VKey)) {
+        if(keyboard && (challenge_menu_key(raw->data.keyboard.VKey) || hidden_press(raw->data.keyboard))) {
             raw->data.keyboard={};raw->data.keyboard.VKey=255;
             raw->data.keyboard.Flags=RI_KEY_BREAK;raw->data.keyboard.Message=WM_KEYUP;
         } else if (!block_polled_input()) {
@@ -589,7 +606,7 @@ UINT WINAPI captured_raw_buffer(PRAWINPUT data, PUINT size, UINT header_size) {
             const bool mouse = record->header.dwType == RIM_TYPEMOUSE && bytes >= offsetof(RAWINPUT, data) + sizeof(RAWMOUSE);
             const bool keyboard =
                 record->header.dwType == RIM_TYPEKEYBOARD && bytes >= offsetof(RAWINPUT, data) + sizeof(RAWKEYBOARD);
-            if(keyboard && challenge_menu_key(record->data.keyboard.VKey)) {
+            if(keyboard && (challenge_menu_key(record->data.keyboard.VKey) || hidden_press(record->data.keyboard))) {
                 record->data.keyboard={};record->data.keyboard.VKey=255;
                 record->data.keyboard.Flags=RI_KEY_BREAK;record->data.keyboard.Message=WM_KEYUP;
             }
@@ -921,8 +938,10 @@ HRESULT STDMETHODCALLTYPE captured_device_state(void* device, DWORD size, LPVOID
             for (std::size_t offset = 8 * sizeof(DWORD); offset < 12 * sizeof(DWORD); offset += sizeof(DWORD))
                 std::memcpy(bytes + offset, &released_pov, sizeof(released_pov));
         }
-    } else if(SUCCEEDED(result) && data && size==256 && challenge_menu_key(VK_ESCAPE)) {
-        static_cast<std::uint8_t*>(data)[DIK_ESCAPE]=0;
+    } else if (SUCCEEDED(result) && data && size == 256) {
+        if (challenge_menu_key(VK_ESCAPE)) static_cast<std::uint8_t*>(data)[DIK_ESCAPE] = 0;
+        for (DWORD scan = 1; scan < 256; ++scan)
+            if (scan_hidden(scan)) static_cast<std::uint8_t*>(data)[scan] = 0;
     }
     return result;
 }
@@ -932,13 +951,15 @@ HRESULT STDMETHODCALLTYPE captured_device_data(void* device, DWORD size, LPDIDEV
     const auto result = original<HRESULT(STDMETHODCALLTYPE*)(void*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD)>(
         input_hooks().device_data[I])(device, size, data, count, capture ? flags & ~DIGDD_PEEK : flags);
     if (SUCCEEDED(result) && capture && count) *count = 0;
-    else if(SUCCEEDED(result) && data && count && size==sizeof(DIDEVICEOBJECTDATA) && challenge_menu_key(VK_ESCAPE)) {
+    else if (SUCCEEDED(result) && data && count && size == sizeof(DIDEVICEOBJECTDATA)) {
         std::lock_guard lock(input_hooks().formats_mutex);
-        const auto format=input_hooks().formats.find(device);
-        if(format!=input_hooks().formats.end() && format->second.size==256) {
+        const auto format = input_hooks().formats.find(device);
+        if (format != input_hooks().formats.end() && format->second.size == 256) {
+            const bool escape = challenge_menu_key(VK_ESCAPE);
             DWORD kept{};
-            for(DWORD i=0;i<*count;++i)if(data[i].dwOfs!=DIK_ESCAPE)data[kept++]=data[i];
-            *count=kept;
+            for (DWORD i = 0; i < *count; ++i)
+                if (!(escape && data[i].dwOfs == DIK_ESCAPE) && !((data[i].dwData & 0x80) && scan_hidden(data[i].dwOfs))) data[kept++] = data[i];
+            *count = kept;
         }
     }
     return result;
@@ -1176,6 +1197,11 @@ void capture_challenge_menu_input(bool active,bool native_panel,bool opening_key
         detail::challenge_menu_release.load(std::memory_order_relaxed),active,opening_key_down),std::memory_order_relaxed);
     detail::challenge_menu_capture.store(active,std::memory_order_relaxed);
     detail::challenge_native_panel.store(native_panel,std::memory_order_relaxed);
+}
+void hide_game_keys(std::span<const std::uint8_t> keys) noexcept {
+    std::array<std::uint64_t, 4> bits{};
+    for (const auto key : keys) bits[key / 64] |= std::uint64_t{1} << (key % 64);
+    for (std::size_t i = 0; i < bits.size(); ++i) detail::hidden_keys[i].store(bits[i], std::memory_order_relaxed);
 }
 void hold_game_buttons(std::uint16_t held) noexcept { detail::mode_held_buttons.store(held, std::memory_order_relaxed); }
 void pause_game_input(bool paused) noexcept {

@@ -139,6 +139,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Plugins/plugin_sound.cpp
     Extension/Skater/skater_events.cpp
     Extension/Skater/outfit_overlay.cpp
+    Extension/Skater/layer_materials.cpp
     Extension/Skater/board_pose.cpp
     Extension/Skater/skater_physics.cpp
     Extension/Skater/xray.cpp

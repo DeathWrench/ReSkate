@@ -571,6 +571,34 @@ struct FakeGame final : Game {
         calls.push_back(std::format("reveal {} {}", plugin, folder));
         return {};
     }
+    // Keys held, the keys and pad buttons kept from the game, the items worn on top and what the item
+    // grid was asked to show and mark (Item Tabs).
+    std::set<int> keys_held;
+    bool key_down(int virtual_key) override { return keys_held.contains(virtual_key); }
+    std::vector<std::uint8_t> kept_keys;
+    std::uint16_t kept_buttons{};
+    void game_keys(std::string_view, std::vector<std::uint8_t> keys) override { kept_keys = std::move(keys); }
+    void game_buttons(std::string_view, std::uint16_t hidden, std::uint16_t, bool) override { kept_buttons = hidden; }
+    std::vector<std::string> on_top_now;
+    static std::string joined(const std::vector<std::string>& list) {
+        std::string out;
+        for (const auto& one : list) out += (out.empty() ? "" : ",") + one;
+        return out;
+    }
+    std::string outfit_on_top(std::string_view plugin, std::vector<std::string> items) override {
+        calls.push_back(std::format("on top {} [{}]", plugin, joined(items)));
+        on_top_now = std::move(items);
+        return {};
+    }
+    OnTop outfit_on_top_state(std::string_view) override { return {on_top_now, on_top_now, {}}; }
+    std::optional<std::vector<std::string>> grid_shown;
+    std::vector<std::string> grid_marked;
+    std::string grid_show(std::string_view plugin, std::optional<std::vector<std::string>> keys) override {
+        calls.push_back(keys ? std::format("show {} [{}]", plugin, joined(*keys)) : std::format("show {} none", plugin));
+        grid_shown = std::move(keys);
+        return {};
+    }
+    void grid_mark(std::string_view, std::vector<std::string> keys) override { grid_marked = std::move(keys); }
     bool called(std::string_view part) const {
         return std::any_of(calls.begin(), calls.end(), [&](const auto& c) { return c.find(part) != std::string::npos; });
     }
@@ -2239,9 +2267,18 @@ void discovery_finds_the_plugins_among_the_mods_left_on() {
     check(again[0].fingerprint != before, "A changed file changes the fingerprint, which reloads it");
 }
 
-// contrib/plugins, as they are in the repository.
-Candidate contributed(const std::string& id) {
+// contrib/plugins, kept on this machine and out of the repository: a test of one that is not here
+// is skipped (main reports it), not failed.
+struct Absent {
+    std::string id;
+};
+std::filesystem::path contrib_plugin(const std::string& id) {
     const auto directory = std::filesystem::path(RESKATE_SOURCE_DIR) / "contrib" / "plugins" / id;
+    if (!std::filesystem::exists(directory / "reskate-plugin.json")) throw Absent{id};
+    return directory;
+}
+Candidate contributed(const std::string& id) {
+    const auto directory = contrib_plugin(id);
     return {id, directory, "1", check_package_files(directory)};
 }
 std::string printed_lines(const TestEnvironment& environment) {
@@ -2608,7 +2645,7 @@ void board_break_snaps_the_board_on_a_slam() {
     auto& game = environment.fake;
     const auto directory = scratch / "mods" / "board-break";
     std::filesystem::remove_all(directory);
-    std::filesystem::copy(std::filesystem::path(RESKATE_SOURCE_DIR) / "contrib" / "plugins" / "board-break", directory,
+    std::filesystem::copy(contrib_plugin("board-break"), directory,
                           std::filesystem::copy_options::recursive);
     write(directory / "sounds" / "heavy" / "snap.wav", wave_file(8000, 4000));
     Host host(environment, Side::client);
@@ -2742,7 +2779,7 @@ void fit_check_turns_the_board_and_saves_it() {
     auto& game = environment.fake;
     const auto directory = scratch / "mods" / "fit-check";
     std::filesystem::remove_all(directory);
-    std::filesystem::copy(std::filesystem::path(RESKATE_SOURCE_DIR) / "contrib" / "plugins" / "fit-check", directory,
+    std::filesystem::copy(contrib_plugin("fit-check"), directory,
                           std::filesystem::copy_options::recursive);
     Host host(environment, Side::client);
     host.apply({{"fit-check", directory, "1", check_package_files(directory)}});
@@ -2816,6 +2853,85 @@ void fit_check_turns_the_board_and_saves_it() {
     ticks(host, environment, 1);
     check(game.called("capture discard fit-check") && game.turned == 0, "V again stops it\n" + environment.all());
     check(host.run_console("fitcheck open") && game.called("reveal fit-check fit-checks"), "The folder is shown");
+}
+
+// Item Tabs as a mod (contrib/plugins/item-tabs): its own checks pass, and over an item grid the game
+// is kept from Tab and its letters; V and Enter put the highlighted item into a tab; Tab shows the
+// player's tabs in the grid (and keeps Q, E and Enter too); B wears the item on top, with its check;
+// Delete takes everything off; and all is given back when the grid closes.
+void item_tabs_keep_tabs_and_wear_on_top() {
+    TestEnvironment environment;
+    std::filesystem::remove_all(scratch / "storage" / "item-tabs");
+    auto& game = environment.fake;
+    game.pad.reset();
+    const auto directory = scratch / "mods" / "item-tabs";
+    std::filesystem::remove_all(directory);
+    std::filesystem::copy(contrib_plugin("item-tabs"), directory,
+                          std::filesystem::copy_options::recursive);
+    Host host(environment, Side::client);
+    host.apply({{"item-tabs", directory, "1", check_package_files(directory)}});
+    running(host, "item-tabs", environment);
+    check(host.run_console("itemtabs test") && environment.printed("itemtabs: 10 passed, 0 failed") && !environment.printed("FAIL"),
+          "Item Tabs' own checks pass:\n" + printed_lines(environment) + environment.all());
+    check(game.called("on top item-tabs []"), "Nothing on top yet\n" + environment.all());
+    const auto press = [&](int key) {
+        game.keys_held = {key};
+        ticks(host, environment, 1);
+        game.keys_held.clear();
+        ticks(host, environment, 1);
+    };
+    const auto kept = [&](std::initializer_list<int> keys) {
+        std::set<int> wanted(keys), now(game.kept_keys.begin(), game.kept_keys.end());
+        return wanted == now;
+    };
+
+    // Over a grid: Tab, V, R, B and Delete are kept from the game, and the stick clicks and View.
+    game.menu_now = {true, false, {}};
+    game.grid_now = Game::MenuGrid{"hat_a", "Hat A", "Headwear", {"hat_a", "hat_b"}, 2, 2};
+    ticks(host, environment, 2);
+    check(kept({9, 'V', 'R', 'B', 46}) && game.kept_buttons == 0xe0, "The grid's keys are kept from the game\n" + environment.all());
+
+    // A tab made at the console; V and Enter put the highlighted hat in it.
+    check(host.run_console("itemtabs make Hats") && environment.printed("itemtabs: tab Hats is number 1"), "A tab is made");
+    press('V');
+    press(13);
+    environment.lines.clear();
+    check(host.run_console("itemtabs") && environment.printed("1. Hats (folder): 1 item(s)"), "The hat is in it:\n" + printed_lines(environment));
+    game.pad = PadInput{0, 0, 0, 0, 0, 0, 0x2000, false}; // B closes the panel
+    ticks(host, environment, 1);
+    game.pad.reset();
+    ticks(host, environment, 1);
+
+    // Tab: the player's tabs, the grid showing the open one's items; Q, E and Enter are kept too.
+    press(9);
+    check(game.grid_shown && *game.grid_shown == std::vector<std::string>{"hat_a"}, "The grid shows the tab\n" + environment.all());
+    check(kept({9, 'V', 'R', 'B', 46, 'Q', 'E', 13}) && game.kept_buttons == 0x13e0, "and keeps Q, E, Enter, LB, RB and A\n" + environment.all());
+    const auto drawn = [&](std::string_view part) {
+        return std::any_of(environment.layers.begin(), environment.layers.end(), [&](const plugin_ui::Layer& layer) {
+            return std::any_of(layer.shapes.begin(), layer.shapes.end(), [&](const auto& s) { return s.text.find(part) != std::string::npos; });
+        });
+    };
+    check(drawn("Hats") && drawn("Game tabs"), "Its tab row is drawn\n" + environment.all());
+
+    // B: the hat on top, with its check; Delete: everything off.
+    press('B');
+    check(game.on_top_now == std::vector<std::string>{"hat_a"} && game.grid_marked == std::vector<std::string>{"hat_a"},
+          "B wears it on top, checked\n" + environment.all());
+    press(46);
+    check(game.on_top_now.empty() && game.grid_marked.empty(), "Delete takes it off\n" + environment.all());
+
+    // Kept: loaded again, the tab and its hat are still there.
+    host.apply({});
+    host.apply({{"item-tabs", directory, "1", check_package_files(directory)}});
+    running(host, "item-tabs", environment);
+    environment.lines.clear();
+    check(host.run_console("itemtabs") && environment.printed("1. Hats (folder): 1 item(s)"), "Kept:\n" + printed_lines(environment));
+
+    // The grid closes: everything given back.
+    press(9);
+    game.grid_now.reset();
+    ticks(host, environment, 2);
+    check(game.kept_keys.empty() && game.kept_buttons == 0 && !game.grid_shown, "Given back when the grid closes\n" + environment.all());
 }
 
 void plugins_drive_the_throwdown_kit() {
@@ -3393,63 +3509,73 @@ void reskate_hostile_is_stopped_or_refused_every_time() {
 }
 
 int main() {
+    unsigned skipped = 0;
+    const auto run = [&](void (*test)()) {
+        try {
+            test();
+        } catch (const Absent& absent) {
+            ++skipped;
+            std::cout << "skipped: contrib/plugins/" << absent.id << " is not on this machine\n";
+        }
+    };
     try {
         scratch = std::filesystem::temp_directory_path() / "reskate-plugin-tests";
         std::filesystem::remove_all(scratch);
-        a_manifest_says_what_a_plugin_is();
-        a_plugin_loads_ticks_runs_its_commands_and_unloads();
-        a_permission_must_be_declared();
-        command_names_are_checked();
-        storage_is_kept_across_loads_and_has_a_quota();
-        packages_json_and_modules();
-        the_sandbox_holds();
-        a_runaway_plugin_is_stopped_and_the_rest_go_on();
-        a_plugin_over_its_time_budget_is_stopped();
-        a_plugin_reloads_when_its_files_change();
-        the_skater_can_be_read_moved_and_the_world_probed();
-        tricks_reach_plugins_that_ask_for_them();
-        plugins_draw_on_the_overlay();
-        plugins_draw_pictures();
-        plugins_place_world_entities();
-        plugins_reach_cruise_and_read_the_mouse();
-        plugins_read_joints_and_tune_physics();
-        plugins_type_and_use_the_room();
-        plugins_touch_hide_and_ray_at_players();
-        plugins_use_the_games_clips();
-        plugins_edit_clips();
-        animator_studio_records_and_saves();
-        plugins_server_copies_are_the_authority();
-        plugins_animate_the_skater();
-        plugins_play_their_own_sounds();
-        plugins_have_menu_panels();
-        plugins_have_pages();
-        plugins_play_sounds_and_read_the_mods();
-        plugins_follow_the_session_and_message_each_other();
-        plugins_call_and_hear_each_other();
-        web_requests_go_only_to_listed_domains();
-        the_wider_set_reaches_the_game();
-        key_names_become_binds();
-        level_events_reach_plugins();
-        timers_run_when_due();
-        a_package_with_a_program_or_on_the_wrong_side_is_not_loaded();
-        discovery_finds_the_plugins_among_the_mods_left_on();
-        reskate_test_passes_its_own_checks();
-        road_rash_marks_the_skater_as_it_bails();
-        dual_stick_edits_the_companions_settings();
-        rock_to_fakie_relabels_and_records_the_stall();
-        a_plugin_reads_the_content_folder_it_names();
-        board_break_snaps_the_board_on_a_slam();
-        fpv_drone_flies_and_follows();
-        hall_of_meat_scores_a_bail();
-        grind_exits_pick_the_side();
-        smokey_throwdowns_register_and_play_one_up();
-        plugins_drive_the_throwdown_kit();
-        fit_check_turns_the_board_and_saves_it();
-        the_throwdowns_page_lists_the_stock_cards_and_plugin_modes();
-        plugins_add_throwdown_modes();
-        reskate_hostile_is_stopped_or_refused_every_time();
+        run(a_manifest_says_what_a_plugin_is);
+        run(a_plugin_loads_ticks_runs_its_commands_and_unloads);
+        run(a_permission_must_be_declared);
+        run(command_names_are_checked);
+        run(storage_is_kept_across_loads_and_has_a_quota);
+        run(packages_json_and_modules);
+        run(the_sandbox_holds);
+        run(a_runaway_plugin_is_stopped_and_the_rest_go_on);
+        run(a_plugin_over_its_time_budget_is_stopped);
+        run(a_plugin_reloads_when_its_files_change);
+        run(the_skater_can_be_read_moved_and_the_world_probed);
+        run(tricks_reach_plugins_that_ask_for_them);
+        run(plugins_draw_on_the_overlay);
+        run(plugins_draw_pictures);
+        run(plugins_place_world_entities);
+        run(plugins_reach_cruise_and_read_the_mouse);
+        run(plugins_read_joints_and_tune_physics);
+        run(plugins_type_and_use_the_room);
+        run(plugins_touch_hide_and_ray_at_players);
+        run(plugins_use_the_games_clips);
+        run(plugins_edit_clips);
+        run(animator_studio_records_and_saves);
+        run(plugins_server_copies_are_the_authority);
+        run(plugins_animate_the_skater);
+        run(plugins_play_their_own_sounds);
+        run(plugins_have_menu_panels);
+        run(plugins_have_pages);
+        run(plugins_play_sounds_and_read_the_mods);
+        run(plugins_follow_the_session_and_message_each_other);
+        run(plugins_call_and_hear_each_other);
+        run(web_requests_go_only_to_listed_domains);
+        run(the_wider_set_reaches_the_game);
+        run(key_names_become_binds);
+        run(level_events_reach_plugins);
+        run(timers_run_when_due);
+        run(a_package_with_a_program_or_on_the_wrong_side_is_not_loaded);
+        run(discovery_finds_the_plugins_among_the_mods_left_on);
+        run(reskate_test_passes_its_own_checks);
+        run(road_rash_marks_the_skater_as_it_bails);
+        run(dual_stick_edits_the_companions_settings);
+        run(rock_to_fakie_relabels_and_records_the_stall);
+        run(a_plugin_reads_the_content_folder_it_names);
+        run(board_break_snaps_the_board_on_a_slam);
+        run(fpv_drone_flies_and_follows);
+        run(hall_of_meat_scores_a_bail);
+        run(grind_exits_pick_the_side);
+        run(smokey_throwdowns_register_and_play_one_up);
+        run(plugins_drive_the_throwdown_kit);
+        run(fit_check_turns_the_board_and_saves_it);
+        run(item_tabs_keep_tabs_and_wear_on_top);
+        run(the_throwdowns_page_lists_the_stock_cards_and_plugin_modes);
+        run(plugins_add_throwdown_modes);
+        run(reskate_hostile_is_stopped_or_refused_every_time);
         std::filesystem::remove_all(scratch);
-        std::cout << "plugin tests passed\n";
+        std::cout << "plugin tests passed" << (skipped ? " (" + std::to_string(skipped) + " skipped)" : std::string()) << "\n";
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "plugin test failed: " << error.what() << '\n';

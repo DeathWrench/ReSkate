@@ -394,8 +394,14 @@ public:
         std::string focused, title, category; // the highlighted item: key, title, catalog category
         std::vector<std::string> items;        // every item's key in the grid
         unsigned shown{}, total{};
+        bool showing{}, held{};                // a plugin's list is shown; it has nothing in it (grid_show)
+        float prompts_left{}, prompts_top{}, prompts_width{}, prompts_unit{}; // where the grid's own prompts end
     };
     virtual std::optional<MenuGrid> menu_grid() { return std::nullopt; }
+    // A plugin's own list shown in the grid that has the focus (item_browser::show_items), nullopt to
+    // give it back; and the tiles it marks with the game's check. Empty when taken, else why not.
+    virtual std::string grid_show(std::string_view /*plugin*/, std::optional<std::vector<std::string>> /*keys*/) { return unavailable; }
+    virtual void grid_mark(std::string_view /*plugin*/, std::vector<std::string> /*keys*/) {}
     // ---- capture: the screen as the game draws it (Extension/Rendering/Capture) ---------------------
     // One plugin records at a time; frames are numbered from 0 as they are taken.
     struct CaptureStart {
@@ -433,6 +439,8 @@ public:
     // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
     // and all game input paused for half a second at a time.
     virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}
+    // Keys (virtual key codes) whose presses the game does not see until the next call (overlay::hide_game_keys).
+    virtual void game_keys(std::string_view /*plugin*/, std::vector<std::uint8_t> /*keys*/) {}
     // The game window has the focus, ReSkate's menu is shut and the native UI lets the game play.
     virtual bool input_allowed() { return false; }
     virtual std::string free_camera(std::string_view /*plugin*/, bool) { return unavailable; }
@@ -666,6 +674,14 @@ public:
         std::string slot, item, title;
     };
     virtual std::vector<WornItem> outfit_worn() { return {}; }
+    // Items worn on top of the outfit (outfit_overlay::set_layers): the plugin's list replaced; empty
+    // takes them off. Empty when taken, else why not.
+    virtual std::string outfit_on_top(std::string_view /*plugin*/, std::vector<std::string> /*items*/) { return unavailable; }
+    struct OnTop {
+        std::vector<std::string> items, worn;
+        std::string note;
+    };
+    virtual OnTop outfit_on_top_state(std::string_view /*plugin*/) { return {}; }
     virtual std::vector<WornItem> board_parts() { return {}; }
     // An item's title as the game shows it (its catalog's, the one an item grid showed, or its key
     // made readable).

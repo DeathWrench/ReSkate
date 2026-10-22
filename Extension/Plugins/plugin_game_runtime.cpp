@@ -518,6 +518,13 @@ public:
         return out;
     }
     std::string outfit_status() override { return outfit_overlay::status(); }
+    std::string outfit_on_top(std::string_view plugin, std::vector<std::string> items) override {
+        return outfit_overlay::set_layers(std::string(plugin), std::move(items));
+    }
+    OnTop outfit_on_top_state(std::string_view plugin) override {
+        auto layers = outfit_overlay::layers(plugin);
+        return {std::move(layers.items), std::move(layers.worn), std::move(layers.note)};
+    }
     // ---- the skater's physics ------------------------------------------------------------------------
     SkaterNews take_skater_news() override {
         skater_events::want();
@@ -1129,8 +1136,14 @@ public:
     std::optional<MenuGrid> menu_grid() override {
         const auto view = item_browser::view();
         if (!view.open) return std::nullopt;
-        return MenuGrid{view.focused_key, view.focused_title, view.focused_category, view.grid_keys, view.shown, view.total};
+        const auto prompts = overlay::item_browser_prompts();
+        return MenuGrid{view.focused_key, view.focused_title, view.focused_category, view.grid_keys, view.shown, view.total,
+                        view.showing, view.held, prompts.left, prompts.top, prompts.width, prompts.unit};
     }
+    std::string grid_show(std::string_view plugin, std::optional<std::vector<std::string>> keys) override {
+        return item_browser::show_items(std::string(plugin), std::move(keys));
+    }
+    void grid_mark(std::string_view plugin, std::vector<std::string> keys) override { item_browser::mark_items(std::string(plugin), std::move(keys)); }
     // ---- capture: one plugin records at a time (capture_runtime.h) --------------------------------
     std::string capture_start(std::string_view plugin, const CaptureStart& request) override {
         auto& recorder = capture::recorder();
@@ -1240,6 +1253,11 @@ public:
         overlay::hide_game_buttons(hidden);
         overlay::hold_game_buttons(held);
         if (paused) overlay::pause_game_input(true);
+    }
+    void game_keys(std::string_view plugin, std::vector<std::uint8_t> keys) override {
+        if (keys.empty() && keys_owner_ != plugin) return;
+        keys_owner_ = keys.empty() ? std::string{} : std::string(plugin);
+        overlay::hide_game_keys(keys);
     }
     bool input_allowed() override {
         DWORD process{};
@@ -1507,6 +1525,10 @@ public:
         dialog_close(plugin, {});
         tricks::feed::ask(std::string(plugin), false);
         bonecam::bone_cam_release(plugin);
+        if (keys_owner_ == plugin) {
+            overlay::hide_game_keys({});
+            keys_owner_.clear();
+        }
         if (buttons_owner_ == plugin) {
             overlay::hide_game_buttons(0);
             overlay::hold_game_buttons(0);
@@ -1518,6 +1540,8 @@ public:
         stop_clip(plugin);
         plugin_sound::stop_all(plugin);
         outfit_overlay::clear(plugin);
+        item_browser::release_owner(plugin);
+        (void)outfit_overlay::set_layers(std::string(plugin), {});
         board_pose::clear(plugin);
         board_pose::park(plugin, {});
         (void)board_pose::fit(plugin, std::nullopt);
@@ -1566,6 +1590,7 @@ private:
         skater_animation::set_replacements(std::move(list));
     }
     std::string player_, recorder_, thrower_, capturer_;
+    std::string keys_owner_; // the plugin whose keys the game does not see
     std::string buttons_owner_, free_camera_owner_, pad_flight_owner_, competition_owner_, hold_owner_;
     std::uint64_t capture_until_{}, flight_read_at_{};
     std::optional<FlightInput> flight_;
