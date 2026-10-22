@@ -152,6 +152,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp) {
         const bool key = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
         const bool release = message == WM_KEYUP || message == WM_SYSKEYUP;
         if((key || release) && challenge_menu_key(static_cast<int>(wp)))return 0;
+        if (key && wp < 256 && key_hidden(static_cast<unsigned>(wp))) return 0;
         if (console_character(message) && s.console_character_pending.exchange(false)) return 0;
         if (console_character(message) && s.chat_character_pending.exchange(false)) return 0;
         if (console_character(message) && s.item_search_character_pending.exchange(false)) return 0;

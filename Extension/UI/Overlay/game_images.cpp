@@ -4,6 +4,7 @@
 #include "Engine/Game/Build/addresses.h"
 #include "Engine/Game/Build/20260929/ui_textures.h"
 #include "Engine/Vfs/game_textures.h"
+#include "Engine/Vfs/item_thumbnails.h"
 #include "Extension/UI/Overlay/overlay_internal.h"
 #include "Extension/UI/skate_theme.h"
 #include <algorithm>
@@ -18,10 +19,16 @@ namespace ui = addr::ui_textures;
 namespace theme = dingosdk::skate_theme;
 
 // The pictures, by the names plugins give them.
-enum Picture : std::size_t { loading_board = 13, picture_count = 14 };
+enum Picture : std::size_t { loading_board = 13, first_icon = 14, picture_count = 31 };
 constexpr std::array<std::string_view, picture_count> names{
     "stopwatch", "wipeout", "wipeout_broken", "spread_eagle", "airtime", "gap_height", "flaming_wheel", "roll",
-    "thrasher", "brush_bar", "rough_tile", "scratches", "streak", "loading_board"};
+    "thrasher", "brush_bar", "rough_tile", "scratches", "streak", "loading_board",
+    "cas_tops", "cas_bottoms", "cas_shoes", "cas_outfit", "cas_fullbody", "cas_headwear", "cas_headaccessories", "cas_eyewear", "cas_handwear", "cas_socks", "cas_deck", "cas_trucks", "cas_wheels", "cas_gripcolor", "cas_grippattern", "cas_sticker", "cas_decorator_vfxcosmetic"};
+// The customization menu's category icons (the pictures from first_icon on): its tabs', white on clear,
+// in the bundle with the rest of the core game assets, which is looked for among the game's TOCs.
+// (Pull request 269, the player's own item tabs.)
+constexpr std::string_view icon_bundle = "win32/levels/game/bam_levelroot/bam_coregameassets";
+constexpr std::uint32_t icon_side = 96;
 struct Source {
     const ui::Texture* texture;
     std::uint32_t side;      // fitted into a side x side square, its aspect kept
@@ -29,7 +36,7 @@ struct Source {
     bool colours{};          // its own colours, as it is (the loading board)
 };
 // The loading board's first place stands for it; decode tries all of ui::loading_board's.
-constexpr std::array<Source, picture_count> sources{{
+constexpr std::array<Source, first_icon> sources{{
     {&ui::stopwatch, 64}, {&ui::wipeout, 64}, {&ui::wipeout_broken, 64}, {&ui::spread_eagle, 64},
     {&ui::airtime, 64}, {&ui::gap_height, 64}, {&ui::flaming_wheel, 64}, {&ui::roll, 64},
     {&ui::thrasher_wordmark, 512}, {&ui::brush_bar, 512}, {&ui::rough_tile, 256}, {&ui::scratches, 512, true},
@@ -72,7 +79,7 @@ Images decode() {
     Images result;
     try {
         vfs::GameTextures textures(xray::game_folder());
-        for (std::size_t index = 0; index < picture_count; ++index) {
+        for (std::size_t index = 0; index < first_icon; ++index) {
             const auto& source = sources[index];
             if (source.colours) {
                 for (const auto& place : ui::loading_board) {
@@ -96,6 +103,21 @@ Images decode() {
         }
     } catch (const std::exception& error) {
         logging::log(logging::Level::warning, logging::Channel::graphics, "The game's pictures are unavailable: {}.", error.what());
+    }
+    try {
+        std::vector<std::string> wanted;
+        for (std::size_t index = first_icon; index < picture_count; ++index)
+            wanted.push_back("ui/textures/icons/cas/img_cas_" + std::string(names[index].substr(4)) + "_128_128_128");
+        const auto read = vfs::read_ui_textures(xray::game_folder(), icon_bundle, wanted, icon_side);
+        for (std::size_t i = 0; i < wanted.size(); ++i)
+            for (const auto& texture : read.thumbnails)
+                if (texture.item == wanted[i] && texture.image.rgba.size() == std::size_t{icon_side} * icon_side * 4) result[first_icon + i] = texture.image;
+        std::size_t found{};
+        for (std::size_t index = first_icon; index < picture_count; ++index) found += result[index].has_value();
+        if (found < wanted.size())
+            logging::log(logging::Level::warning, logging::Channel::graphics, "The menu's category icons: {} of {} found.", found, wanted.size());
+    } catch (const std::exception& error) {
+        logging::log(logging::Level::warning, logging::Channel::graphics, "The menu's category icons are unavailable: {}.", error.what());
     }
     return result;
 }
@@ -250,6 +272,7 @@ bool draw_game_image(ImDrawList* draw, std::string_view name, ImVec2 min, ImVec2
     if (at == names.end()) return false;
     const auto picture = static_cast<Picture>(at - names.begin());
     if (picture == loading_board) return draw_image(draw, picture, min, max, tint, frame); // a flipbook's frame, fitted
+    if (picture >= first_icon) return draw_image(draw, picture, min, max, tint, 0);        // an icon: always fitted
     switch (fit) {
     case GameImageFit::contain: return draw_image(draw, picture, min, max, tint, 0);
     case GameImageFit::shape: return draw_shape(draw, picture, min, max, tint);

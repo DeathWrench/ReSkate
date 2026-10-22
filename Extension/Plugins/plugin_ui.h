@@ -39,9 +39,11 @@ inline constexpr std::array<std::string_view, 24> body_names{
     "Lower back", "Spine", "Left toes", "Left foot", "Left shin", "Left thigh",
     "Right toes", "Right foot", "Right shin", "Right thigh", "Pelvis"};
 // The game's own pictures a plugin draws by name (game_image; Extension/UI/Overlay/game_images.h).
-inline constexpr std::array<std::string_view, 14> game_images{
+inline constexpr std::array<std::string_view, 31> game_images{
     "stopwatch", "wipeout", "wipeout_broken", "spread_eagle", "airtime", "gap_height", "flaming_wheel", "roll",
-    "thrasher", "brush_bar", "rough_tile", "scratches", "streak", "loading_board"};
+    "thrasher", "brush_bar", "rough_tile", "scratches", "streak", "loading_board",
+    // The customization menu's category icons (its tabs'), white on clear.
+    "cas_tops", "cas_bottoms", "cas_shoes", "cas_outfit", "cas_fullbody", "cas_headwear", "cas_headaccessories", "cas_eyewear", "cas_handwear", "cas_socks", "cas_deck", "cas_trucks", "cas_wheels", "cas_gripcolor", "cas_grippattern", "cas_sticker", "cas_decorator_vfxcosmetic"};
 // The loading board is a flipbook: this many frames, at 30 a second (style.frame).
 inline constexpr int loading_board_frames = 27;
 // Screen shapes are in pixels from the top left; world shapes in world metres, projected through

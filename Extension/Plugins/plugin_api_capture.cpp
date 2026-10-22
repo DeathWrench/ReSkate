@@ -4,7 +4,9 @@
 #include "lualib.h"
 #include <algorithm>
 #include <cmath>
+#include <optional>
 #include <string>
+#include <vector>
 
 // reskate.capture (the screen as the game draws it, saved as a GIF, APNG, PNG or WebM), the game
 // menu's preview turned (reskate.room.turn) and read (reskate.menu.game, reskate.menu.grid), what the
@@ -262,7 +264,50 @@ struct CaptureApi {
         lua_setfield(L, -2, "shown");
         lua_pushinteger(L, static_cast<int>(grid->total));
         lua_setfield(L, -2, "total");
+        lua_pushboolean(L, grid->showing);
+        lua_setfield(L, -2, "showing");
+        lua_pushboolean(L, grid->held);
+        lua_setfield(L, -2, "held");
+        if (grid->prompts_unit > 0) {
+            lua_createtable(L, 0, 4);
+            const std::pair<const char*, float> fields[] = {
+                {"left", grid->prompts_left}, {"top", grid->prompts_top}, {"width", grid->prompts_width}, {"unit", grid->prompts_unit}};
+            for (const auto& [name, value] : fields) {
+                lua_pushnumber(L, value);
+                lua_setfield(L, -2, name);
+            }
+            lua_setfield(L, -2, "prompts");
+        }
         return 1;
+    }
+    static std::vector<std::string> keys_at(lua_State* L, int index, int most) {
+        std::vector<std::string> keys;
+        luaL_checktype(L, index, LUA_TTABLE);
+        const int count = lua_objlen(L, index);
+        if (count > most) luaL_argerror(L, index, most == 4000 ? "at most 4000 items" : "too many items");
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, index, i);
+            keys.push_back(checked_text(L, lua_gettop(L), 255, "an item's key"));
+            lua_pop(L, 1);
+        }
+        return keys;
+    }
+    // menu.grid_show(keys): these items, in this order, in the grid that has the focus; nil gives it back.
+    static int grid_show(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "menu", "reskate.menu.grid_show");
+        std::optional<std::vector<std::string>> keys;
+        if (!lua_isnoneornil(L, 1)) keys = keys_at(L, 1, 4000);
+        return result(L, game(plugin).grid_show(plugin.id(), std::move(keys)));
+    }
+    // menu.grid_mark(keys): the game's check on these items' tiles; nil or {} takes them off.
+    static int grid_mark(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "menu", "reskate.menu.grid_mark");
+        std::vector<std::string> keys;
+        if (!lua_isnoneornil(L, 1)) keys = keys_at(L, 1, 4000);
+        game(plugin).grid_mark(plugin.id(), std::move(keys));
+        return 0;
     }
     static int push_worn(lua_State* L, const std::vector<Game::WornItem>& list) {
         lua_createtable(L, static_cast<int>(list.size()), 0);
@@ -293,6 +338,43 @@ struct CaptureApi {
         lua_pushlstring(L, title.data(), title.size());
         return 1;
     }
+    // outfit.on_top(items): the plugin's items worn on top of the outfit, replaced; nil or {} takes them off.
+    static int on_top(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "outfit", "reskate.outfit.on_top");
+        std::vector<std::string> items;
+        if (!lua_isnoneornil(L, 1)) {
+            luaL_checktype(L, 1, LUA_TTABLE);
+            const int count = lua_objlen(L, 1);
+            if (count > 32) luaL_argerror(L, 1, "at most 32 items");
+            for (int i = 1; i <= count; ++i) {
+                lua_rawgeti(L, 1, i);
+                items.push_back(checked_text(L, lua_gettop(L), 200, "an item's name"));
+                lua_pop(L, 1);
+                if (items.back().empty()) luaL_argerror(L, 1, "an item's name is empty");
+            }
+        }
+        if (!within(plugin.services_.now_ms(), plugin.control_second_, plugin.controls_, 4)) return result(L, "asked more than 4 times in a second");
+        return result(L, game(plugin).outfit_on_top(plugin.id(), std::move(items)));
+    }
+    static int on_top_state(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "outfit", "reskate.outfit.on_top_state");
+        const auto now = game(plugin).outfit_on_top_state(plugin.id());
+        const auto list = [&](const std::vector<std::string>& names, const char* field) {
+            lua_createtable(L, static_cast<int>(names.size()), 0);
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                lua_pushlstring(L, names[i].data(), names[i].size());
+                lua_rawseti(L, -2, static_cast<int>(i + 1));
+            }
+            lua_setfield(L, -2, field);
+        };
+        lua_createtable(L, 0, 3);
+        list(now.items, "items");
+        list(now.worn, "worn");
+        if (!now.note.empty()) push_text(L, now.note, "note");
+        return 1;
+    }
     static int files_reveal(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "files", "reskate.files.reveal");
@@ -304,8 +386,8 @@ struct CaptureApi {
         add_functions(L, "capture", {{"start", start}, {"stop", stop}, {"discard", discard}, {"state", state}, {"compare", compare},
                                      {"kept", kept}, {"save", save}});
         add_functions(L, "room", {{"turn", room_turn}});
-        add_functions(L, "menu", {{"game", menu_game}, {"grid", menu_grid}});
-        add_functions(L, "outfit", {{"worn", outfit_worn}, {"board", outfit_board}, {"title", outfit_title}});
+        add_functions(L, "menu", {{"game", menu_game}, {"grid", menu_grid}, {"grid_show", grid_show}, {"grid_mark", grid_mark}});
+        add_functions(L, "outfit", {{"worn", outfit_worn}, {"board", outfit_board}, {"title", outfit_title}, {"on_top", on_top}, {"on_top_state", on_top_state}});
         add_functions(L, "files", {{"reveal", files_reveal}});
     }
 };

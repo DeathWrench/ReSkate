@@ -27,6 +27,19 @@ struct Slot {
 };
 // The skater's recipe slots now; empty without a skater.
 std::vector<Slot> slots();
+// Items worn on top of the outfit: more than one where the outfit has one (a second chain, rings on
+// both hands). Each goes into a slot the outfit leaves empty, its own kind's when that one is free,
+// else one of the accessory slots, then the tattoo and face slots; the catalog item is given that
+// slot's category besides its own, in memory, for this run. An item never tried in a slot goes on
+// alone, and comes off for the next slot if the game describes a failed load within 0.9 s; what
+// loads where is kept in ReSkate.layer_slots.txt beside Skate.exe. Never a paid store item. `items`
+// replaces the owner's; empty takes them off. Empty when taken, otherwise why not.
+std::string set_layers(std::string owner, std::vector<std::string> items);
+struct Layers {
+    std::vector<std::string> items, worn; // the owner's, and those of them on the skater now
+    std::string note;                     // why some are not, when they are not
+};
+Layers layers(std::string_view owner);
 // Each client tick.
 void tick() noexcept;
 std::string status();

@@ -149,7 +149,7 @@ int key_code(lua_State* L, int index) {
     static const std::pair<const char*, int> names[] = {
         {"Enter", 13}, {"Backspace", 8}, {"Escape", 27}, {"End", 35}, {"Home", 36}, {"PageUp", 33}, {"PageDown", 34}, {"Space", 32},
         {"Shift", 16}, {"Ctrl", 17}, {"Alt", 18}, {"Tab", 9}, {"Left", 37}, {"Up", 38}, {"Right", 39}, {"Down", 40},
-        {"[", 0xDB}, {"]", 0xDD}, {"LeftMouse", 1}, {"RightMouse", 2}, {"MiddleMouse", 4}};
+        {"[", 0xDB}, {"]", 0xDD}, {"Delete", 46}, {"LeftMouse", 1}, {"RightMouse", 2}, {"MiddleMouse", 4}};
     for (const auto& [n, vk] : names)
         if (name == n) return vk;
     if (name.size() == 1 && ((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= '0' && name[0] <= '9'))) return name[0];
@@ -195,6 +195,27 @@ int game_buttons(lua_State* L) {
         return static_cast<std::uint16_t>(v);
     };
     game_of(plugin).game_buttons(plugin.id(), mask(1), mask(2), lua_toboolean(L, 3) != 0);
+    return 0;
+}
+// input.game_keys(keys): the keys (names, as key() takes them, or virtual keys) whose presses the game
+// does not see until the next call; nil or {} gives them back. Not Escape, nor the mouse's buttons.
+int game_keys(lua_State* L) {
+    auto& plugin = allowed(L, "input", "reskate.input.game_keys");
+    std::vector<std::uint8_t> keys;
+    if (!lua_isnoneornil(L, 1)) {
+        luaL_checktype(L, 1, LUA_TTABLE);
+        const int count = lua_objlen(L, 1);
+        if (count > 32) luaL_argerror(L, 1, "at most 32 keys");
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 1, i);
+            const int vk = key_code(L, lua_gettop(L));
+            lua_pop(L, 1);
+            if (vk == 27 || (vk >= 1 && vk <= 6 && vk != 3)) // Escape; the mouse buttons (3 is Cancel)
+                luaL_argerror(L, 1, "Escape and the mouse's buttons always reach the game");
+            keys.push_back(static_cast<std::uint8_t>(vk));
+        }
+    }
+    game_of(plugin).game_keys(plugin.id(), std::move(keys));
     return 0;
 }
 int input_allowed(lua_State* L) {
@@ -450,7 +471,7 @@ int read_content(lua_State* L) {
 
 void install_services_api(Plugin&, lua_State* L) {
     add_functions(L, "skater", {{"telemetry", telemetry}, {"goofy", goofy}, {"bone_cam", bone_cam}});
-    add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"mouse", mouse}, {"game_buttons", game_buttons}, {"allowed", input_allowed}, {"focus", focus}});
+    add_functions(L, "input", {{"pad_bits", pad_bits}, {"key", key}, {"wheel", wheel}, {"mouse", mouse}, {"game_buttons", game_buttons}, {"game_keys", game_keys}, {"allowed", input_allowed}, {"focus", focus}});
     add_functions(L, "session", {{"spectate", spectate}, {"world", world}});
     add_functions(L, "camera", {{"free", free_camera}, {"pad_flight", pad_flight}});
     add_functions(L, "physics", {{"competition", competition}, {"stock_ready", stock_ready}, {"prepare", prepare}, {"tuning", tuning},
