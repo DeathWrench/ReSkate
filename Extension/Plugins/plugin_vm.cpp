@@ -771,9 +771,12 @@ void Plugin::set_channel(std::string channel) {
     channel_hash_ = wire::channel_of(channel_);
 }
 
-std::vector<std::pair<std::string, std::string>> Plugin::commands() const {
-    std::vector<std::pair<std::string, std::string>> result;
-    for (const auto& [name, command] : commands_) result.emplace_back(name, command.help);
+std::vector<CommandInfo> Plugin::commands() const {
+    std::vector<CommandInfo> result;
+    for (const auto& [name, command] : commands_) {
+        result.push_back({name, {}, command.help});
+        for (const auto& sub : command.subcommands) result.push_back({name + " " + sub.name, sub.args, sub.help});
+    }
     return result;
 }
 

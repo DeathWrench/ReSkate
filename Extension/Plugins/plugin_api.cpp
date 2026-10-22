@@ -412,8 +412,36 @@ struct ApiFunctions {
         if (plugin.commands_.contains(name)) luaL_error(L, "the command \"%s\" is registered already", name.c_str());
         if (const auto refusal = plugin.services_.claim_command(plugin.id(), name); !refusal.empty())
             luaL_error(L, "%s", refusal.c_str());
+        // subcommands = {{name = "random", args = "[start]", help = "..."}, ...}: what the console's
+        // lookup and `plugin commands` show after the name. The function still runs them all.
+        std::vector<Plugin::Subcommand> subcommands;
+        if (!lua_isnoneornil(L, 4)) {
+            luaL_checktype(L, 4, LUA_TTABLE);
+            const int count = static_cast<int>(lua_objlen(L, 4));
+            if (count > 32) luaL_error(L, "at most 32 subcommands");
+            for (int i = 1; i <= count; ++i) {
+                lua_rawgeti(L, 4, i);
+                if (!lua_istable(L, -1)) luaL_error(L, "subcommand %d is not a table {name = ..., args = ..., help = ...}", i);
+                Plugin::Subcommand sub;
+                const auto field = [&](const char* key, std::size_t most) {
+                    lua_getfield(L, -1, key);
+                    std::string value = lua_isnil(L, -1) ? std::string{} : std::string(luaL_checkstring(L, -1));
+                    lua_pop(L, 1);
+                    if (value.size() > most) luaL_error(L, "a subcommand's %s is at most %d characters", key, static_cast<int>(most));
+                    return value;
+                };
+                sub.name = field("name", maximum_command);
+                sub.args = field("args", 80);
+                sub.help = field("help", 200);
+                bool word = !sub.name.empty();
+                for (const char c : sub.name) word = word && ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-');
+                if (!word) luaL_error(L, "subcommand %d's name is not one lowercase word of a-z, 0-9, _ and -", i);
+                subcommands.push_back(std::move(sub));
+                lua_pop(L, 1);
+            }
+        }
         lua_pushvalue(L, 3);
-        plugin.commands_[name] = {help.substr(0, 200), lua_ref(L, -1)};
+        plugin.commands_[name] = {help.substr(0, 200), lua_ref(L, -1), std::move(subcommands)};
         lua_pop(L, 1);
         return 0;
     }

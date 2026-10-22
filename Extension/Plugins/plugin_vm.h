@@ -67,6 +67,10 @@ struct Limits {
 
 // The game, as plugins see it (Environment, plugin_host.h, gives the host these).
 using Vec3 = std::array<float, 3>;
+// A console command a plugin added, or a subcommand it declared for one (Plugin::commands).
+struct CommandInfo {
+    std::string name, args, help;
+};
 struct SkaterState {
     Vec3 position{};
     // Radians about world up, -pi to pi: 0 faces +Z, pi/2 faces +X, and a higher heading is turned
@@ -254,7 +258,9 @@ public:
     std::size_t memory() const noexcept { return memory_; }
     double tick_ms() const noexcept { return last_window_ms_; }
     // Its console commands and their help.
-    std::vector<std::pair<std::string, std::string>> commands() const;
+    // Its console commands, and the subcommands each declared ("prop random", run by "prop"'s
+    // function): the name, its arguments as help shows them, and its help.
+    std::vector<CommandInfo> commands() const;
     bool has(std::string_view permission) const { return manifest_.permissions.contains(permission); }
     // Over a limit or stopped: the API refuses every call until the VM is closed.
     bool halted() const noexcept { return halt_ != Halt::none || memory_exceeded_; }
@@ -268,7 +274,8 @@ private:
     friend struct ServicesApi;
     friend struct KitApi;
     friend struct CaptureApi;
-    struct Command { std::string help; int function{}; };
+    struct Subcommand { std::string name, args, help; };
+    struct Command { std::string help; int function{}; std::vector<Subcommand> subcommands; };
     struct Timer { double due{}, every{}; int function{}; };
     using Clock = std::chrono::steady_clock;
     enum class Halt { none, time, memory, stopped };

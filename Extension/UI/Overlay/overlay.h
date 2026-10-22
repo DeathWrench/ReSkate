@@ -342,6 +342,12 @@ struct Model {
     KeyframeSmoothingModel keyframe_smoothing;
     ObjectPersistenceModel object_persistence;
     ParkEditorModel editor;
+    // The console commands plugins added (Extension/Plugins/plugin_runtime.h command_hints), for
+    // the console's lookup beside ReSkate's own.
+    struct PluginCommand {
+        std::string name, args, help, plugin; // name: one to four words
+    };
+    std::vector<PluginCommand> plugin_commands;
     float menu_scale = default_menu_scale;
     float menu_scale_fullscreen = default_menu_scale; // the full screen menu's own size (`ui scalefull`)
     // The ReSkate menu fills the screen, made for a controller, instead of a window (`ui fullscreen`).

@@ -74,7 +74,7 @@ struct Status {
     std::string reason; // why it is not running
     std::size_t memory{};
     double tick_ms{};
-    std::vector<std::pair<std::string, std::string>> commands;
+    std::vector<CommandInfo> commands; // with the subcommands they declared
 };
 
 class Host final : private Services {

@@ -226,10 +226,12 @@ public:
         return status.starts_with("error: ") ? status.substr(7) : std::string{};
     }
     std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& matrix, bool hidden,
-                           std::optional<EntityAttach> attach) override {
-        if (!attach) return world_entities::set(plugin, id, std::string(asset), matrix, hidden);
+                           std::optional<EntityAttach> attach, bool solid) override {
+        register_world_physics();
+        if (!attach) return world_entities::set(plugin, id, std::string(asset), matrix, hidden, std::nullopt, solid);
         world_entities::set_joint_source(&joint_matrix);
-        return world_entities::set(plugin, id, std::string(asset), matrix, hidden, world_entities::Attach{attach->player, attach->joint});
+        return world_entities::set(plugin, id, std::string(asset), matrix, hidden,
+                                   world_entities::Attach{attach->player, attach->joint, attach->upright, attach->turn, attach->ground}, solid);
     }
     // Where a skater's joint is (world_entities' attach): the local skater's as its pose is evaluated,
     // another player's as the session draws it.
@@ -261,6 +263,34 @@ public:
     void entity_clear(std::string_view plugin) override { world_entities::clear(plugin); }
     int entity_status(std::string_view plugin, std::uint32_t id) override { return static_cast<int>(world_entities::status(plugin, id)); }
     bool entities_ready(std::string_view plugin) override { return world_entities::ready(plugin); }
+    std::vector<std::string> entity_blueprints(std::string_view prefix, bool meshes_only) override {
+        return world_entities::blueprints(base_, prefix, 4096, meshes_only);
+    }
+    std::optional<std::array<Vec3, 2>> entity_bounds(std::string_view blueprint) override {
+        const auto box = world_entities::blueprint_bounds(base_, blueprint);
+        if (!box) return std::nullopt;
+        return std::array<Vec3, 2>{(*box)[0], (*box)[1]};
+    }
+    std::optional<WorldPick> world_pick(const Vec3& from, const Vec3& to) override {
+        const auto pick = local_world_pick(from, to);
+        if (!pick) return std::nullopt;
+        WorldPick out{pick->at, pick->entity != 0 || !pick->blueprint.empty(), std::nullopt, pick->blueprint};
+        if (pick->pose) {
+            // The pose: scale xyz, -, rotation xyzw, position xyz. Rows: the rotated x, y and z axes
+            // times their scale (the same rotation objects.list's heading reads), then position.
+            const auto& p = *pick->pose;
+            const float x = p[4], y = p[5], z = p[6], w = p[7];
+            const std::array<std::array<float, 3>, 3> axes{{{1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w)},
+                                                           {2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)},
+                                                           {2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)}}};
+            std::array<float, 16> m{};
+            for (int row = 0; row < 3; ++row)
+                for (int k = 0; k < 3; ++k) m[row * 4 + k] = axes[row][k] * p[row];
+            m[12] = p[8], m[13] = p[9], m[14] = p[10], m[15] = 1;
+            out.matrix = m;
+        }
+        return out;
+    }
     std::string set_environment(std::string_view kind, std::string_view key, std::string_view value) override {
         if (kind == "tod") return time_of_day(key);
         if (kind == "control") {
@@ -562,6 +592,10 @@ public:
     std::string xray(std::string_view plugin, bool on) override {
         if (!xray::available()) return "the x-ray is unavailable for this game build";
         xray::prepare(plugin, on);
+        return {};
+    }
+    std::string hide_skater(std::string_view plugin, bool hidden) override {
+        if (!xray::hide(plugin, hidden)) return "hiding the skater is unavailable for this game build";
         return {};
     }
     std::string hud_corner(std::string_view plugin, bool hidden) override {
@@ -1557,6 +1591,7 @@ public:
         (void)freeze(plugin, false);
         hide_hud(plugin, false);
         xray::prepare(plugin, false);
+        xray::hide(plugin, false);
         hud_corner::release(plugin);
         game_speed::ask(plugin, 1.0f);
         held_settings::release(plugin);

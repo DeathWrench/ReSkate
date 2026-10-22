@@ -283,15 +283,33 @@ public:
     struct EntityAttach {
         std::uint64_t player{};
         std::uint16_t joint{};
+        bool upright{}; // level at the joint, turned only by its heading
+        bool turn{true}; // false: the joint's position only, the transform's rotation in the world
+        float ground{};  // metres below the joint to find the floor in, 0 none
     };
     virtual std::string entity_set(std::string_view /*plugin*/, std::uint32_t, std::string_view, const std::array<float, 16>&, bool,
-                                   std::optional<EntityAttach> /*attach*/) {
+                                   std::optional<EntityAttach> /*attach*/, bool /*solid*/) {
         return unavailable;
     }
     virtual void entity_remove(std::string_view /*plugin*/, std::uint32_t) {}
     virtual void entity_clear(std::string_view /*plugin*/) {}
     virtual int entity_status(std::string_view /*plugin*/, std::uint32_t) { return 0; }
     virtual bool entities_ready(std::string_view /*plugin*/) { return false; }
+    // The world object blueprints loaded now, those starting with `prefix` (case ignored), sorted
+    // (Extension/World/world_entities.h).
+    virtual std::vector<std::string> entity_blueprints(std::string_view /*prefix*/, bool /*meshes_only*/) { return {}; }
+    // A world object blueprint's mesh box in its own frame (min, max), when it has a loaded mesh.
+    virtual std::optional<std::array<Vec3, 2>> entity_bounds(std::string_view /*blueprint*/) { return std::nullopt; }
+    // The world raycast and the object it meets (Extension/Objects/ParkEditor/park_editor_runtime.h,
+    // local_world_pick): where; and the object's transform (rows right, up, forward with their
+    // scale, then position) and blueprint, when known.
+    struct WorldPick {
+        Vec3 at{};
+        bool object{};
+        std::optional<std::array<float, 16>> matrix;
+        std::string blueprint;
+    };
+    virtual std::optional<WorldPick> world_pick(const Vec3& /*from*/, const Vec3& /*to*/) { return std::nullopt; }
     // kind "tod" (key: morning, noon, afternoon, evening, night, weatherday, weathernight, default),
     // "control" (key: fog, fog_distance, sky_brightness, clouds, wind_strength, wind_direction,
     // traffic, pedestrians; value a number, -1 the default) or "park" (key: a lot, value a layout).
@@ -723,6 +741,8 @@ public:
     virtual std::vector<PhysicsStep> take_physics_steps() { return {}; }
     // The skater's x-ray ready while any plugin asks (Extension/Skater/xray.h); d:skeleton draws it.
     virtual std::string xray(std::string_view /*plugin*/, bool) { return unavailable; }
+    // The local skater not drawn on this screen while any plugin asks (Extension/Skater/xray.h).
+    virtual std::string hide_skater(std::string_view /*plugin*/, bool) { return unavailable; }
     // skate.'s bottom left HUD hidden while any plugin asks; false keeps the plugin ready to hide it.
     virtual std::string hud_corner(std::string_view /*plugin*/, bool) { return unavailable; }
     // The game run at `speed` (0.05 to 1; 1 drops the ask) while it is the slowest asked; never in a

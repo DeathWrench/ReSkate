@@ -121,6 +121,10 @@ struct FakeGame final : Game {
         calls.push_back(std::format("xray {} {}", plugin, on ? "on" : "off"));
         return {};
     }
+    std::string hide_skater(std::string_view plugin, bool hidden) override {
+        calls.push_back(std::format("hide skater {} {}", plugin, hidden ? "on" : "off"));
+        return {};
+    }
     std::string hud_corner(std::string_view plugin, bool hidden) override {
         calls.push_back(std::format("corner {} {}", plugin, hidden ? "on" : "off"));
         return {};
@@ -239,14 +243,31 @@ struct FakeGame final : Game {
     // World objects as the fake keeps them: by plugin and id, ready at once unless hidden.
     std::map<std::pair<std::string, std::uint32_t>, std::pair<std::string, std::array<float, 16>>> entities;
     std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& m, bool hidden,
-                           std::optional<EntityAttach> attach) override {
+                           std::optional<EntityAttach> attach, bool solid) override {
         if (entities.size() >= 600) return "too many";
         entities[{std::string(plugin), id}] = {std::string(asset) + (hidden ? " hidden" : ""), m};
         calls.push_back(std::format("entity {} {} {} {:.2f} {:.2f} {:.2f} {:.2f}{}{}", plugin, id, asset, m[12], m[13], m[14], m[8], hidden ? " hidden" : "",
-                                    attach ? std::format(" on {} {}", attach->player, attach->joint) : std::string{}));
+                                    attach ? std::format(" on {} {}{}{}{}", attach->player, attach->joint, attach->upright ? " upright" : "", attach->turn ? "" : " held",
+                                                     attach->ground > 0 ? std::format(" ground {:.1f}", attach->ground) : std::string{}) : std::string{}) +
+                        (solid ? "" : " ghost"));
         return {};
     }
     void entity_remove(std::string_view plugin, std::uint32_t id) override { entities.erase({std::string(plugin), id}); }
+    std::optional<std::array<Vec3, 2>> entity_bounds(std::string_view blueprint) override {
+        if (blueprint != "World/Props/TrashCan_01") return std::nullopt;
+        return std::array<Vec3, 2>{Vec3{-0.3f, 0, -0.3f}, Vec3{0.3f, 0.9f, 0.3f}};
+    }
+    std::vector<std::string> entity_blueprints(std::string_view prefix, bool meshes_only) override {
+        std::vector<std::string> out;
+        for (const auto* name : {"World/Props/Bench_01", "World/Props/TrashCan_01", "World/Vehicles/Car_01"})
+            if (std::string_view(name).starts_with(prefix) && (!meshes_only || entity_bounds(name))) out.emplace_back(name);
+        return out;
+    }
+    std::optional<WorldPick> world_pick(const Vec3& from, const Vec3&) override {
+        if (from[1] > 50) return std::nullopt; // the sky: nothing met
+        WorldPick pick{{1, 0, 2}, true, std::array<float, 16>{0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 3, 1}, "World/Props/TrashCan_01"};
+        return pick;
+    }
     void entity_clear(std::string_view plugin) override {
         std::erase_if(entities, [&](const auto& e) { return e.first.first == plugin; });
         calls.push_back("entities clear " + std::string(plugin));
@@ -769,6 +790,9 @@ void a_plugin_loads_ticks_runs_its_commands_and_unloads() {
             reskate.console.print("hello " .. table.concat(args, ",") .. " after " .. ticks)
         end)
         print("printed", 1, true)
+        reskate.console.command("greet", "Greets", function(args) reskate.console.print("greet " .. (args[1] or "")) end,
+            {{name = "loud", args = "[name]", help = "Greets loudly"}, {name = "soft"}})
+        assert(not pcall(reskate.console.command, "bad", "x", function() end, {{name = "Two Words"}}), "a subcommand is one word")
     )", R"("console")")});
     running(host, "hello", environment);
     check(environment.logged("[hello] loaded hello api 1"), "The load handler ran\n" + environment.all());
@@ -778,7 +802,14 @@ void a_plugin_loads_ticks_runs_its_commands_and_unloads() {
     check(environment.printed("hello a,b after 3"), "with its arguments, after its ticks");
     check(host.run_console("HELLO There"), "whatever the case");
     check(!host.run_console("nothing here"), "and other text is left to ReSkate");
-    check(status_of(host, "hello").commands.size() == 1, "Its command is listed");
+    check(status_of(host, "hello").commands.size() == 4, "Its commands are listed, with the subcommands one declared");
+    {
+        const auto commands = status_of(host, "hello").commands;
+        check(std::any_of(commands.begin(), commands.end(),
+                          [](const auto& c) { return c.name == "greet loud" && c.args == "[name]" && c.help == "Greets loudly"; }),
+              "A subcommand is listed with its arguments and help");
+    }
+    check(host.run_console("greet loud") && environment.printed("greet loud"), "and its command's function runs it");
     host.apply({});
     check(environment.logged("[hello] bye after 3"), "Unloading runs its unload handler");
     check(host.status().empty(), "and it is gone");
@@ -1218,6 +1249,48 @@ void plugins_place_world_entities() {
     )"}})});
     ticks(host, environment, 1);
     check(environment.logged("[sneaky] false"), "world.entities is needed\n" + environment.all());
+}
+
+// What a prop hunt needs: the props this map has, the one a ray meets (to become it), wearing it
+// upright on another player, and your own skater hidden on your screen.
+void plugins_have_what_a_prop_hunt_needs() {
+    TestEnvironment environment;
+    auto& game = environment.fake;
+    Host host(environment, Side::client);
+    const std::string main = R"(
+        local props = reskate.entities.blueprints("World/Props/")
+        assert(#props == 2 and props[1] == "World/Props/Bench_01", "the props loaded, by their names' start")
+        assert(#reskate.entities.blueprints() == 3, "all of them")
+        local shown = reskate.entities.blueprints("", true)
+        assert(#shown == 1 and shown[1] == "World/Props/TrashCan_01", "only those with a mesh")
+        local low, high = reskate.entities.bounds("World/Props/TrashCan_01")
+        assert(low.y == 0 and math.abs(high.y - 0.9) < 1e-5, "its box")
+        assert(reskate.entities.bounds("World/Vehicles/Car_01") == nil, "none without a mesh")
+        local hit = reskate.world.pick(vector.create(0, 2, 0), vector.create(0, -2, 0))
+        assert(hit and hit.position.z == 2 and hit.object.blueprint == "World/Props/TrashCan_01", "the object a ray meets")
+        assert(math.abs(hit.object.heading - math.pi / 2) < 1e-4 and hit.object.position.z == 3, "where it is and how it is turned")
+        assert(#hit.object.transform.matrix == 16)
+        assert(reskate.world.pick(vector.create(0, 60, 0), vector.create(0, 70, 0)) == nil, "nothing met")
+        assert(reskate.entities.set(1, hit.object.blueprint, hit.object.transform, false,
+            {player = "76561198000000001", joint = "root", upright = true}), "worn upright, at the feet")
+        assert(reskate.entities.set(2, hit.object.blueprint, {position = vector.create(0, 0, 0), yaw = 45}, false,
+            {joint = "root", turn = false}), "turned as the mod says, whatever the skater does")
+        assert(reskate.entities.set(3, hit.object.blueprint, {position = vector.create(0, 0, 0)}, false,
+            {joint = "hips", turn = false, ground = 1.5}, {solid = false}), "on the floor, not solid")
+        assert(not pcall(reskate.entities.set, 4, hit.object.blueprint, {position = vector.create(0, 0, 0)}, false, {joint = "hips", ground = 80}),
+            "the floor within 50 m")
+        assert(reskate.skater.hide(true))
+        reskate.log("disguised")
+    )";
+    host.apply({package("prophunt", {{manifest_file, manifest(R"("world.entities", "world.raycast", "skater.control")")}, {"plugin/main.lua", main}})});
+    ticks(host, environment, 1);
+    running(host, "prophunt", environment);
+    check(environment.logged("[prophunt] disguised"), "A prop hunt finds, becomes and wears a prop\n" + environment.all());
+    check(game.called("entity prophunt 1 World/Props/TrashCan_01 1.00 0.00 3.00 1.00 on 76561198000000001 1 upright"),
+          "the prop on the hider's hips, upright\n" + environment.all());
+    check(game.called("hide skater prophunt on"), "your own skater hidden");
+    check(game.called("entity prophunt 2 World/Props/TrashCan_01 0.00 0.00 0.00 0.71 on 0 1 held"), "a prop the skater does not turn\n" + environment.all());
+    check(game.called("entity prophunt 3 World/Props/TrashCan_01 0.00 0.00 0.00 0.00 on 0 7 held ground 1.5 ghost"), "on the floor and not solid\n" + environment.all());
 }
 
 // What a camera mode needs (the Filmer): an arm that reaches, where the hand is, cruise control, the
@@ -3541,6 +3614,7 @@ int main() {
         run(plugins_draw_on_the_overlay);
         run(plugins_draw_pictures);
         run(plugins_place_world_entities);
+        run(plugins_have_what_a_prop_hunt_needs);
         run(plugins_reach_cruise_and_read_the_mouse);
         run(plugins_read_joints_and_tune_physics);
         run(plugins_type_and_use_the_room);
