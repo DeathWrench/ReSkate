@@ -1318,8 +1318,10 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
     if (p.kind == PacketKind::physics_tuning || p.kind == PacketKind::physics_extras) return;
     if (p.kind == PacketKind::chat) {
         active(*link);
+        // An answer to the running vote may repeat the line before it: the same /2 in the next poll.
+        const bool answer = p.text.starts_with('/') && answers_vote(*link, std::string_view(p.text).substr(1));
         if (!routed_source(p, link->member, peer, true, id_) ||
-            link->chat_rate.accept(now_, p.text, 1) != ChatRate::Verdict::accepted)
+            link->chat_rate.accept(now_, p.text, 1, answer) != ChatRate::Verdict::accepted)
             return;
         link->last_packet = now_;
         if (!allowed_words(*link, p.text)) return;

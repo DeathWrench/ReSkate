@@ -396,6 +396,7 @@ struct MapDownloadCard {
     std::size_t step{}, steps{}; // applying: the merge's steps done of all
     std::string step_name;
     bool server{}, installed{}, moved{}, choice{true};
+    std::uint64_t bytes{};       // asking: the package's size; 0 when it is not known
     std::uint64_t received{}, total{};
     std::uint32_t yes_bind{}, no_bind{};
 };

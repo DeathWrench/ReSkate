@@ -254,6 +254,7 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
             card.moved = view.moved;
             card.installed = view.installed;
             card.have = view.have;
+            card.bytes = view.bytes;
             card.choice = view.choice;
             card.received = view.received;
             card.total = view.total;

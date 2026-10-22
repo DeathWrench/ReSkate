@@ -217,8 +217,21 @@ std::string send_chat_command(Session &s, std::string_view typed) {
     if (!dedicated_host(s)) return "That command needs a dedicated server.";
     auto text = clean_chat_text(typed);
     if (text.size() < 2 || text.front() != '/') return "Type a command after the /.";
+    // An answer to the running vote: it shows on the vote card like one given there, and may
+    // repeat the line before it (the same /2 in the next poll; the server counts one per player).
+    std::uint8_t answer{};
+    if (s.vote.id && s.vote.outcome == vote_running) {
+        const std::string_view line = text;
+        if (s.vote.kind == server_vote_poll) {
+            // "/2" or "/vote 2"
+            const auto number = line.starts_with("/vote ") ? line.substr(6) : line.substr(1);
+            if (number.size() == 1 && number[0] >= '1' && static_cast<std::size_t>(number[0] - '0') <= s.vote.answers.size())
+                answer = static_cast<std::uint8_t>(number[0] - '0');
+        } else if (line == "/yes" || line == "/y" || line == "/vote yes" || line == "/vote y") answer = 1;
+        else if (line == "/no" || line == "/n" || line == "/vote no" || line == "/vote n") answer = 2;
+    }
     const auto now = now_us();
-    switch (s.local_chat_rate.accept(now, text)) {
+    switch (s.local_chat_rate.accept(now, text, 0, answer != 0)) {
     case ChatRate::Verdict::repeated: return "You just sent that.";
     case ChatRate::Verdict::too_fast: return "Slow down: one message every couple of seconds.";
     case ChatRate::Verdict::accepted: break;
@@ -226,18 +239,9 @@ std::string send_chat_command(Session &s, std::string_view typed) {
     auto message = packet(s, PacketKind::chat, now);
     message.text = std::move(text);
     if (!send_packet(s, s.host_id, message, true, false)) return "Could not reach the server.";
+    if (answer) s.vote_mine = answer;
     // Party chat: the server relays it to the rest of the party, not back to us.
     const std::string_view sent = message.text;
-    // An answer to the vote typed in chat shows on the vote card like one given there.
-    if (s.vote.id && s.vote.outcome == vote_running) {
-        if (s.vote.kind == server_vote_poll) {
-            // "/2" or "/vote 2"
-            const auto number = sent.starts_with("/vote ") ? sent.substr(6) : sent.substr(1);
-            if (number.size() == 1 && number[0] >= '1' && static_cast<std::size_t>(number[0] - '0') <= s.vote.answers.size())
-                s.vote_mine = static_cast<std::uint8_t>(number[0] - '0');
-        } else if (sent == "/yes" || sent == "/y" || sent == "/vote yes" || sent == "/vote y") s.vote_mine = 1;
-        else if (sent == "/no" || sent == "/n" || sent == "/vote no" || sent == "/vote n") s.vote_mine = 2;
-    }
     if (sent.starts_with("/p ") && s.local_party) {
         const auto local = s.transport.status().local_id;
         add_chat(s, local, s.transport.name(local), "[Party] " + std::string(sent.substr(3)), true);

@@ -297,9 +297,6 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     // when there is none, so the content loads without any mod installed.
     std::vector<std::string> builtin_notes;
     const auto builtin = unpack_builtin_packs(data_root / mods_folder, builtin_notes);
-    // Official mods kept where they were before they were mods like any other go into the Mods
-    // folder first (builtin_packs.h), should the launcher not have moved them yet.
-    for (auto& note : move_official_mods(data_root / mods_folder)) builtin_notes.push_back("Official mods: " + std::move(note));
     auto list = scan_mods(data_root);
     for (auto& note : builtin_notes) list.notes.push_back(std::move(note));
     result.root = std::move(list.root);
@@ -315,11 +312,10 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
     try {
         for (const auto& name : list.missing)
             result.notes.push_back("mods.json names a folder that is not present: " + name);
-        // A mod retired with an official one (builtin_packs.h) is left out, should the launcher not
-        // have taken it away yet: the official one replaces it.
+        // A mod ReSkate retired (builtin_packs.h) is left out.
         std::erase_if(list.entries, [&](const ModEntry& entry) {
             if (!kept_by_reskate(data_root / mods_folder, entry.mod.name)) return false;
-            result.notes.push_back(entry.mod.name + " is retired with an official mod; it is left out");
+            result.notes.push_back(entry.mod.name + " is retired; it is left out");
             return true;
         });
         // After every installed mod, so none of theirs is ever shadowed by it; always on.
@@ -508,12 +504,9 @@ Catalog load_catalog(const std::filesystem::path& data_root, const MergeObserver
                 // ways that cannot both be in the game, the one lower in the load order, whole (so
                 // neither loads half its changes). Mods are looked at from the top of the load
                 // order down, so one that lost only to a mod that is itself left out stays in.
-                // ReSkate's own packs, which load below every mod, and official mods, which features
-                // of ReSkate's need, are never left out for this.
-                const auto ours = [&](const std::string& name) {
-                    if (name.starts_with("reskate-builtin-") || name.find('#') != std::string::npos) return true;
-                    const auto mod = std::ranges::find_if(result.mods, [&](const Mod& each) { return each.name == name; });
-                    return mod != result.mods.end() && official_mod(mod->directory);
+                // ReSkate's own packs, which load below every mod, are never left out for this.
+                const auto ours = [](const std::string& name) {
+                    return name.starts_with("reskate-builtin-") || name.find('#') != std::string::npos;
                 };
                 struct Out {
                     std::vector<std::string> problems;

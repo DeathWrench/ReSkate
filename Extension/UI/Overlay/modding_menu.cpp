@@ -92,8 +92,7 @@ void draw_installed_mods(SkateMenu& menu) {
     const auto& launch = mods::catalog();
     const auto applied = live_mods::applied_mods();
     // ReSkate's own packs (builtin_packs.h) live outside the Mods folder's list, always on. Without
-    // this, the ones in effect read as mods whose folder was deleted. (Official mods are mods like
-    // any other, in the list.)
+    // this, the ones in effect read as mods whose folder was deleted.
     const auto kept = [&](const std::string& name) {
         const auto owner = mods::variant_owner(name);
         return (owner.empty() ? name : owner).starts_with("reskate-builtin-");

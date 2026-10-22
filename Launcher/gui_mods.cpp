@@ -3,7 +3,6 @@
 #include <imgui_internal.h>
 
 #include "mod_manager.h"
-#include "official_mods.h"
 #include "Engine/Vfs/builtin_packs.h"
 
 #include "Engine/Core/Log/logging.h"
@@ -234,13 +233,6 @@ bool rail(const Fonts& fonts, ModsPanel& panel, HWND window, float width,
             panel.profiles_loaded ? std::to_string(panel.profiles.list.size()) : std::string(), false, std::string()))
         panel.tab = 2;
     if (panel.tab == 2) default_focus();
-    {
-        const auto official = official_mods::snapshot();
-        if (nav_tile(fonts, width, "OFFICIAL", panel.tab == 3, std::to_string(official.mods.size()), false,
-                official.syncing ? std::string("Getting the official mods") : std::string()))
-            panel.tab = 3;
-        if (panel.tab == 3) default_focus();
-    }
 
     // UPDATE ALL is not here: it sits over the MY MODS list, next to the rows it updates.
     ImGui::Dummy(ImVec2(0, S(8)));
@@ -287,8 +279,6 @@ std::string folded(std::string_view text) {
 }
 
 bool update_waiting(const ModsPanel& panel, const thunderstore::Installed& installed, const std::string& name) {
-    // (An official mod is updated on the OFFICIAL tab.)
-    if (panel.officials.contains(name)) return false;
     const auto* package = package_for(panel.store, name);
     return package && thunderstore::update_available(*package, installed);
 }
@@ -402,8 +392,7 @@ std::string pair_reason(const ConflictPair& pair) {
 }
 
 // What a mod brings, for the list's Type column.
-std::string kind_of(const ModsPanel& panel, const mods::Mod& mod) {
-    if (panel.officials.contains(mod.name)) return "Official";
+std::string kind_of(const mods::Mod& mod) {
     if (!mod.levels.empty()) return mod.levels.size() == 1 ? "Map" : std::format("{} maps", mod.levels.size());
     if (!mod.park_maps.empty()) return "Park";
     if (mod.provides_layout) return "Game data";
@@ -782,7 +771,7 @@ void installed_row(const Fonts& fonts, ModsPanel& panel, const thunderstore::Ins
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Thunderstore has v%s", package->latest().number.c_str());
         name_end = start.x + r.update - S(12);
     }
-    const auto kind = kind_of(panel, mod);
+    const auto kind = kind_of(mod);
     draw->AddText(fonts.body, fonts.body->FontSize, ImVec2(start.x + r.type, middle - fonts.body->FontSize * 0.5f),
         color::muted, kind.c_str());
 
@@ -1642,13 +1631,7 @@ void refresh_mods(Launcher& launcher, ModsPanel& panel) {
 
 void scan(ModsPanel& panel, const launcher_app::Session& session) {
     panel.root = launcher_mods::mods_root(session.paths.directory);
-    // (Official mods kept where they were before they were mods like any other come into the list.)
-    for (const auto& line : mods::move_official_mods(panel.root))
-        logging::write(logging::Level::info, logging::Channel::launcher, "Official mods: " + line);
     panel.list = mods::scan_mods(panel.root.parent_path());
-    panel.officials.clear();
-    for (const auto& entry : panel.list.entries)
-        if (mods::official_mod(entry.mod.directory)) panel.officials.insert(entry.mod.name);
     want_conflict_check(panel, 0);
     read_conflict_choices(panel);
     panel.sizes.clear();
@@ -1849,7 +1832,7 @@ void mods_outdated_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, U
 
 void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, ModsPanel& panel, HWND window) {
     const auto& session = launcher.session();
-    // MY MODS opened from another tab: what the OFFICIAL tab installed or took away is in the folder.
+    // MY MODS opened from another tab: what GET MODS or a profile installed or took away is in the folder.
     if (panel.scanned && panel.tab == 0 && panel.shown_tab != -1 && panel.shown_tab != 0) scan(panel, session);
     panel.shown_tab = panel.tab;
     if (!panel.scanned) scan(panel, session);
@@ -1898,7 +1881,6 @@ void mods_window(Launcher& launcher, const Fonts& fonts, ImVec2 size, Ui& ui, Mo
     const float body = ImGui::GetWindowHeight() - status;
     if (panel.tab == 1) browse_page(launcher, fonts, panel, body, installing);
     else if (panel.tab == 2) profiles_page(fonts, panel, window, body, installing);
-    else if (panel.tab == 3) official_page(fonts, panel, body);
     else installed_page(launcher, fonts, panel, installed, pending, body, installing);
     if (!panel.message.empty()) {
         ImGui::SetCursorPosY(ImGui::GetWindowHeight() - status + S(8));

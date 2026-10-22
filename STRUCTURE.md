@@ -193,7 +193,7 @@ The Luau plugin host. A plugin is a folder in `Mods/` with a `reskate-plugin.jso
 | `main.cpp`, `launch` | entry point and starting/injecting the game |
 | `updater` | ReSkate self-update from GitHub releases |
 | `depot_output`, `game_settings` | supported game build download/verification and game settings |
-| `mod_manager`, `mod_profiles`, `thunderstore`, `official_mods` | mods, profiles (r2modman-compatible codes and `.r2z`), Thunderstore |
+| `mod_manager`, `mod_profiles`, `thunderstore` | mods, profiles (r2modman-compatible codes and `.r2z`), Thunderstore |
 | `gui*.cpp` | the window: home, mods (browse, profiles), settings, sign-in, changelog, legal, gamepad |
 | `crash_reporter` | crash reporting host |
 | `Test/` | launcher tests |

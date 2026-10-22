@@ -345,8 +345,7 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
 endif()
 # Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h), one zip each in assets/builtin:
 # the Throwdowns page's logo grid (tools/builtin/build_throwdown_menu_pack.py). A missing zip is
-# left out. (Mods that are content for ReSkate's features, such
-# as Board Break's decks, are official mods the launcher downloads: Launcher/official_mods.h.)
+# left out.
 # Each zip is made into a zstd pack by ReSkateBuiltinPacker as the build goes (again only when the
 # zip changes), which is what the DLL carries: compressed whole, a pack's repeated files cost
 # next to nothing.

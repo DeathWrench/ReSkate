@@ -1,7 +1,6 @@
 #include "gui_internal.h"
 
 #include "depot_output.h"
-#include "official_mods.h"
 
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Log/logging.h"
@@ -532,12 +531,6 @@ void Launcher::run_play() {
     if (game_instance::running(session_.paths.directory)) {
         fail("Skate is already running from this folder. Close it before starting it again.");
         return;
-    }
-    // The official mods first (official_mods.h): the merge takes them in.
-    if (!official_mods::wait(std::chrono::milliseconds(0))) {
-        set(Phase::merging, "Official mods", "Finishing the official mods being installed", -1.0f);
-        if (!official_mods::wait(std::chrono::minutes(3)))
-            logging::write(logging::Level::warning, logging::Channel::launcher, "Official mods were still being installed; Skate starts without them");
     }
     if (!ignore_mod_problems_ && !run_mod_merge()) return;
     ignore_mod_problems_ = false;
