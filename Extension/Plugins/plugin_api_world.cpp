@@ -50,7 +50,8 @@ const char* skater_state_name(std::uint32_t state) {
     if (state >= 100 && state < 200) return "riding";
     if (state >= 200 && state < 300) return "air";
     if (state >= 300 && state < 400) return "wipeout";
-    if (state >= 400 && state < 500) return "grinding";
+    // 701 is a grind too (Engine/Game/Build/20260929/launches.h, other_grind_state).
+    if ((state >= 400 && state < 500) || state == 701) return "grinding";
     if (state >= 500 && state < 600) return "off_board";
     if (state == 602) return "planted";
     return state ? "other" : "none";
@@ -107,35 +108,38 @@ struct WorldApi {
         need(L, plugin, "overlay", "reskate.skater.xray");
         return result(L, game(plugin).xray(plugin.id(), lua_toboolean(L, 1) != 0));
     }
-    // skater.grind_exit(wish): the next pop out of a grind, {side = "toe"|"heel"|"left"|"right",
-    // stance = "regular"|"goofy", strength = 0.1 to 1}; nil the game's own exit.
-    static int grind_exit(lua_State* L) {
+    // skater.hide(on): the local skater not drawn on this screen while on (nothing: true).
+    static int hide_skater(lua_State* L) {
         auto& plugin = plugin_of(L);
-        need(L, plugin, "skater.control", "reskate.skater.grind_exit");
-        if (lua_isnoneornil(L, 1)) return result(L, game(plugin).grind_exit(plugin.id(), std::nullopt));
-        luaL_checktype(L, 1, LUA_TTABLE);
-        GrindExitWish wish;
-        lua_getfield(L, 1, "side");
-        wish.side = luaL_checkstring(L, -1);
-        lua_pop(L, 1);
-        if (wish.side != "toe" && wish.side != "heel" && wish.side != "left" && wish.side != "right")
-            luaL_error(L, "a grind exit's side is \"toe\", \"heel\", \"left\" or \"right\"");
-        lua_getfield(L, 1, "stance");
-        if (!lua_isnil(L, -1)) {
-            const std::string stance = luaL_checkstring(L, -1);
-            if (stance == "regular") wish.stance = 1;
-            else if (stance == "goofy") wish.stance = 2;
-            else luaL_error(L, "a stance is \"regular\" or \"goofy\"");
-        }
-        lua_pop(L, 1);
-        lua_getfield(L, 1, "strength");
-        if (!lua_isnil(L, -1)) {
-            const double strength = luaL_checknumber(L, -1);
-            if (!(strength >= 0.1 && strength <= 1)) luaL_error(L, "a grind exit's strength is 0.1 to 1");
-            wish.strength = static_cast<float>(strength);
-        }
-        lua_pop(L, 1);
-        return result(L, game(plugin).grind_exit(plugin.id(), std::move(wish)));
+        need(L, plugin, "skater.control", "reskate.skater.hide");
+        return result(L, game(plugin).hide_skater(plugin.id(), lua_isnone(L, 1) || lua_toboolean(L, 1) != 0));
+    }
+    // skater.shape_launch(from, shape): the launches out of `from` ("grind", "ollie", "no_comply" or
+    // "boneless") from now on, {across =, along =, up =} in m/s, each set if given (across the
+    // direction of travel, + its left); nil the game's own.
+    static int shape_launch(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.control", "reskate.skater.shape_launch");
+        const std::string from = luaL_checkstring(L, 1);
+        if (from != "grind" && from != "ollie" && from != "no_comply" && from != "boneless")
+            luaL_argerror(L, 1, "a launch is out of \"grind\", \"ollie\", \"no_comply\" or \"boneless\"");
+        if (lua_isnoneornil(L, 2)) return result(L, game(plugin).shape_launch(plugin.id(), from, std::nullopt));
+        luaL_checktype(L, 2, LUA_TTABLE);
+        LaunchShape shape;
+        const auto speed = [&](const char* field, std::optional<float>& out) {
+            lua_getfield(L, 2, field);
+            if (!lua_isnil(L, -1)) {
+                const double value = luaL_checknumber(L, -1);
+                if (!(std::abs(value) <= 50)) luaL_error(L, "a launch's %s speed is -50 to 50 m/s", field);
+                out = static_cast<float>(value);
+            }
+            lua_pop(L, 1);
+        };
+        speed("across", shape.across);
+        speed("along", shape.along);
+        speed("up", shape.up);
+        if (!shape.across && !shape.along && !shape.up) luaL_argerror(L, 2, "a launch's shape sets across, along or up");
+        return result(L, game(plugin).shape_launch(plugin.id(), from, shape));
     }
     // board.motion(): the board's velocity in the last physics step, or nil.
     static int board_motion(lua_State* L) {
@@ -444,8 +448,10 @@ struct WorldApi {
         const auto id = entity_id(L, 1);
         const auto asset = checked_text(L, 2, 200, "a blueprint's name");
         const auto matrix = transform_of(L, 3);
-        // attach = {player = id?, joint = number or name}: kept on that skater's joint, the transform
-        // in the joint's frame.
+        // entities.set(id, blueprint, transform, hidden?, attach?, options?).
+        // attach = {player = id?, joint = number or name, upright = bool?, turn = bool?, ground = metres?}: kept on that
+        // skater's joint, the transform in the joint's frame (upright: level, turned only by the joint's
+        // heading; turn = false: the joint's position only, the transform's rotation in the world).
         std::optional<Game::EntityAttach> attach;
         if (!lua_isnoneornil(L, 5)) {
             luaL_checktype(L, 5, LUA_TTABLE);
@@ -456,8 +462,31 @@ struct WorldApi {
             lua_getfield(L, 5, "joint");
             attach->joint = joint_of(L, lua_gettop(L));
             lua_pop(L, 1);
+            lua_getfield(L, 5, "upright");
+            attach->upright = lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+            lua_getfield(L, 5, "turn");
+            attach->turn = lua_isnil(L, -1) || lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+            // ground = metres (or true: 2 m) below the joint to stand the object on the floor in.
+            lua_getfield(L, 5, "ground");
+            if (lua_isboolean(L, -1)) attach->ground = lua_toboolean(L, -1) ? 2.0f : 0.0f;
+            else if (!lua_isnil(L, -1)) {
+                const double reach = luaL_checknumber(L, -1);
+                if (!(reach >= 0 && reach <= 50)) luaL_error(L, "an object finds the ground at most 50 m below its joint");
+                attach->ground = static_cast<float>(reach);
+            }
+            lua_pop(L, 1);
         }
-        return result(L, game(plugin).entity_set(plugin.id(), id, asset, matrix, lua_toboolean(L, 4) != 0, attach));
+        // options = {solid = false}: skaters go through the object.
+        bool solid = true;
+        if (!lua_isnoneornil(L, 6)) {
+            luaL_checktype(L, 6, LUA_TTABLE);
+            lua_getfield(L, 6, "solid");
+            solid = lua_isnil(L, -1) || lua_toboolean(L, -1) != 0;
+            lua_pop(L, 1);
+        }
+        return result(L, game(plugin).entity_set(plugin.id(), id, asset, matrix, lua_toboolean(L, 4) != 0, attach, solid));
     }
     static int entities_remove(lua_State* L) {
         auto& plugin = plugin_of(L);
@@ -484,6 +513,78 @@ struct WorldApi {
         auto& plugin = plugin_of(L);
         need(L, plugin, "world.entities", "reskate.entities.ready");
         lua_pushboolean(L, game(plugin).entities_ready(plugin.id()));
+        return 1;
+    }
+    // entities.blueprints(prefix?, meshes_only?): the world object blueprints loaded now, sorted;
+    // with meshes_only, only those with a loaded mesh (the ones that show).
+    static int entities_blueprints(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.entities", "reskate.entities.blueprints");
+        const std::string prefix = lua_isnoneornil(L, 1) ? std::string{} : checked_text(L, 1, 200, "a blueprint name's start");
+        const auto names = game(plugin).entity_blueprints(prefix, lua_toboolean(L, 2) != 0);
+        lua_createtable(L, static_cast<int>(names.size()), 0);
+        int index = 0;
+        for (const auto& name : names) {
+            lua_pushlstring(L, name.data(), name.size());
+            lua_rawseti(L, -2, ++index);
+        }
+        return 1;
+    }
+    // entities.bounds(blueprint): its mesh box in its own frame, min and max, or nil.
+    static int entities_bounds(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.entities", "reskate.entities.bounds");
+        const auto box = game(plugin).entity_bounds(checked_text(L, 1, 200, "a blueprint's name"));
+        if (!box) {
+            lua_pushnil(L);
+            return 1;
+        }
+        push_position(L, (*box)[0]);
+        push_position(L, (*box)[1]);
+        return 2;
+    }
+    // world.pick(from, to): where the ray meets the world, and the object it meets: {position,
+    // object = {blueprint?, position, heading, transform = {matrix}}?}, or nil when it is clear.
+    static int world_pick(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "world.raycast", "reskate.world.pick");
+        const auto from = position_of(L, 1, "the ray's start");
+        const auto to = position_of(L, 2, "the ray's end");
+        const float dx = to[0] - from[0], dy = to[1] - from[1], dz = to[2] - from[2];
+        if (std::sqrt(dx * dx + dy * dy + dz * dz) > plugin.limits_.raycast_metres)
+            luaL_error(L, "a ray is at most %d m long", static_cast<int>(plugin.limits_.raycast_metres));
+        if (++plugin.raycasts_ > plugin.limits_.raycasts_per_tick)
+            luaL_error(L, "more than %d raycasts in one tick", plugin.limits_.raycasts_per_tick);
+        const auto pick = game(plugin).world_pick(from, to);
+        if (!pick) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, 0, 2);
+        push_position(L, pick->at);
+        lua_setfield(L, -2, "position");
+        if (pick->object) {
+            lua_createtable(L, 0, 4);
+            if (!pick->blueprint.empty()) {
+                lua_pushlstring(L, pick->blueprint.data(), pick->blueprint.size());
+                lua_setfield(L, -2, "blueprint");
+            }
+            if (const auto& m = pick->matrix) {
+                push_position(L, Vec3{(*m)[12], (*m)[13], (*m)[14]});
+                lua_setfield(L, -2, "position");
+                lua_pushnumber(L, std::atan2((*m)[8], (*m)[10])); // the forward row's heading, as the skater's
+                lua_setfield(L, -2, "heading");
+                lua_createtable(L, 0, 1);
+                lua_createtable(L, 16, 0);
+                for (int i = 0; i < 16; ++i) {
+                    lua_pushnumber(L, (*m)[i]);
+                    lua_rawseti(L, -2, i + 1);
+                }
+                lua_setfield(L, -2, "matrix");
+                lua_setfield(L, -2, "transform");
+            }
+            lua_setfield(L, -2, "object");
+        }
         return 1;
     }
     static int place(lua_State* L) {
@@ -1157,14 +1258,14 @@ struct WorldApi {
     static std::uint16_t joint_of(lua_State* L, int index) {
         if (lua_type(L, index) == LUA_TSTRING) {
             static constexpr std::pair<std::string_view, std::uint16_t> named[] = {
-                {"right_hand", 49}, {"left_hand", 278}, {"head", 103}, {"hips", 7}, {"spine", 42}};
+                {"right_hand", 49}, {"left_hand", 278}, {"head", 103}, {"hips", 7}, {"spine", 42}, {"root", 1}};
             const std::string_view name = lua_tostring(L, index);
             const auto at = std::find_if(std::begin(named), std::end(named), [&](const auto& n) { return n.first == name; });
-            if (at == std::end(named)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips or spine");
+            if (at == std::end(named)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips, spine or root");
             return at->second;
         }
         const double joint = luaL_checknumber(L, index);
-        if (!(joint >= 0 && joint <= 394) || joint != static_cast<int>(joint)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips or spine");
+        if (!(joint >= 0 && joint <= 394) || joint != static_cast<int>(joint)) luaL_error(L, "a joint is a number 0 to 394, or right_hand, left_hand, head, hips, spine or root");
         return static_cast<std::uint16_t>(joint);
     }
     static int push_joint(lua_State* L, const std::optional<Game::JointPlace>& at, std::uint16_t joint) {
@@ -2354,7 +2455,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     lua_setfield(L, -2, "__metatable");
     lua_setfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
     add_functions(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
-                                {"grind_exit", grind_exit}, {"reach", reach}, {"hand", hand}, {"joint", skater_joint}, {"pose", skater_pose}});
+                                {"shape_launch", shape_launch}, {"hide", hide_skater}, {"reach", reach}, {"hand", hand}, {"joint", skater_joint}, {"pose", skater_pose}});
     add_functions(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
                                {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}});
     add_functions(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});
@@ -2363,8 +2464,9 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "time", {{"slow", slow}, {"speed", speed}});
     add_functions(L, "objects", {{"catalog", catalog}, {"list", objects}, {"place", place}, {"move", move}, {"remove", remove}});
     add_functions(L, "entities", {{"set", entities_set}, {"remove", entities_remove}, {"clear", entities_clear}, {"status", entities_status},
-                                  {"ready", entities_ready}});
-    add_functions(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}});
+                                  {"ready", entities_ready}, {"blueprints", entities_blueprints},
+                                  {"bounds", entities_bounds}});
+    add_functions(L, "world", {{"set_time", set_time}, {"set_control", set_control}, {"set_park", set_park}, {"pick", world_pick}});
     add_functions(L, "travel", {{"locations", locations}, {"levels", levels}, {"go", go}, {"load", load}});
     add_functions(L, "ai", {{"spawn", ai_spawn}, {"clear", ai_clear}, {"count", ai_count}});
     add_functions(L, "session", {{"skaters", skaters}, {"tag", tag}, {"joint", session_joint}, {"touch", session_touch},

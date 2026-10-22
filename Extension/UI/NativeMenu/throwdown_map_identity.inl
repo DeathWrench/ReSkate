@@ -131,17 +131,37 @@ void restore_join_branding(const Context& c) {
     for(auto& [handle,card]:state().join_cards)restore_branding_presenters(c,card.presenters);
     state().join_cards.clear();
 }
+// What the join card of the flag the game last filled details for came to, said when it changes:
+// the only record of a card that stays the donor's.
+void join_card_report(std::string text) {
+    auto& s=state();
+    if(text==s.join_report)return;
+    s.join_report=std::move(text);
+    if(!s.join_report.empty())logging::log(logging::Level::info,logging::Channel::ui,"Join card: {}",s.join_report);
+}
 void custom_join_details(const Context& c) {
     auto& s=state();const auto mmid=s.join_mmid.load(std::memory_order_acquire);
+    if(!mmid) {join_card_report({});restore_join_branding(c);return;}
     const auto definition=flag_brand(mmid);
-    if(!definition || (!s.in_menu && !s.join_cards.empty())) {
+    if(!definition) {
+        const auto remote=custom_throwdown_flag_info(mmid);
+        join_card_report(std::format("MMID {:#x} {}; the card stays the game's.",mmid,
+            flag_plumbing::owns(mmid)?"is this game's own flag, whose mode has no definition":
+            remote?"is "+remote->key+"'s flag from another player, whose mode is not registered here":"is not a plugin mode's flag"));
         restore_join_branding(c);s.join_mmid.store(0);return;
     }
+    if(!s.in_menu && !s.join_cards.empty()) {restore_join_branding(c);s.join_mmid.store(0);return;}
+    std::vector<std::string> seen;
+    bool branded{};
+    try {
     for(const auto& root:c.roots({panel_schema.hash})) {
         const auto buttons=ui_models(c,c.field(root.model,0xbfc64535),button.hash);
-        const bool enroll=std::any_of(buttons.begin(),buttons.end(),[&](const auto b){
-            const auto text=c.text(c.path(b,{0x58c9d354,text_field}));return text=="ID_ENROLL_LABEL" || text=="ENROLL";
-        });
+        bool enroll{};
+        for(const auto b:buttons) {
+            const auto text=c.text(c.path(b,{0x58c9d354,text_field}));
+            if(text=="ID_ENROLL_LABEL" || text=="ENROLL")enroll=true;
+            else if(seen.size()<8)seen.push_back(text);
+        }
         if(!enroll)continue;
         auto& card=s.join_cards[root.model.handle];
         if(std::any_of(card.presenters.begin(),card.presenters.end(),[&](const auto& p){return !branding_presenter_attached(c,p);}))
@@ -170,7 +190,17 @@ void custom_join_details(const Context& c) {
         }
         mode_art(c,std::array{c.field(card.badge,0x6e469d2a)},definition->logo);
         c.set_if_changed(c.field(header,content),Widget{asset(c,"UI/Foundations/Components/Media/Icons/Texture_Widget"),{0,card.badge.handle}});
+        branded=true;
     }
+    } catch(const std::exception& e) {
+        join_card_report(std::format("MMID {:#x} ({}): branding failed: {}",mmid,definition->name,e.what()));
+        throw;
+    }
+    if(branded) {join_card_report(std::format("MMID {:#x} shows {}.",mmid,definition->name));return;}
+    std::string buttons;
+    for(const auto& text:seen)buttons+=(buttons.empty()?"":", ")+(text.empty()?std::string("(no text)"):text);
+    join_card_report(std::format("MMID {:#x} ({}): no card with an Enroll button is up{}.",mmid,definition->name,
+        buttons.empty()?std::string{}:"; its buttons: "+buttons));
 }
 void throwdown_map_identity(const Context& c) {
     auto& b=state().map_branding;

@@ -127,19 +127,18 @@ struct PhysicsStep {
     };
     std::vector<Body> bodies;
 };
-// What a plugin asks of the next pop out of a grind: "toe", "heel", "left" or "right" (of travel),
-// the player's stance (0 not set, 1 regular, 2 goofy: what toe and heel need), and 0.1 to 1 of the
-// full sideways speed. And a pop as it went (Extension/Skater/grind_exit.h).
-struct GrindExitWish {
-    std::string side;
-    int stance{};
-    float strength{1};
+// What a plugin sets of a launch into the air, m/s, each if given: across the direction of travel
+// (+ its left), along it, and up. And a launch as it went (Extension/Skater/launches.h).
+struct LaunchShape {
+    std::optional<float> across, along, up;
 };
-struct GrindPop {
-    bool applied{};
-    std::string reason, basis;
-    int toward{}; // +1 the left of travel, -1 the right, 0 the game's own
-    float before{}, after{};
+struct LaunchNews {
+    std::string from;      // "grind", "ollie", "no_comply", "boneless" or "other"
+    Vec3 game{}, velocity{}; // as the game made it, as it left
+    std::optional<std::array<float, 2>> travel; // the horizontal direction of travel (x, z), when moving
+    float travel_speed{};
+    std::string reason; // "applied", "none", "slow", "not_ours"
+    std::string by;     // the plugin whose shape applied
 };
 // The last slam: its force and the game's cause number, and how long ago (ms).
 struct SlamNews {
@@ -284,15 +283,33 @@ public:
     struct EntityAttach {
         std::uint64_t player{};
         std::uint16_t joint{};
+        bool upright{}; // level at the joint, turned only by its heading
+        bool turn{true}; // false: the joint's position only, the transform's rotation in the world
+        float ground{};  // metres below the joint to find the floor in, 0 none
     };
     virtual std::string entity_set(std::string_view /*plugin*/, std::uint32_t, std::string_view, const std::array<float, 16>&, bool,
-                                   std::optional<EntityAttach> /*attach*/) {
+                                   std::optional<EntityAttach> /*attach*/, bool /*solid*/) {
         return unavailable;
     }
     virtual void entity_remove(std::string_view /*plugin*/, std::uint32_t) {}
     virtual void entity_clear(std::string_view /*plugin*/) {}
     virtual int entity_status(std::string_view /*plugin*/, std::uint32_t) { return 0; }
     virtual bool entities_ready(std::string_view /*plugin*/) { return false; }
+    // The world object blueprints loaded now, those starting with `prefix` (case ignored), sorted
+    // (Extension/World/world_entities.h).
+    virtual std::vector<std::string> entity_blueprints(std::string_view /*prefix*/, bool /*meshes_only*/) { return {}; }
+    // A world object blueprint's mesh box in its own frame (min, max), when it has a loaded mesh.
+    virtual std::optional<std::array<Vec3, 2>> entity_bounds(std::string_view /*blueprint*/) { return std::nullopt; }
+    // The world raycast and the object it meets (Extension/Objects/ParkEditor/park_editor_runtime.h,
+    // local_world_pick): where; and the object's transform (rows right, up, forward with their
+    // scale, then position) and blueprint, when known.
+    struct WorldPick {
+        Vec3 at{};
+        bool object{};
+        std::optional<std::array<float, 16>> matrix;
+        std::string blueprint;
+    };
+    virtual std::optional<WorldPick> world_pick(const Vec3& /*from*/, const Vec3& /*to*/) { return std::nullopt; }
     // kind "tod" (key: morning, noon, afternoon, evening, night, weatherday, weathernight, default),
     // "control" (key: fog, fog_distance, sky_brightness, clouds, wind_strength, wind_direction,
     // traffic, pedestrians; value a number, -1 the default) or "park" (key: a lot, value a layout).
@@ -724,16 +741,19 @@ public:
     virtual std::vector<PhysicsStep> take_physics_steps() { return {}; }
     // The skater's x-ray ready while any plugin asks (Extension/Skater/xray.h); d:skeleton draws it.
     virtual std::string xray(std::string_view /*plugin*/, bool) { return unavailable; }
+    // The local skater not drawn on this screen while any plugin asks (Extension/Skater/xray.h).
+    virtual std::string hide_skater(std::string_view /*plugin*/, bool) { return unavailable; }
     // skate.'s bottom left HUD hidden while any plugin asks; false keeps the plugin ready to hide it.
     virtual std::string hud_corner(std::string_view /*plugin*/, bool) { return unavailable; }
     // The game run at `speed` (0.05 to 1; 1 drops the ask) while it is the slowest asked; never in a
     // multiplayer session. And the speed it runs at for plugins now.
     virtual std::string game_speed(std::string_view /*plugin*/, float) { return unavailable; }
     virtual float game_speed_now() { return 1; }
-    // The next pop out of a grind (Extension/Skater/grind_exit.h); empty: the game's own exit. One
-    // plugin at a time. Its pops come back from take_grind_pops.
-    virtual std::string grind_exit(std::string_view /*plugin*/, std::optional<GrindExitWish>) { return unavailable; }
-    virtual std::vector<GrindPop> take_grind_pops(std::string_view /*plugin*/) { return {}; }
+    // The local skater's launches out of `from` ("grind", "ollie", "no_comply" or "boneless") from
+    // now on (Extension/Skater/launches.h); empty: the game's own. One plugin a kind at a time. Every
+    // launch comes back from take_launches.
+    virtual std::string shape_launch(std::string_view /*plugin*/, std::string_view /*from*/, std::optional<LaunchShape>) { return unavailable; }
+    virtual std::vector<LaunchNews> take_launches() { return {}; }
     // Pad controls kept from the game while any plugin asks: the triggers, and the left stick's
     // left/right while the skater grinds.
     // The skater carried up to a speed (m/s, 0 off) for the next 300 ms, eased down to it with may_slow.

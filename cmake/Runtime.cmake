@@ -115,6 +115,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Objects/ParkEditor/park_editor_runtime.cpp
     Extension/Objects/ParkEditor/park_editor_preview.cpp
     Extension/Objects/ParkEditor/park_editor_selection.cpp
+    Extension/Objects/ParkEditor/world_pick.cpp
     Extension/Objects/ParkEditor/park_editor_lobby.cpp
     Extension/Objects/ParkEditor/park_editor_operations.cpp
     Extension/Objects/network_object_runtime.cpp
@@ -146,7 +147,8 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/xray_render.cpp
     Extension/Skater/xray_skeleton.cpp
     Extension/Skater/game_speed.cpp
-    Extension/Skater/grind_exit.cpp
+    Extension/Skater/launches.cpp
+    Extension/Skater/pad_hide.cpp
     Extension/Skater/trick_rewrite.cpp
     Extension/Skater/arm_reach.cpp
     Extension/UI/hud_corner.cpp

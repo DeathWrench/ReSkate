@@ -23,7 +23,8 @@
 #include <mutex>
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Skater/game_speed.h"
-#include "Extension/Skater/grind_exit.h"
+#include "Extension/Skater/launches.h"
+#include "Extension/Skater/pad_hide.h"
 #include "Extension/Skater/xray.h"
 #include "Extension/UI/hud_corner.h"
 #include "Extension/Throwdowns/custom_modes.h"
@@ -225,10 +226,12 @@ public:
         return status.starts_with("error: ") ? status.substr(7) : std::string{};
     }
     std::string entity_set(std::string_view plugin, std::uint32_t id, std::string_view asset, const std::array<float, 16>& matrix, bool hidden,
-                           std::optional<EntityAttach> attach) override {
-        if (!attach) return world_entities::set(plugin, id, std::string(asset), matrix, hidden);
+                           std::optional<EntityAttach> attach, bool solid) override {
+        register_world_physics();
+        if (!attach) return world_entities::set(plugin, id, std::string(asset), matrix, hidden, std::nullopt, solid);
         world_entities::set_joint_source(&joint_matrix);
-        return world_entities::set(plugin, id, std::string(asset), matrix, hidden, world_entities::Attach{attach->player, attach->joint});
+        return world_entities::set(plugin, id, std::string(asset), matrix, hidden,
+                                   world_entities::Attach{attach->player, attach->joint, attach->upright, attach->turn, attach->ground}, solid);
     }
     // Where a skater's joint is (world_entities' attach): the local skater's as its pose is evaluated,
     // another player's as the session draws it.
@@ -260,6 +263,34 @@ public:
     void entity_clear(std::string_view plugin) override { world_entities::clear(plugin); }
     int entity_status(std::string_view plugin, std::uint32_t id) override { return static_cast<int>(world_entities::status(plugin, id)); }
     bool entities_ready(std::string_view plugin) override { return world_entities::ready(plugin); }
+    std::vector<std::string> entity_blueprints(std::string_view prefix, bool meshes_only) override {
+        return world_entities::blueprints(base_, prefix, 4096, meshes_only);
+    }
+    std::optional<std::array<Vec3, 2>> entity_bounds(std::string_view blueprint) override {
+        const auto box = world_entities::blueprint_bounds(base_, blueprint);
+        if (!box) return std::nullopt;
+        return std::array<Vec3, 2>{(*box)[0], (*box)[1]};
+    }
+    std::optional<WorldPick> world_pick(const Vec3& from, const Vec3& to) override {
+        const auto pick = local_world_pick(from, to);
+        if (!pick) return std::nullopt;
+        WorldPick out{pick->at, pick->entity != 0 || !pick->blueprint.empty(), std::nullopt, pick->blueprint};
+        if (pick->pose) {
+            // The pose: scale xyz, -, rotation xyzw, position xyz. Rows: the rotated x, y and z axes
+            // times their scale (the same rotation objects.list's heading reads), then position.
+            const auto& p = *pick->pose;
+            const float x = p[4], y = p[5], z = p[6], w = p[7];
+            const std::array<std::array<float, 3>, 3> axes{{{1 - 2 * (y * y + z * z), 2 * (x * y + z * w), 2 * (x * z - y * w)},
+                                                           {2 * (x * y - z * w), 1 - 2 * (x * x + z * z), 2 * (y * z + x * w)},
+                                                           {2 * (x * z + y * w), 2 * (y * z - x * w), 1 - 2 * (x * x + y * y)}}};
+            std::array<float, 16> m{};
+            for (int row = 0; row < 3; ++row)
+                for (int k = 0; k < 3; ++k) m[row * 4 + k] = axes[row][k] * p[row];
+            m[12] = p[8], m[13] = p[9], m[14] = p[10], m[15] = 1;
+            out.matrix = m;
+        }
+        return out;
+    }
     std::string set_environment(std::string_view kind, std::string_view key, std::string_view value) override {
         if (kind == "tod") return time_of_day(key);
         if (kind == "control") {
@@ -563,6 +594,10 @@ public:
         xray::prepare(plugin, on);
         return {};
     }
+    std::string hide_skater(std::string_view plugin, bool hidden) override {
+        if (!xray::hide(plugin, hidden)) return "hiding the skater is unavailable for this game build";
+        return {};
+    }
     std::string hud_corner(std::string_view plugin, bool hidden) override {
         hud_corner::ask(plugin, hidden);
         return {};
@@ -573,14 +608,12 @@ public:
         return {};
     }
     float game_speed_now() override { return game_speed::current(); }
-    std::string grind_exit(std::string_view plugin, std::optional<GrindExitWish> wish) override {
-        std::optional<grind_exit::Wish> w;
-        if (wish) {
-            using Side = grind_exit::Wish::Side;
-            w = grind_exit::Wish{wish->side == "toe" ? Side::toe : wish->side == "heel" ? Side::heel : wish->side == "right" ? Side::right : Side::left,
-                                 wish->stance, wish->strength};
-        }
-        return grind_exit::wish(plugin, w);
+    std::string shape_launch(std::string_view plugin, std::string_view from, std::optional<LaunchShape> shape) override {
+        const auto kind = launches::from_name(from);
+        if (!kind) return "a launch is out of a grind, ollie, no_comply or boneless";
+        std::optional<launches::Shape> s;
+        if (shape) s = launches::Shape{shape->across, shape->along, shape->up};
+        return launches::shape(plugin, *kind, s);
     }
     std::string set_throwdown_mode(std::string_view plugin, const ThrowdownMode& m) override {
         multiplayer::custom_throwdowns::Mode mode;
@@ -745,9 +778,13 @@ public:
     void remove_throwdown_mode(std::string_view plugin, std::string_view id) override {
         multiplayer::custom_throwdowns::remove_mode(plugin, id);
     }
-    std::vector<GrindPop> take_grind_pops(std::string_view plugin) override {
-        std::vector<GrindPop> out;
-        for (auto& p : grind_exit::take_pops(plugin)) out.push_back({p.applied, std::move(p.reason), std::move(p.basis), p.toward, p.before, p.after});
+    std::vector<LaunchNews> take_launches() override {
+        std::vector<LaunchNews> out;
+        for (auto& l : launches::take()) {
+            LaunchNews news{launches::name(l.from), l.game, l.velocity, std::nullopt, l.travel_speed, std::move(l.reason), std::move(l.by)};
+            if (l.travel[0] != 0 || l.travel[1] != 0) news.travel = l.travel;
+            out.push_back(std::move(news));
+        }
         return out;
     }
     // A speed boost: off where the session's host turned boosts off, and while a throwdown runs.
@@ -764,8 +801,8 @@ public:
         return {};
     }
     std::string hide_pad(std::string_view plugin, const PadHidden& h) override {
-        if (!grind_exit::available()) return "hiding pad controls is unavailable for this game build";
-        grind_exit::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
+        if (!pad_hide::available()) return "hiding pad controls is unavailable for this game build";
+        pad_hide::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
         return {};
     }
     std::optional<Vec3> board_velocity() override {
@@ -1045,7 +1082,7 @@ public:
         xray::tick();
         hud_corner::tick();
         game_speed::tick();
-        grind_exit::tick(client);
+        launches::tick(client);
         outfit_overlay::tick();
         board_pose::tick(base, local_skater_component(base, client));
         const bool allowed = !multiplayer::local_throwdown_active();
@@ -1554,10 +1591,12 @@ public:
         (void)freeze(plugin, false);
         hide_hud(plugin, false);
         xray::prepare(plugin, false);
+        xray::hide(plugin, false);
         hud_corner::release(plugin);
         game_speed::ask(plugin, 1.0f);
         held_settings::release(plugin);
-        grind_exit::release(plugin);
+        launches::release(plugin);
+        pad_hide::release(plugin);
         trick_rewrite::release(plugin);
         trainer::release_plugin_tunes(plugin);
         if (reacher_ == plugin) {

@@ -232,7 +232,9 @@ std::optional<std::string> ServerPlugins::command(std::string_view line) {
     if (verb == "commands") {
         std::string text;
         for (const auto &plugin : s.plugins.status())
-            for (const auto &[name, help] : plugin.commands) text += (text.empty() ? "" : "\n") + std::format("{} - {} ({})", name, help, plugin.id);
+            for (const auto &command : plugin.commands)
+                text += (text.empty() ? "" : "\n") + std::format("{}{}{} - {} ({})", command.name, command.args.empty() ? "" : " ", command.args,
+                                                                  command.help, plugin.id);
         return text.empty() ? std::string("No plugin has a console command.") : text;
     }
     if (!verb.empty() && verb != "list") return std::string("plugin list|commands|reload <id>|off <id>|on <id>");

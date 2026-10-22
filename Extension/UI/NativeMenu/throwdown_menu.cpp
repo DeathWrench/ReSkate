@@ -202,6 +202,7 @@ struct State {
     MapBranding map_branding;
     std::atomic<std::uint32_t> join_mmid{};
     std::map<Handle,JoinCard> join_cards;
+    std::string join_report; // join_card_report's last line
     MatchPanel match_panel;
     std::atomic<bool> match_panel_open{};
     std::mutex panel_input_mutex;
@@ -2232,6 +2233,13 @@ void observe_native_custom_join_details(std::uintptr_t vm) noexcept {
     try {
         const auto mmid=menu_data::native_join_mmid(vm,[](Address at,void* out,std::size_t count){return memory::peek_bytes(at,out,count);});
         if(mmid)state().join_mmid.store(*mmid,std::memory_order_release);
+        // Said when it changes: a card whose MMID cannot be read is never branded.
+        static std::atomic<std::uint64_t> last{~0ULL};
+        const std::uint64_t value=mmid?*mmid:1ULL<<32;
+        if(last.exchange(value)!=value) {
+            if(mmid)logging::log(logging::Level::info,logging::Channel::ui,"Join card: the game filled the details of MMID {:#x}.",*mmid);
+            else logging::log(logging::Level::info,logging::Channel::ui,"Join card: the game filled a throwdown's details; its MMID could not be read.");
+        }
     } catch(...) {}
 }
 void observe_native_flag_interaction(std::uintptr_t vm) noexcept {

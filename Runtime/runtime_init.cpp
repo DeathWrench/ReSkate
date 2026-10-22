@@ -41,7 +41,7 @@
 #include "Extension/UI/hud_corner.h"
 #include "Extension/UI/Overlay/game_images.h"
 #include "Extension/Plugins/plugin_runtime.h"
-#include "Extension/Skater/grind_exit.h"
+#include "Extension/Skater/launches.h"
 #include "Extension/Skater/trick_rewrite.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/Progression/entitlement_request_hook.h"
@@ -481,8 +481,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         dingosdk::overlay::prepare_game_images();
         record("{\"event\":\"skater_physics_initialized\",\"active\":" + std::string(physics ? "true" : "false") + ",\"xray\":" +
                std::string(xray ? "true" : "false") + "}");
-        const bool grind_exits = dingosdk::grind_exit::start(r.base);
-        record("{\"event\":\"grind_exit_initialized\",\"active\":" + std::string(grind_exits ? "true" : "false") + "}");
+        const bool launch_hooks = dingosdk::launches::start(r.base);
+        record("{\"event\":\"launches_initialized\",\"active\":" + std::string(launch_hooks ? "true" : "false") + "}");
         const bool trick_rewrites = dingosdk::trick_rewrite::start(r.base);
         record("{\"event\":\"trick_rewrite_initialized\",\"active\":" + std::string(trick_rewrites ? "true" : "false") + "}");
         const bool noclip_velocity = dingosdk::start_client_noclip_velocity(r.base);
