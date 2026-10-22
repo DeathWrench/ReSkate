@@ -164,7 +164,7 @@ struct FlightInput {
 
 // May change what the GAME reads from an XInput pad (never what ReSkate itself reads). `user` is
 // the XInput slot. Called on whatever thread the game polls from, once per poll that returns a
-// pad. Plugins' hidden pad controls (Extension/Skater/grind_exit.h, reskate.input.hide).
+// pad. Plugins' hidden pad controls (Extension/Skater/pad_hide.h, reskate.input.hide).
 struct GamepadValues {
     std::uint16_t buttons = 0;
     std::uint8_t left_trigger = 0, right_trigger = 0;

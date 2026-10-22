@@ -24,7 +24,7 @@ constexpr std::array<Event, 28> events{{
     {"skater_state", "events.skater"}, {"bail", "events.skater"}, {"chat", "chat.read"}, {"track_changed", "music"},
     {"throwdown", "throwdowns"}, {"action", "input"}, {"screen_closed", "ui.screen"},
     {"board_landed", "events.skater"}, {"body_hit", "events.skater"}, {"bail_end", "events.skater"},
-    {"physics_step", "events.physics"}, {"grind_exit", "events.skater"}, {"trick_notes", "events.tricks"},
+    {"physics_step", "events.physics"}, {"launch", "events.skater"}, {"trick_notes", "events.tricks"},
     {"throwdown_ui", "throwdowns"}, {"touch", "session.skaters"}, {"touch_end", "session.skaters"},
 }};
 constexpr std::size_t maximum_key = 128;
@@ -496,7 +496,7 @@ struct ApiFunctions {
             lua_pushnil(L);
             return 1;
         }
-        lua_createtable(L, 0, 6);
+        lua_createtable(L, 0, 8);
         push_position(L, s->position);
         lua_setfield(L, -2, "position");
         lua_pushnumber(L, s->heading);
@@ -509,6 +509,12 @@ struct ApiFunctions {
         lua_setfield(L, -2, "airborne");
         lua_pushnumber(L, s->air_time);
         lua_setfield(L, -2, "air_time");
+        if (s->right) {
+            push_position(L, *s->right);
+            lua_setfield(L, -2, "right");
+            lua_pushboolean(L, s->switch_stance);
+            lua_setfield(L, -2, "switch");
+        }
         return 1;
     }
     static int skater_position(lua_State* L) {

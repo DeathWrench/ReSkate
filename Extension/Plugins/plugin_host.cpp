@@ -314,19 +314,8 @@ void Host::follow_game() {
             data["bodies"] = std::move(bodies);
             each([&](Plugin& plugin, const std::string&) { plugin.game_event("physics_step", "events.physics", data); });
         }
-    if (wants("skater.control"))
-        each([&](Plugin& plugin, const std::string& id) {
-            for (const auto& pop : game.take_grind_pops(id)) {
-                auto data = Json::object();
-                data["applied"] = pop.applied;
-                data["reason"] = pop.reason;
-                if (!pop.basis.empty()) data["basis"] = pop.basis;
-                data["side"] = pop.toward > 0 ? "left" : pop.toward < 0 ? "right" : "";
-                data["before"] = pop.before;
-                data["after"] = pop.after;
-                plugin.game_event("grind_exit", "events.skater", data);
-            }
-        });
+    if (wants("events.skater"))
+        for (const auto& launch : game.take_launches()) each([&](Plugin& plugin, const std::string&) { plugin.launched(launch); });
     // Touching (reskate.session.touch): the bodies read once for every plugin that has it on.
     {
         std::optional<std::vector<Body>> list;

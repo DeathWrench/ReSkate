@@ -50,7 +50,8 @@ const char* skater_state_name(std::uint32_t state) {
     if (state >= 100 && state < 200) return "riding";
     if (state >= 200 && state < 300) return "air";
     if (state >= 300 && state < 400) return "wipeout";
-    if (state >= 400 && state < 500) return "grinding";
+    // 701 is a grind too (Engine/Game/Build/20260929/launches.h, other_grind_state).
+    if ((state >= 400 && state < 500) || state == 701) return "grinding";
     if (state >= 500 && state < 600) return "off_board";
     if (state == 602) return "planted";
     return state ? "other" : "none";
@@ -107,35 +108,32 @@ struct WorldApi {
         need(L, plugin, "overlay", "reskate.skater.xray");
         return result(L, game(plugin).xray(plugin.id(), lua_toboolean(L, 1) != 0));
     }
-    // skater.grind_exit(wish): the next pop out of a grind, {side = "toe"|"heel"|"left"|"right",
-    // stance = "regular"|"goofy", strength = 0.1 to 1}; nil the game's own exit.
-    static int grind_exit(lua_State* L) {
+    // skater.shape_launch(from, shape): the launches out of `from` ("grind", "ollie", "no_comply" or
+    // "boneless") from now on, {across =, along =, up =} in m/s, each set if given (across the
+    // direction of travel, + its left); nil the game's own.
+    static int shape_launch(lua_State* L) {
         auto& plugin = plugin_of(L);
-        need(L, plugin, "skater.control", "reskate.skater.grind_exit");
-        if (lua_isnoneornil(L, 1)) return result(L, game(plugin).grind_exit(plugin.id(), std::nullopt));
-        luaL_checktype(L, 1, LUA_TTABLE);
-        GrindExitWish wish;
-        lua_getfield(L, 1, "side");
-        wish.side = luaL_checkstring(L, -1);
-        lua_pop(L, 1);
-        if (wish.side != "toe" && wish.side != "heel" && wish.side != "left" && wish.side != "right")
-            luaL_error(L, "a grind exit's side is \"toe\", \"heel\", \"left\" or \"right\"");
-        lua_getfield(L, 1, "stance");
-        if (!lua_isnil(L, -1)) {
-            const std::string stance = luaL_checkstring(L, -1);
-            if (stance == "regular") wish.stance = 1;
-            else if (stance == "goofy") wish.stance = 2;
-            else luaL_error(L, "a stance is \"regular\" or \"goofy\"");
-        }
-        lua_pop(L, 1);
-        lua_getfield(L, 1, "strength");
-        if (!lua_isnil(L, -1)) {
-            const double strength = luaL_checknumber(L, -1);
-            if (!(strength >= 0.1 && strength <= 1)) luaL_error(L, "a grind exit's strength is 0.1 to 1");
-            wish.strength = static_cast<float>(strength);
-        }
-        lua_pop(L, 1);
-        return result(L, game(plugin).grind_exit(plugin.id(), std::move(wish)));
+        need(L, plugin, "skater.control", "reskate.skater.shape_launch");
+        const std::string from = luaL_checkstring(L, 1);
+        if (from != "grind" && from != "ollie" && from != "no_comply" && from != "boneless")
+            luaL_argerror(L, 1, "a launch is out of \"grind\", \"ollie\", \"no_comply\" or \"boneless\"");
+        if (lua_isnoneornil(L, 2)) return result(L, game(plugin).shape_launch(plugin.id(), from, std::nullopt));
+        luaL_checktype(L, 2, LUA_TTABLE);
+        LaunchShape shape;
+        const auto speed = [&](const char* field, std::optional<float>& out) {
+            lua_getfield(L, 2, field);
+            if (!lua_isnil(L, -1)) {
+                const double value = luaL_checknumber(L, -1);
+                if (!(std::abs(value) <= 50)) luaL_error(L, "a launch's %s speed is -50 to 50 m/s", field);
+                out = static_cast<float>(value);
+            }
+            lua_pop(L, 1);
+        };
+        speed("across", shape.across);
+        speed("along", shape.along);
+        speed("up", shape.up);
+        if (!shape.across && !shape.along && !shape.up) luaL_argerror(L, 2, "a launch's shape sets across, along or up");
+        return result(L, game(plugin).shape_launch(plugin.id(), from, shape));
     }
     // board.motion(): the board's velocity in the last physics step, or nil.
     static int board_motion(lua_State* L) {
@@ -2354,7 +2352,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     lua_setfield(L, -2, "__metatable");
     lua_setfield(L, LUA_REGISTRYINDEX, "reskate.permissions");
     add_functions(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
-                                {"grind_exit", grind_exit}, {"reach", reach}, {"hand", hand}, {"joint", skater_joint}, {"pose", skater_pose}});
+                                {"shape_launch", shape_launch}, {"reach", reach}, {"hand", hand}, {"joint", skater_joint}, {"pose", skater_pose}});
     add_functions(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
                                {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}});
     add_functions(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}});

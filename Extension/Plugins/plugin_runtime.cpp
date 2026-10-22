@@ -12,6 +12,7 @@
 #include "Extension/UI/Overlay/overlay.h"
 #include "Extension/Console/commands.h"
 #include "Extension/Profile/local_profile_runtime.h"
+#include "Extension/Skater/launches.h"
 #include "Extension/Skater/score_hud.h"
 #include "Extension/Skater/trick_watch.h"
 #include "Extension/Trainer/trainer.h"
@@ -70,7 +71,12 @@ public:
         const auto t = trainer::telemetry();
         if (!t.skater) return std::nullopt;
         const float heading = std::remainder(t.heading * std::numbers::pi_v<float> / 180, 2 * std::numbers::pi_v<float>);
-        return SkaterState{t.position, heading, t.speed, t.vertical, t.airborne, t.air_time};
+        SkaterState state{t.position, heading, t.speed, t.vertical, t.airborne, t.air_time};
+        if (const auto facing = launches::facing()) {
+            state.right = facing->right;
+            state.switch_stance = facing->switch_stance;
+        }
+        return state;
     }
     // As the console's tp: refused in a session whose host has turned teleporting (and noclip) off.
     Teleport teleport(std::string_view plugin, const Vec3& position, float heading) override {

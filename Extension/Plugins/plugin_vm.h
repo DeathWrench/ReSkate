@@ -76,6 +76,9 @@ struct SkaterState {
     float vertical{};     // metres per second, up
     bool airborne{};
     float air_time{};     // seconds into the jump going on
+    // The skater root's right axis, and whether it rides switch (Extension/Skater/launches.h), when known.
+    std::optional<Vec3> right;
+    bool switch_stance{};
 };
 enum class Teleport { sent, unavailable, forbidden };
 // A trick of the local skater, read from the score HUD (Extension/Skater/trick_watch.h).
@@ -217,6 +220,7 @@ public:
     // The wider set's events, each to a plugin with its permission and a handler for it.
     void skater_changed(const char* state, const char* previous);
     void bailed(std::uint64_t wipeouts, std::optional<SlamNews> slam);
+    void launched(const LaunchNews& launch);
     // A game event with plain data (board_landed, body_hit, bail_end), to a plugin with `permission`.
     void game_event(std::string_view event, std::string_view permission, const Json& data);
     void chat_line(const ChatLine& line);

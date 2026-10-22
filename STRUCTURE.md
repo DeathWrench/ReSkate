@@ -147,7 +147,7 @@ commands and a `Test/` folder.
 | `ReplayKeyframes/` | replay keyframe curves and settings |
 | `Scripting/` | Lua startup, custom script loader, native blocking |
 | `Settings/` | gameplay/native/user settings, input bindings, engine tweaks, replay drafts |
-| `Skater/` | first person, noclip, free flight, physics tuning, no-bail, AI skaters, x-ray, breakable deck, grind exits, trick watch |
+| `Skater/` | first person, noclip, free flight, physics tuning, no-bail, AI skaters, x-ray, breakable deck, launches and pad hiding for plugins, trick watch |
 | `Throwdowns/` | native throwdowns, custom (plugin) modes, relay and wire format |
 | `Trainer/` | trick trainer: waypoints, jumps, landings, presets |
 | `Travel/` | location travel |

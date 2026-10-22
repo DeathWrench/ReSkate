@@ -129,12 +129,12 @@ struct FakeGame final : Game {
         calls.push_back(std::format("slow {} {:.2f}", plugin, speed));
         return {};
     }
-    std::string grind_exit(std::string_view plugin, std::optional<GrindExitWish> wish) override {
-        calls.push_back(wish ? std::format("grind {} {} {} {:.2f}", plugin, wish->side, wish->stance, wish->strength) : std::format("grind {} none", plugin));
+    std::string shape_launch(std::string_view plugin, std::string_view from, std::optional<LaunchShape> shape) override {
+        calls.push_back(std::format("launch {} {} {}", plugin, from, shape && shape->across ? std::format("{:.2f}", *shape->across) : "none"));
         return {};
     }
-    std::vector<GrindPop> pops;
-    std::vector<GrindPop> take_grind_pops(std::string_view) override { return std::exchange(pops, {}); }
+    std::vector<LaunchNews> launches;
+    std::vector<LaunchNews> take_launches() override { return std::exchange(launches, {}); }
     std::string hide_pad(std::string_view plugin, const PadHidden& h) override {
         calls.push_back(std::format("hide {} {} {} {}", plugin, h.left_trigger, h.right_trigger, h.left_x_grinding) +
                         (h.right_stick || h.left_stick_click || h.right_stick_click
@@ -3362,10 +3362,13 @@ void grind_exits_pick_the_side() {
     host.apply({contributed("grind-exits")});
     running(host, "grind-exits", environment);
     check(host.run_console("grindexit test"), "grindexit test");
-    check(environment.printed("grindexit: 7 passed, 0 failed") && !environment.printed("FAIL"),
+    check(environment.printed("grindexit: 11 passed, 0 failed") && !environment.printed("FAIL"),
           "Grind exits' own checks pass:\n" + printed_lines(environment) + environment.all());
-    check(game.called("grind grind-exits none"), "It hears its pops from the start");
     check(host.run_console("grindexit stance goofy"), "grindexit stance");
+    // The board travels along (1, 3) (the fake's board velocity), whose left is (0.95, -0.32); the
+    // root's right axis points that way, and a goofy skater riding normal has the toes there.
+    environment.local_skater = SkaterState{{0, 0, 0}, 0, 3, 0, false, 0};
+    environment.local_skater->right = Vec3{1, 0, 0};
     game.pad = PadInput{};
     game.state = 100;
     ticks(host, environment, 2);
@@ -3373,16 +3376,18 @@ void grind_exits_pick_the_side() {
     ticks(host, environment, 2);
     game.pad->right_trigger = 1;
     ticks(host, environment, 2);
-    check(game.called("grind grind-exits heel 2 1.00"), "RT asks for the heel side\n" + environment.all());
+    check(game.called("launch grind-exits grind -1.80"), "RT asks for the heel side, the right of travel\n" + environment.all());
     check(game.called("hide grind-exits false true true"), "and keeps RT and the stick's lean from the game\n" + environment.all());
-    game.pops.push_back({true, "applied", "toe_heel", -1, 1.5f, -1.5f});
+    const std::array<float, 2> travel{0.316f, 0.949f};
+    game.launches.push_back({"grind", {1.708f, 2, -0.569f}, {-1.708f, 2, 0.569f}, travel, 3.2f, "applied", "grind-exits"});
+    game.launches.push_back({"ollie", {0, 3, 4}, {0, 3, 4}, travel, 4, "none", ""});
     ticks(host, environment, 1);
     game.pad->right_trigger = 0;
     ticks(host, environment, 10);
-    check(game.called("grind grind-exits none") && game.called("hide grind-exits false false false"), "Let go, the game's own again");
+    check(game.called("launch grind-exits grind none") && game.called("hide grind-exits false false false"), "Let go, the game's own again");
     environment.lines.clear();
-    check(host.run_console("grindexit") && environment.printed("sides set: 1. Last: right of travel (toe_heel)"),
-          "It counts the pop:\n" + printed_lines(environment));
+    check(host.run_console("grindexit") && environment.printed("seen: 1, sides set: 1. Last: right of travel (toe_heel)"),
+          "It counts the pop out of the grind, not the ollie:\n" + printed_lines(environment));
 }
 void fpv_drone_flies_and_follows() {
     TestEnvironment environment;

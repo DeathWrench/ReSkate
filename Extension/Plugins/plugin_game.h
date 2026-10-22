@@ -127,19 +127,18 @@ struct PhysicsStep {
     };
     std::vector<Body> bodies;
 };
-// What a plugin asks of the next pop out of a grind: "toe", "heel", "left" or "right" (of travel),
-// the player's stance (0 not set, 1 regular, 2 goofy: what toe and heel need), and 0.1 to 1 of the
-// full sideways speed. And a pop as it went (Extension/Skater/grind_exit.h).
-struct GrindExitWish {
-    std::string side;
-    int stance{};
-    float strength{1};
+// What a plugin sets of a launch into the air, m/s, each if given: across the direction of travel
+// (+ its left), along it, and up. And a launch as it went (Extension/Skater/launches.h).
+struct LaunchShape {
+    std::optional<float> across, along, up;
 };
-struct GrindPop {
-    bool applied{};
-    std::string reason, basis;
-    int toward{}; // +1 the left of travel, -1 the right, 0 the game's own
-    float before{}, after{};
+struct LaunchNews {
+    std::string from;      // "grind", "ollie", "no_comply", "boneless" or "other"
+    Vec3 game{}, velocity{}; // as the game made it, as it left
+    std::optional<std::array<float, 2>> travel; // the horizontal direction of travel (x, z), when moving
+    float travel_speed{};
+    std::string reason; // "applied", "none", "slow", "not_ours"
+    std::string by;     // the plugin whose shape applied
 };
 // The last slam: its force and the game's cause number, and how long ago (ms).
 struct SlamNews {
@@ -730,10 +729,11 @@ public:
     // multiplayer session. And the speed it runs at for plugins now.
     virtual std::string game_speed(std::string_view /*plugin*/, float) { return unavailable; }
     virtual float game_speed_now() { return 1; }
-    // The next pop out of a grind (Extension/Skater/grind_exit.h); empty: the game's own exit. One
-    // plugin at a time. Its pops come back from take_grind_pops.
-    virtual std::string grind_exit(std::string_view /*plugin*/, std::optional<GrindExitWish>) { return unavailable; }
-    virtual std::vector<GrindPop> take_grind_pops(std::string_view /*plugin*/) { return {}; }
+    // The local skater's launches out of `from` ("grind", "ollie", "no_comply" or "boneless") from
+    // now on (Extension/Skater/launches.h); empty: the game's own. One plugin a kind at a time. Every
+    // launch comes back from take_launches.
+    virtual std::string shape_launch(std::string_view /*plugin*/, std::string_view /*from*/, std::optional<LaunchShape>) { return unavailable; }
+    virtual std::vector<LaunchNews> take_launches() { return {}; }
     // Pad controls kept from the game while any plugin asks: the triggers, and the left stick's
     // left/right while the skater grinds.
     // The skater carried up to a speed (m/s, 0 off) for the next 300 ms, eased down to it with may_slow.

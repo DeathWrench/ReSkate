@@ -23,7 +23,8 @@
 #include <mutex>
 #include "Extension/Assets/live_mods.h"
 #include "Extension/Skater/game_speed.h"
-#include "Extension/Skater/grind_exit.h"
+#include "Extension/Skater/launches.h"
+#include "Extension/Skater/pad_hide.h"
 #include "Extension/Skater/xray.h"
 #include "Extension/UI/hud_corner.h"
 #include "Extension/Throwdowns/custom_modes.h"
@@ -573,14 +574,12 @@ public:
         return {};
     }
     float game_speed_now() override { return game_speed::current(); }
-    std::string grind_exit(std::string_view plugin, std::optional<GrindExitWish> wish) override {
-        std::optional<grind_exit::Wish> w;
-        if (wish) {
-            using Side = grind_exit::Wish::Side;
-            w = grind_exit::Wish{wish->side == "toe" ? Side::toe : wish->side == "heel" ? Side::heel : wish->side == "right" ? Side::right : Side::left,
-                                 wish->stance, wish->strength};
-        }
-        return grind_exit::wish(plugin, w);
+    std::string shape_launch(std::string_view plugin, std::string_view from, std::optional<LaunchShape> shape) override {
+        const auto kind = launches::from_name(from);
+        if (!kind) return "a launch is out of a grind, ollie, no_comply or boneless";
+        std::optional<launches::Shape> s;
+        if (shape) s = launches::Shape{shape->across, shape->along, shape->up};
+        return launches::shape(plugin, *kind, s);
     }
     std::string set_throwdown_mode(std::string_view plugin, const ThrowdownMode& m) override {
         multiplayer::custom_throwdowns::Mode mode;
@@ -745,9 +744,13 @@ public:
     void remove_throwdown_mode(std::string_view plugin, std::string_view id) override {
         multiplayer::custom_throwdowns::remove_mode(plugin, id);
     }
-    std::vector<GrindPop> take_grind_pops(std::string_view plugin) override {
-        std::vector<GrindPop> out;
-        for (auto& p : grind_exit::take_pops(plugin)) out.push_back({p.applied, std::move(p.reason), std::move(p.basis), p.toward, p.before, p.after});
+    std::vector<LaunchNews> take_launches() override {
+        std::vector<LaunchNews> out;
+        for (auto& l : launches::take()) {
+            LaunchNews news{launches::name(l.from), l.game, l.velocity, std::nullopt, l.travel_speed, std::move(l.reason), std::move(l.by)};
+            if (l.travel[0] != 0 || l.travel[1] != 0) news.travel = l.travel;
+            out.push_back(std::move(news));
+        }
         return out;
     }
     // A speed boost: off where the session's host turned boosts off, and while a throwdown runs.
@@ -764,8 +767,8 @@ public:
         return {};
     }
     std::string hide_pad(std::string_view plugin, const PadHidden& h) override {
-        if (!grind_exit::available()) return "hiding pad controls is unavailable for this game build";
-        grind_exit::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
+        if (!pad_hide::available()) return "hiding pad controls is unavailable for this game build";
+        pad_hide::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
         return {};
     }
     std::optional<Vec3> board_velocity() override {
@@ -1045,7 +1048,7 @@ public:
         xray::tick();
         hud_corner::tick();
         game_speed::tick();
-        grind_exit::tick(client);
+        launches::tick(client);
         outfit_overlay::tick();
         board_pose::tick(base, local_skater_component(base, client));
         const bool allowed = !multiplayer::local_throwdown_active();
@@ -1557,7 +1560,8 @@ public:
         hud_corner::release(plugin);
         game_speed::ask(plugin, 1.0f);
         held_settings::release(plugin);
-        grind_exit::release(plugin);
+        launches::release(plugin);
+        pad_hide::release(plugin);
         trick_rewrite::release(plugin);
         trainer::release_plugin_tunes(plugin);
         if (reacher_ == plugin) {
