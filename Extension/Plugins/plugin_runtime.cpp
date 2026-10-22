@@ -184,6 +184,15 @@ std::mutex found_mutex;
 std::vector<Candidate> found;      // under found_mutex
 std::uint64_t found_generation{};  // under found_mutex
 std::uint64_t applied_generation{};
+// A change to the plugins waits for the game window to have the focus: a plugin being edited in
+// another window loads once, when the player comes back to the game, not at every save. The first
+// set loads at once, focused or not.
+bool held_logged{};
+bool game_focused() {
+    DWORD process{};
+    const auto window = GetForegroundWindow();
+    return window && GetWindowThreadProcessId(window, &process) && process == GetCurrentProcessId();
+}
 std::chrono::steady_clock::time_point last_tick{};
 // The local skater's tricks (Extension/Skater/trick_watch.h), and where and when the one going on began.
 tricks::TrickWatch trick_watch;
@@ -303,9 +312,16 @@ void on_client_tick() noexcept {
             {
                 std::lock_guard lock(found_mutex);
                 if (found_generation != applied_generation) {
-                    latest = found;
-                    applied_generation = found_generation;
-                    changed = true;
+                    if (applied_generation && !game_focused()) {
+                        if (!std::exchange(held_logged, true))
+                            logging::write(logging::Level::info, logging::Channel::plugins,
+                                           "Plugins: a change waits for the game to have the focus.");
+                    } else {
+                        latest = found;
+                        applied_generation = found_generation;
+                        changed = true;
+                        held_logged = false;
+                    }
                 }
             }
             if (changed) host->apply(latest);

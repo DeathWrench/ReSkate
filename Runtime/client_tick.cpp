@@ -583,7 +583,9 @@ void update_model(std::uintptr_t client, TickState& frame) {
     // RESKATE_STARTUP_COMMANDS="load skate1map;noclip 1" (development, and the launcher's
     // -map <name>, which is a "load" at the front of it): console commands
     // queued in order once the world is up and can accept them, so a build can be exercised
-    // without anyone driving the overlay. A load waits for its destination to be listed.
+    // without anyone driving the overlay. A load waits for its destination to be listed, for 20
+    // seconds once the world can load (the launcher's start map, start_maps.h, falls back to the
+    // map the game opened in).
     {
         static std::optional<std::vector<std::string>> startup_commands;
         if (!startup_commands) {
@@ -624,12 +626,26 @@ void update_model(std::uintptr_t client, TickState& frame) {
                 }
             }
             bool ready = !wait && r.model.can_queue_load && !r.requests.loading();
+            // A destination still not listed this long after the world could load it is not
+            // installed (a map mod switched off or left out of the merge): the load is dropped and
+            // the game stays where it started, instead of the list waiting on it for ever.
+            static std::optional<std::chrono::steady_clock::time_point> missing_since;
             if (ready && lower(text).starts_with("load ")) {
                 const auto wanted = lower(text.substr(5, text.find(' ', 5) == std::string::npos ? std::string::npos : text.find(' ', 5) - 5));
                 ready = std::ranges::any_of(r.model.levels, [&](const dingosdk::overlay::Level& level) {
                     return level.can_load && (lower(level.asset).find(wanted) != std::string::npos ||
                                               lower(level.display_name) == wanted);
                 });
+                const auto now = std::chrono::steady_clock::now();
+                if (ready) missing_since.reset();
+                else if (!missing_since) missing_since = now;
+                else if (now - *missing_since >= std::chrono::seconds(20)) {
+                    dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::level,
+                        "Startup command dropped: {} is not an installed map (is its mod switched off?); staying in this map.",
+                        text.substr(5));
+                    missing_since.reset();
+                    startup_commands->erase(startup_commands->begin());
+                }
             }
             if (ready && r.requests.enqueue(ConsoleRequest{text}, request_context(r), GetCurrentThreadId())) {
                 dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::level,

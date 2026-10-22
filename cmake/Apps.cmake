@@ -4,9 +4,9 @@ if(WIN32)
         Launcher/gui_settings.cpp Launcher/gui_sign_in.cpp Launcher/gui_mods.cpp Launcher/gui_mods_browse.cpp Launcher/gui_mods_profiles.cpp
         Launcher/gui_gamepad.cpp Launcher/gamepad_input.cpp Launcher/gui_changelog.cpp Launcher/gui_legal.cpp Launcher/game_settings.cpp
         Launcher/updater.cpp Launcher/mod_manager.cpp Launcher/mod_profiles.cpp Launcher/thunderstore.cpp
-        Launcher/problem.h)
+        Launcher/start_maps.cpp Launcher/problem.h)
     target_link_libraries(dingosdk_launcher PRIVATE dingosdk_logging dingosdk_content_cache_install dingosdk_world_layer_scan dingosdk_launcher_support dingosdk_initfs
-        dingosdk_mod_list dingosdk_mods dingosdk_json dingosdk_miniz dingosdk_imgui dingosdk_playstation_input winhttp shell32 dwmapi windowscodecs ole32)
+        dingosdk_mod_list dingosdk_custom_level_manifest dingosdk_mods dingosdk_json dingosdk_miniz dingosdk_imgui dingosdk_playstation_input winhttp shell32 dwmapi windowscodecs ole32)
     set_target_properties(dingosdk_launcher PROPERTIES OUTPUT_NAME "ReSkateLauncher")
     dingosdk_version_info(dingosdk_launcher "ReSkate launcher" "ReSkateLauncher.exe" VFT_APP)
 endif()
@@ -40,6 +40,10 @@ if(DINGOSDK_BUILD_LAUNCHER_TESTS AND WIN32)
     target_link_libraries(dingosdk_thunderstore_package_tests PRIVATE dingosdk_json)
     target_include_directories(dingosdk_thunderstore_package_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME thunderstore_package COMMAND dingosdk_thunderstore_package_tests)
+    add_executable(dingosdk_start_maps_tests Launcher/Test/start_maps_tests.cpp Launcher/start_maps.cpp)
+    target_link_libraries(dingosdk_start_maps_tests PRIVATE dingosdk_mod_list dingosdk_custom_level_manifest)
+    target_include_directories(dingosdk_start_maps_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    add_test(NAME launcher_start_maps COMMAND dingosdk_start_maps_tests "${CMAKE_CURRENT_BINARY_DIR}/start-maps-fixture")
     add_executable(dingosdk_game_settings_tests Launcher/Test/game_settings_tests.cpp Launcher/game_settings.cpp)
     target_include_directories(dingosdk_game_settings_tests PRIVATE "${PROJECT_SOURCE_DIR}")
     add_test(NAME launcher_game_settings COMMAND dingosdk_game_settings_tests)

@@ -5,6 +5,7 @@
 #include "launch.h"
 #include "text_encoding.h"
 #include "mod_profiles.h"
+#include "start_maps.h"
 #include "thunderstore.h"
 
 #include "Engine/Vfs/mod_conflicts.h"
@@ -194,6 +195,8 @@ struct Settings {
     bool gpu_diagnostics{};
     bool discord_status{true};
     bool offline{};
+    // The map the game starts in, by its level asset (start_maps.h); empty: San Vansterdam.
+    std::string start_map;
     int menu_key{static_cast<int>(launcher::default_menu_key)};
     int console_key{static_cast<int>(launcher::default_console_key)};
     int log_level{2};
@@ -433,6 +436,9 @@ struct Ui {
     Changelog notes;
     Legal legal;
     int settings_tab{};         // GAME, DISPLAY, KEYS, ADVANCED, then the game's own pages
+    // The maps Settings offers to start in, read from the Mods folder when GAME is first drawn
+    // after Settings opens.
+    std::optional<std::vector<launcher_start_maps::StartMap>> start_maps;
     int binding{};              // 1 = menu key, 2 = console key, while waiting for a press
     std::string key_error;
     bool mods{};
