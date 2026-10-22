@@ -607,6 +607,17 @@ void update_model(std::uintptr_t client, TickState& frame) {
                 }
             }
         }
+        {
+            // The start map was the first level the game loaded (queue_menu_bam): not again.
+            std::lock_guard lock(r.mutex);
+            if (std::exchange(r.startup_map_taken, false) && !startup_commands->empty() && startup_commands->front().size() > 5 &&
+                std::equal(startup_commands->front().begin(), startup_commands->front().begin() + 5, "load ",
+                           [](char a, char b) { return std::tolower(static_cast<unsigned char>(a)) == b; })) {
+                dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::level,
+                    "Startup command done: the game started in {}.", startup_commands->front().substr(5));
+                startup_commands->erase(startup_commands->begin());
+            }
+        }
         if (!startup_commands->empty() && named_context_ready) {
             std::lock_guard lock(r.mutex);
             const auto& text = startup_commands->front();

@@ -5,9 +5,10 @@
 #include <string_view>
 #include <vector>
 
-// The map the game starts in (Settings > GAME > Start map). The game always starts in San
-// Vansterdam; another map is loaded once it is up, as the console's "load" would (the launcher's
-// -map, launch.cpp), so San Vansterdam is chosen by asking for nothing.
+// The map the game starts in (Settings > GAME > Start map). It goes to the game as the launcher's
+// -map does (launch.cpp): a "load" at the front of the startup commands, which the game's first level
+// load from the splash takes in San Vansterdam's place (Runtime/level_requests.cpp, queue_menu_bam),
+// so the game opens straight in it. San Vansterdam is chosen by asking for nothing.
 namespace dingosdk::launcher_start_maps {
 
 inline constexpr std::string_view san_vansterdam = "Levels/Game/BAM_LevelRoot/BAM_LevelRoot";

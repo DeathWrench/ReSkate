@@ -84,6 +84,9 @@ struct Runtime {
     bool transition_seen{}, initialized{}, catalog_logged{},
         native_tick_ready{}, native_loading_logging{}, fixed_stop_entitlement_route_ready{}, menu_load_queued{}, startup_load_queued{};
     std::atomic<bool> menu_splash_ready{};
+    // The first level the game loads was the launcher's start map, the "load" at the front of the
+    // startup commands (queue_menu_bam): the startup commands drop it rather than load it again.
+    bool startup_map_taken{};
     std::atomic<bool> observer_failed{};
     // Refreshed with the 500 ms world model; the spectate camera reads it every tick.
     bool spectate_ready{};

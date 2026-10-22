@@ -89,6 +89,16 @@ void to_cleanup(Placement& p, std::uint64_t now) {
     if (p.step != Step::cleanup) p.sent = 0;
     p.cancelling = true; p.step = Step::cleanup; p.until = now + 15000;
 }
+// Left before its setup was asked for (a plugin refusing its card at `open`): nothing of the game's
+// is open to back out of, so the registration just ends. An exit the game never takes stays
+// pending, and every later flag's setup waits behind it (2026-10-21, hosting with a player).
+bool leave_unopened(Placement& p) {
+    if (p.step != Step::open || p.created || p.setup_seen) return false;
+    p.owner_left = true;
+    retire(p);
+    p.status.clear();
+    return true;
+}
 void open_request(Placement& p, const Request& r, std::uint64_t now) {
     reset(p);
     p.step = Step::open; p.mode = r.mode; p.game = r.game; p.options = r.options; p.world = r.world;
@@ -117,7 +127,17 @@ bool navigate(const menu_data::Context& c, std::string_view name, std::uint32_t 
     const auto current = c.field(roots.front().model, 0xf3ba9cf8);
     const auto metadata = c.field(roots.front().model, 0xf437b255);
     const auto pending = read<std::uint32_t>(c.address(current));
-    if (pending && pending != consumed) return false;
+    if (pending && pending != consumed) {
+        // The game's own navigation is still on its way: tried again at the next tick. Said every
+        // few seconds, with what it is, for a setup that never opens.
+        static std::uint64_t next_note{};
+        if (const auto now = GetTickCount64(); now >= next_note) {
+            next_note = now + 3000;
+            logging::log(logging::Level::info, logging::Channel::ui, "Native flag: navigation {} waits; the game's navigation 0x{:08x} is pending.",
+                         name, pending);
+        }
+        return false;
+    }
     c.set(current, game::native_name_hash(name));
     c.array(metadata, std::vector<std::int32_t>{-1});
     logging::log(logging::Level::info, logging::Channel::ui, "Native flag: navigation {}.", name);
@@ -210,7 +230,7 @@ bool leave() noexcept {
         if (p.step == Step::idle) return false;
         note(p, "leave", {std::to_string(p.game)});
         p.pending.reset(); // Quit/Cancel must not reopen a queued replacement
-        to_cleanup(p, GetTickCount64());
+        if (!leave_unopened(p)) to_cleanup(p, GetTickCount64());
     }
     flush();
     return true;
@@ -381,6 +401,8 @@ void tick(const menu_data::Context& c) {
             return;
         }
         if ((p.step == Step::open || p.step == Step::setup) && !p.created && !p.setup_seen && now >= p.until) {
+            logging::log(logging::Level::warning, logging::Channel::ui, "Native flag: the setup for {} did not open in 15 s (step {}).", p.mode,
+                         static_cast<unsigned>(p.step));
             retire(p); p.status = "The setup did not open. Select the mode to try again.";
             return; // no native queue was created; do not close another menu
         }
@@ -480,7 +502,7 @@ void leave() noexcept {
     using namespace multiplayer::native_flag;
     auto& p = placement(); std::lock_guard lock(p.mutex);
     p.pending.reset();
-    if (p.step == Step::idle) return;
+    if (p.step == Step::idle || leave_unopened(p)) return;
     p.owner_left = true;
     to_cleanup(p, GetTickCount64());
 }

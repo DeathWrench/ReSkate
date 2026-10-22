@@ -543,8 +543,13 @@ void on_local(Relay &r, ThrowdownLocalAction &a, std::uint64_t now) {
             }
             if(joined) {
                 close_hosted(r);leave_mirrors(r,a.mmid);flag.claimed=true;
+                note("you joined another player's {} (MMID {:#x}); its plugin hears join.",flag.offer.mode,a.mmid);
             }
-            else if(const auto local=local_native_player_id())queue_throwdown_remove(local);
+            else {
+                note("you joined another player's {} (MMID {:#x}), but {}; you were taken out of its queue.",flag.offer.mode,a.mmid,
+                     !mode?"no plugin here registers that mode":!flag.offer.open?"it is closed":"another throwdown of yours is still open");
+                if(const auto local=local_native_player_id())queue_throwdown_remove(local);
+            }
             return;
         }
         // Joining a queue removes the player from any other one and destroys a drop it hosts.
