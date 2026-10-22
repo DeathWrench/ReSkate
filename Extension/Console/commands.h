@@ -25,6 +25,8 @@ void register_perf_commands(Commands &);
 // perf_commands.cpp: starts `perf memory`'s trace with the game when RESKATE_MEMORY_TRACE asks for it.
 void start_memory_trace_from_environment() noexcept;
 void register_item_commands(Commands &);
+// Extension/Rendering/Capture/capture_commands.cpp: `capture depth`, research for reskate.capture.
+void register_capture_commands(Commands &);
 void register_trainer_commands(Commands &);
 void register_replay_keyframes_commands(Commands &);
 void register_plugin_commands(Commands &);

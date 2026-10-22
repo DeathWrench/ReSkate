@@ -1,7 +1,0 @@
-{
-    "name": "ReSkate_Hostile",
-    "version_number": "0.1.0",
-    "website_url": "https://github.com/Dingo-Shenanigans/ReSkate",
-    "description": "Attacks the ReSkate plugin sandbox on purpose, to check it holds. For testing only.",
-    "dependencies": []
-}

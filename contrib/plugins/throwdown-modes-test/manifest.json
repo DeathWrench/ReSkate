@@ -1,7 +1,0 @@
-{
-    "name": "Throwdown_Modes_Test",
-    "version_number": "0.1.0",
-    "website_url": "https://github.com/Dingo-Shenanigans/ReSkate",
-    "description": "Two test modes on the Throwdowns page: pick one, set it up, place its flag and press Start. Says in chat what the plugin hears.",
-    "dependencies": []
-}

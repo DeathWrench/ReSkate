@@ -181,12 +181,13 @@ inline void activate(State& s, const overlay::Model& m, const overlay::Callbacks
         // This is a personal preference, including while following a host.
         console(m.parks.randomize_on_launch ? "park random-on-launch 0" : "park random-on-launch 1",
             m.parks.available);
-    } else if (command == "noclip" || command == "no-bail" || command == "freecam" || command == "speed") {
+    } else if (command == "noclip" || command == "no-bail" || command == "revert-boost" || command == "freecam" || command == "speed") {
         const auto& d = m.debug;
         overlay::DebugRequest request;
         bool enabled = false;
         if (command == "noclip") { request = {overlay::DebugAction::set_noclip, !d.noclip}; enabled = d.noclip_available || d.noclip; }
         if (command == "no-bail") { request = {overlay::DebugAction::set_no_bail, !d.no_bail}; enabled = d.no_bail_available || d.no_bail; }
+        if (command == "revert-boost") { request = {overlay::DebugAction::set_revert_boost_enabled, !d.revert_boost}; enabled = true; }
         if (command == "freecam") { request = {overlay::DebugAction::set_free_camera, !d.free_camera}; enabled = d.available && d.camera_available; }
         if (command == "speed") {
             constexpr std::array<float, 7> speeds{.6f, 3.f, 5.f, 15.f, 60.f, 300.f, 1500.f};
@@ -301,6 +302,7 @@ inline Page render(State& s, const overlay::Model& m, const overlay::CallbacksV3
         text(p.main, "player-title", "SKATE YOUR WAY");
         toggle(p.main, "noclip", "Noclip", m.debug.noclip, (m.debug.noclip_available || m.debug.noclip) && cb.queue_debug);
         toggle(p.main, "no-bail", "No bail", m.debug.no_bail, (m.debug.no_bail_available || m.debug.no_bail) && cb.queue_debug);
+        toggle(p.main, "revert-boost", "Revert Boost", m.debug.revert_boost, cb.queue_debug != nullptr);
         toggle(p.main, "freecam", "Freecam", m.debug.free_camera, m.debug.available && m.debug.camera_available && cb.queue_debug);
         toggle(p.main, "board-wear", "Board wear", m.offline.board_wear.effective,
             m.offline.board_wear.available && cb.queue_offline_feature);

@@ -410,4 +410,6 @@ void tick(std::uintptr_t base, std::uintptr_t skater, bool ready, bool prepare) 
         if (s.way != Way::none) fail(s, "an error in the walk");
     }
 }
+std::string menu_buttons(std::uintptr_t base) noexcept { return menu_page(base); }
+bool is_skaters_page(const std::string& buttons) noexcept { return skaters_page(buttons); }
 } // namespace dingosdk::character_room

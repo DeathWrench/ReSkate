@@ -15,13 +15,13 @@ namespace {
 // throwdown kit (modes, documents, the native flag); "variants" choosing which of its own mod's
 // variants is in the game (reskate.package.choose). A manifest's "resident" list and "variants" are
 // the merge's (Engine/Vfs/mod_list.h ResidentAssets, Variants), not the plugin host's.
-constexpr std::array<std::string_view, 47> permissions{
+constexpr std::array<std::string_view, 48> permissions{
     "console", "storage", "overlay", "menu", "ui.screen", "input", "hud", "events.tricks", "events.skater",
     "skater.read", "skater.teleport", "skater.control", "skater.animation", "trainer", "camera",
     "world.raycast", "world.objects", "world.entities", "world.environment", "world.ai", "travel", "session.read",
     "session.skaters", "session.nametags", "net.session", "net.http", "voice.control", "chat.read",
     "chat.send", "chat.local", "server", "throwdowns", "replay", "music", "progression.read", "settings.read", "audio.ui", "audio", "outfit", "board", "mods.read",
-    "events.physics", "game.speed", "files", "variants", "settings.write", "room"};
+    "events.physics", "game.speed", "files", "variants", "settings.write", "room", "capture"};
 }
 
 bool known_permission(std::string_view name) noexcept {

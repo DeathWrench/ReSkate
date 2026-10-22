@@ -6,7 +6,7 @@
 
 // Game content ReSkate carries itself: packs of game assets built by ReSkate Studio, zipped into
 // ReSkate.dll (the Throwdowns logo grid, tools/builtin/build_throwdown_menu_pack.py). Nobody installs or sees
-// them. Official mods (below) are the other content ReSkate keeps for every player. Before a merge each is unpacked under Mods/.reskate-builtin/<name> (a dot folder,
+// them. Before a merge each is unpacked under Mods/.reskate-builtin/<name> (a dot folder,
 // which no mod list shows) when the one embedded differs from what is there, and the catalogue
 // merges it after every installed mod, always on (mod_catalog.cpp).
 namespace dingosdk::mods {
@@ -24,32 +24,7 @@ std::vector<BuiltinPack> unpack_builtin_packs(const std::filesystem::path& mods_
 // into `target`; false with `issue` saying why. For tests and tools: unpack_builtin_packs uses it.
 bool unpack_builtin_pack(std::span<const unsigned char> bytes, const std::filesystem::path& target, std::string& issue) noexcept;
 
-// Official mods (Launcher/official_mods.h): Thunderstore packages the ReSkate backend names, which
-// the player installs on the launcher's OFFICIAL tab. Each is a mod like any other, in
-// Mods/<Namespace-Name> and in mods.json (switched on and off there, and placed in the load
-// order), with a stamp file holding its version (written last, so a folder without one is not a
-// whole official mod). One switched off does not load, and the feature it is made for does not start.
-inline constexpr std::string_view official_stamp = ".official-version";
-// Where official mods were kept before they were mods like any other: Mods/.reskate-official, with
-// the ones turned off listed in its official-off.txt. move_official_mods takes them out of it; the
-// launcher keeps the last list of official mods it read there.
-inline constexpr std::string_view official_folder = ".reskate-official";
-inline constexpr std::string_view official_off_file = "official-off.txt";
-// Moves the official mods kept in Mods/.reskate-official into the Mods folder, each at the bottom
-// of the load order (where they loaded from there), switched off when they were turned off there.
-// Says what it did, a line each. Does nothing once there is nothing left there. Never throws.
-std::vector<std::string> move_official_mods(const std::filesystem::path& mods_root) noexcept;
-// Whether the mod folder `directory` is an official mod (it has its stamp). Never throws.
-bool official_mod(const std::filesystem::path& directory) noexcept;
-// Whether the player switched the official mod `folder` off (in mods.json). Never throws.
-bool official_off(const std::filesystem::path& mods_root, std::string_view folder) noexcept;
-// Switches it off or back on; false when mods.json could not be written. Never throws.
-bool set_official_off(const std::filesystem::path& mods_root, std::string_view folder, bool off) noexcept;
-// Whether the official mod `folder` is installed (the player installs them on the launcher's
-// OFFICIAL tab) and not switched off: what the feature it is made for needs to start. Never throws.
-bool official_in_use(const std::filesystem::path& mods_root, std::string_view folder) noexcept;
-// Mods that came before an official one and are retired with it (Fourth Studio's deprecated first
-// Board Break), by folder name; the launcher takes them away and nothing loads them.
+// Mods ReSkate retired (Fourth Studio's deprecated first Board Break), by folder name: nothing loads them.
 bool retired_mod(std::string_view folder) noexcept;
 // Whether the installed mod `folder` (Mods/<folder>) is left out because ReSkate sees to it: a
 // retired one. Never throws.

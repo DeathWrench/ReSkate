@@ -94,6 +94,9 @@ add_library(dingosdk_runtime SHARED
     Extension/World/light_table_guard.cpp
     Extension/World/stack_check_report.cpp
     Extension/World/texture_handle_limit.cpp
+    Extension/World/texture_handle_guard.cpp
+    Extension/World/physics_wake_guard.cpp
+    Extension/World/streaming_copy_guard.cpp
     Extension/Settings/replay_drafts.cpp
     Extension/UI/ui_pointer_skip.cpp
     Extension/Settings/named_settings.cpp
@@ -183,6 +186,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Trainer/trainer_presets.cpp
     Extension/Trainer/trainer_jump.cpp
     Extension/Trainer/trainer_classes.cpp
+    Extension/Trainer/trainer_gamestate.cpp
     Extension/Trainer/trainer_commands.cpp
     Extension/Trainer/trainer_session.cpp
     Extension/Trainer/trainer_waypoint.cpp
@@ -208,6 +212,9 @@ add_library(dingosdk_runtime SHARED
     Extension/Customization/item_origins.cpp
     Extension/Customization/local_customization_runtime.cpp
     Extension/Customization/item_browser.cpp
+    Extension/Customization/worn_items.cpp
+    Extension/Rendering/Capture/capture_runtime.cpp
+    Extension/Rendering/Capture/capture_commands.cpp
     Extension/Progression/local_entitlement_trigger_runtime.cpp
     Extension/Progression/local_neighborhood_runtime.cpp
     Extension/Customization/local_player_card_runtime.cpp
@@ -338,8 +345,7 @@ if(EXISTS "${dingosdk_emotes}/emotes.json" AND EXISTS "${dingosdk_emotes}/emotes
 endif()
 # Game content ReSkate carries itself (Engine/Vfs/builtin_packs.h), one zip each in assets/builtin:
 # the Throwdowns page's logo grid (tools/builtin/build_throwdown_menu_pack.py). A missing zip is
-# left out. (Mods that are content for ReSkate's features, such
-# as Board Break's decks, are official mods the launcher downloads: Launcher/official_mods.h.)
+# left out.
 # Each zip is made into a zstd pack by ReSkateBuiltinPacker as the build goes (again only when the
 # zip changes), which is what the DLL carries: compressed whole, a pack's repeated files cost
 # next to nothing.
@@ -399,3 +405,4 @@ if(EXISTS "${dingosdk_startup_art}")
         "STARTUP_SPLASH RCDATA \"${dingosdk_startup_art_native}\"\n")
     target_sources(dingosdk_runtime PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/startup_art.rc")
 endif()
+target_link_libraries(dingosdk_runtime PRIVATE dingosdk_capture)

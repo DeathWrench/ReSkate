@@ -17,9 +17,6 @@ void initialize_throwdown_lab(std::uintptr_t base) noexcept;
 // Called after every authored expression (vm = the expression that just ran); sends
 // queued events from the client realm and reads results off server graphs.
 void pump_throwdown_lab(std::uintptr_t vm) noexcept;
-// Diagnostic only: observe the real input/VM trigger without changing its flow.
-void tick_official_panel_trace(bool start_down,std::uint64_t now) noexcept;
-bool official_panel_trace_active() noexcept;
 // Substitutes only the preview prefab in this invocation's constant page.
 // The shipped graph resource and official Throwdowns remain unchanged.
 void execute_throwdown_preview_expression(std::uintptr_t vm,std::uint32_t pc,std::uintptr_t profiler,

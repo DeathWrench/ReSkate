@@ -1,9 +1,0 @@
-{
-    "api": 1,
-    "entry": "plugin/main.lua",
-    "side": "client",
-    "permissions": ["console", "skater.read", "skater.teleport", "world.raycast", "events.tricks", "overlay", "menu", "audio.ui", "net.session",
-                    "chat.send", "world.objects", "travel", "net.http", "ui.screen", "input",
-                    "chat.local", "skater.control", "camera", "server",
-                    "skater.animation", "throwdowns", "outfit", "board"]
-}

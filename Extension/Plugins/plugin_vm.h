@@ -263,6 +263,7 @@ private:
     friend struct WorldApi;
     friend struct ServicesApi;
     friend struct KitApi;
+    friend struct CaptureApi;
     struct Command { std::string help; int function{}; };
     struct Timer { double due{}, every{}; int function{}; };
     using Clock = std::chrono::steady_clock;
@@ -359,8 +360,8 @@ private:
     int controls_{}, edits_{}, environments_{}, voices_{}, musics_{};
     double travel_at_{-1e9}, chat_at_{-1e9}, local_chat_second_{}, server_second_{}, host_at_{-1e9}, wipeout_at_{-1e9};
     int local_chats_{}, server_calls_{};
-    double files_second_{}, dialog_second_{};
-    int file_calls_{}, dialog_calls_{};
+    double files_second_{}, dialog_second_{}, reveal_second_{};
+    int file_calls_{}, dialog_calls_{}, reveals_{};
     std::optional<std::pair<Vec3, float>> trainer_point_;
     std::set<std::string, std::less<>> binds_;
     std::vector<PanelEntry> screens_;

@@ -33,11 +33,9 @@ analysis/raw/**/*.res
 # Drone model sources (assets/models/fpv/CREDITS.md): large; only the prepared drone.glb is kept.
 /assets/models/fpv/dji_avata2.glb
 /assets/models/fpv/fpv_drone.glb
-# SmokeyDawg58's ReSkate_Throwdown mod: its assets stay out (his to publish); its plugin is kept.
-/contrib/plugins/SmokeyDawg58-ReSkate_Throwdown/*
-!/contrib/plugins/SmokeyDawg58-ReSkate_Throwdown/plugin/
-!/contrib/plugins/SmokeyDawg58-ReSkate_Throwdown/reskate-plugin.json
-/contrib/plugins/*.fbmod
+# The plugins are kept on this machine, out of the repository (dingosdk_plugin_tests runs them
+# from here when they are present).
+/contrib/plugins/
 
 # vtf's linux development configuration
 .vscode/

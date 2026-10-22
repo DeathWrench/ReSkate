@@ -285,6 +285,16 @@ std::optional<Budget> budget_of(const Card& card) {
         adapter->Release();
     }
     factory->Release();
+    // An integrated GPU's own memory is the PC's RAM, so its budget is only what the PC has free,
+    // less room for the rest of the game. 2.1.1's out-of-memory exits (the game's E_OUTOFMEMORY,
+    // 3,300 reports) were mostly 8 to 16 GB PCs with RAM and page file nearly full, and integrated
+    // GPUs whose custom-map pool had been set to 1.3 to 2.2 GB from that budget (2026-10-21).
+    constexpr std::uint64_t integrated_below = 1ull << 30, reserve = 2ull << 30;
+    if (MEMORYSTATUSEX status{sizeof(status)}; result && card.memory < integrated_below && GlobalMemoryStatusEx(&status)) {
+        const auto spare = (std::min)(status.ullAvailPhys, status.ullAvailPageFile);
+        const auto room = spare > reserve ? spare - reserve : 0;
+        result->budget = (std::min)(result->budget, result->usage + room);
+    }
     return result;
 }
 // KiB for a custom map's pool from what is free now: half of it, the rest left for the map's
@@ -1071,10 +1081,6 @@ void update_model(std::uintptr_t client, TickState& frame) {
             record(fixed_stops.json);
             r.last_fixed_stop_entitlement_provider_observation = fixed_stops.json;
         }
-        if (neighborhoods.json != r.last_neighborhood_unlock_override_observation) {
-            record(neighborhoods.json);
-            r.last_neighborhood_unlock_override_observation = neighborhoods.json;
-        }
         std::lock_guard lock(r.mutex);
         r.offline_model = std::move(offline.model);
         ++r.offline_revision;
@@ -1586,6 +1592,11 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
                         "(player distance {:.0f} m); map {}. {} handle(s).",
                         gigabytes(counters.PrivateUsage), gigabytes(counters.WorkingSetSize), players, skaters, mp.player_distance,
                         session && !mp.map.empty() ? mp.map : r.multiplayer_map, handles);
+                    // What the whole PC has left: the game's out-of-memory exits come when its RAM and
+                    // page file are full, whatever the game itself holds.
+                    if (MEMORYSTATUSEX status{sizeof(status)}; GlobalMemoryStatusEx(&status))
+                        line += std::format(" The PC has {:.1f} of {:.1f} GB of RAM free and {:.1f} GB of its commit limit.",
+                                            gigabytes(status.ullAvailPhys), gigabytes(status.ullTotalPhys), gigabytes(status.ullAvailPageFile));
                     try {
                         std::thread([line = std::move(line)]() mutable {
                             try {

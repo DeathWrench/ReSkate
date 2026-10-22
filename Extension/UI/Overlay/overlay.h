@@ -119,6 +119,29 @@ enum class DebugAction {
     set_first_person_camera_cycle,
     reset_first_person_arm,
     set_free_camera_fov,  // 0 = the game's own FOV
+    set_revert_boost_enabled,
+    set_revert_boost_speed,
+    set_probe_enabled,
+    set_dark_pop_enabled,
+    set_dark_pop_unpatch,
+    set_dark_pop_hold,
+    set_dark_pop_one_press,
+    set_dark_pop_route_stay,
+    set_dark_pop_route_guard,
+    set_dark_pop_keep_speed,
+    set_dark_pop_catch,
+    set_dark_pop_feet,
+    set_dark_pop_adaptive,
+    set_dark_pop_timeout,
+    set_dark_pop_strength,
+    set_dark_pop_hold_landing,
+    set_dark_pop_dark_exit,
+    set_dark_pop_full_flight,
+    set_dark_pop_hold_flight,
+    set_dark_pop_stay_physical,
+    set_dark_pop_early_physics,
+    set_dark_pop_reaim,
+    set_dark_pop_hide_dpad,
     // Keep the last action in sync with the bound in request_scheduler.h.
 };
 
@@ -177,9 +200,37 @@ struct DebugModel {
     bool settings_owned = false;
     // ReSkate free-flight speed in world units per second.
     float camera_speed = 15.0f;
-    float forward_velocity_speed = 20.0f;
-    float up_velocity_speed = 20.0f;
-    float offboard_up_velocity_speed = 20.0f;
+    // Boost speeds; 0 is off (the stock setting).
+    float forward_velocity_speed = 0.0f;
+    float up_velocity_speed = 0.0f;
+    float offboard_up_velocity_speed = 0.0f;
+    // Revert Boost: a forward speed added when the game auto reverts a landing.
+    bool revert_boost = false;
+    float revert_boost_speed = 1.0f; // strength multiplier
+    std::uint64_t revert_boost_count = 0;
+    // Dark Pop: the pre-0.32.0 dark pop (see no_bail.cpp). The rest are its advanced settings.
+    bool dark_pop = false;
+    bool dark_pop_unpatch = true;   // placement entered the pre-0.32.0 way at the dark landing
+    bool dark_pop_hold = true;      // the old hold (foot-attach mode 2) in the landing window
+    bool dark_pop_one_press = true; // the D-pad must be let go before the next arming
+    float dark_pop_route_stay = 0.0f;   // ticks of 601 before the stay bit is cancelled (the sink length; 1.9: 0, the 1.0 setting, by default)
+    float dark_pop_route_guard = 12.0f; // pop ticks guarded after a 601 exit
+    bool dark_pop_keep_speed = true;    // the landing's horizontal speed put back at the 601 exit
+    bool dark_pop_catch = true;         // 1.0: a dismount straight from the air on an armed dark flight is routed too
+    bool dark_pop_feet = false;         // 1.7: feet-only hold (1.9: off by default) (the plant's own foot attaches cleared in the sink, a two-tick one requested)
+    bool dark_pop_adaptive = true;      // 1.7: the sink ends the tick the board starts rolling over
+    bool dark_pop_timeout = true;       // 1.9: a landing 201 timed out on (board dark, resting) is routed to the sink too
+    float dark_pop_strength = 8.0f;     // 2.4: the launch (m/s) the bodies' vertical velocity is lifted to on the pop's second and third ticks; 0 = off
+    bool dark_pop_hold_landing = true;  // 2.0: +0x13cc bit 20 raised around the chooser so a timed-out landing can be staged by the game
+    bool dark_pop_dark_exit = true;     // 2.1: the board put back as it landed on the sink's exit tick
+    bool dark_pop_full_flight = true;   // 2.1: the landing countdown floored at the ballistic time on a pop's flight
+    bool dark_pop_hold_flight = true;   // 2.3: contact landings blocked on a pop's flight while the countdown runs
+    float dark_pop_stay_physical = 6.0f; // 2.5: ticks after the exit the pop stays in the physics air state (the jump-fired bit hidden); 0 = off
+    bool dark_pop_early_physics = true;  // 2.6: a pop whose jump fired on its first ticks (180 landings) stays physical for the whole flight
+    bool dark_pop_reaim = true;
+    bool dark_pop_hide_dpad = true;      // 3.1: in the air the game's polls see the D-pad let go (no Quick Drop radial)          // 2.7: instead, after Stay physical ticks the animation's flight curve is re-aimed from where the body is and handed over
+    std::uint64_t dark_pop_count = 0;
+    bool probe = false; // Dark pop probe: writes logs\dark-pop-probe.csv
     bool camera_position_valid = false;
     bool skater_position_valid = false;
     std::array<float, 3> camera_position{};
@@ -345,6 +396,7 @@ struct MapDownloadCard {
     std::size_t step{}, steps{}; // applying: the merge's steps done of all
     std::string step_name;
     bool server{}, installed{}, moved{}, choice{true};
+    std::uint64_t bytes{};       // asking: the package's size; 0 when it is not known
     std::uint64_t received{}, total{};
     std::uint32_t yes_bind{}, no_bind{};
 };
@@ -494,6 +546,30 @@ struct ItemBrowserHost {
 };
 // `host` must stay valid for the life of the process.
 void set_item_browser(const ItemBrowserHost *host) noexcept;
+// A presented frame as the game drew it, before ReSkate's own UI goes on top: 8-bit RGBA rows
+// (BGRA when `bgra`), `pitch` bytes apart. Valid only during the call it is handed to.
+struct GrabbedFrame {
+    const std::uint8_t *data{};
+    std::uint32_t width{}, height{}, pitch{};
+    bool bgra{};
+    // The game's depth for the same frame, when it was found (depth_probe.cpp): 32-bit floats,
+    // reversed (1 near, 0 at the far plane), `depth_pitch` bytes a row, the size of the frame.
+    const std::uint8_t *depth{};
+    std::uint32_t depth_pitch{};
+};
+// Screen captures (Extension/Rendering/Capture, reskate.capture): asked on every presented frame, on
+// the render thread, whether they want its pixels, and handed them when they do. While `active` says
+// so the overlay keeps working even with nothing of its own on screen.
+struct FrameGrabHost {
+    bool (*active)() noexcept {};
+    bool (*wants_frame)() noexcept {};
+    void (*take_frame)(const GrabbedFrame &frame) noexcept {};
+};
+// `host` must stay valid for the life of the process.
+void set_frame_grab(const FrameGrabHost *host) noexcept;
+// Research aid for captures (`capture depth`): the game's depth buffers over the next two frames are
+// copied and written to `folder` as pictures, with depth-probe.txt (depth_probe.cpp).
+void request_depth_probe(const wchar_t *folder) noexcept;
 using ParkSurfaceQueue = bool (*)(const EditorSurfaceRequest &);
 void set_park_surface_queue(ParkSurfaceQueue) noexcept;
 using ParkPreviewQueue = bool (*)(const EditorPreviewRequest &);

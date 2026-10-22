@@ -87,6 +87,7 @@ void destroy_graphics() {
     menu_map_pixels_lost();
     s.mod_icon_texture.Reset(); s.mod_icon_upload.Reset();
     mod_icon_lost();
+    release_frame_grab();
     for (auto& texture : s.plugin_textures) texture.Reset();
     for (auto& upload : s.plugin_uploads) upload.Reset();
     plugin_images_lost();
@@ -367,6 +368,7 @@ bool setup_graphics() {
     s.commands->SetName(L"ReSkate overlay draw");
     dingosdk::overlay::watch_draws(s.commands.Get());
     dingosdk::overlay::watch_addresses(s.commands.Get());
+    install_depth_probe(s.commands.Get());
     s.fence->SetName(L"ReSkate overlay fence");
     s.fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!s.fence_event) return false;
@@ -376,7 +378,7 @@ bool setup_graphics() {
     ImGui::SetCurrentContext(s.context);
     ImGui::GetIO().IniFilename = nullptr;
     ImGui::GetIO().LogFilename = nullptr;
-    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     ImGui::StyleColorsDark();
     dingosdk::overlay::load_skate_fonts(s.menu);
     // Thumbnails are read from the game's own data at startup; the read is
@@ -771,6 +773,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool item_browser_frame = item_browser_pending();
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
     const bool hub_frame = hub_page_pending();
+    const bool grab_frame = frame_grab_pending() || depth_probe_pending();
     // A plugin's screen look is drawn under every frame it asks for (reskate.screen.look).
     const bool look_frame = screen_look::pending();
     if (trainer_open_requested()) s.visible.store(true);
@@ -791,7 +794,8 @@ void render(IDXGISwapChain* presented, UINT flags) {
         }
         // Hidden, the overlay still draws while a notice or chat line is on screen.
         if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !skate_hud_frame &&
-            !nametag_frame && !plugins_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame && !look_frame) return;
+            !nametag_frame && !plugins_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame && !look_frame &&
+            !grab_frame) return;
     } else if (!s.ui_was_interactive) {
         s.ui_was_interactive = true;
         s.last_model = {}; // Reopening immediately reads fresh state.
@@ -812,6 +816,16 @@ void render(IDXGISwapChain* presented, UINT flags) {
         s.failed = true;
         restore_input(true);
         return;
+    }
+    // A screen capture takes the game's frame before anything of ReSkate's is drawn on it.
+    {
+        const auto size = frame.buffer->GetDesc();
+        const bool grabbing = frame_grab_pending();
+        depth_tap_present(s, static_cast<std::uint32_t>(size.Width), size.Height, grabbing);
+        if (grab_frame) {
+            if (grabbing) grab_presented_frame(s, frame.buffer.Get());
+            depth_probe_present(s, static_cast<std::uint32_t>(size.Width), size.Height);
+        }
     }
     ImGuiContext* previous = ImGui::GetCurrentContext();
     ImGui::SetCurrentContext(s.context);

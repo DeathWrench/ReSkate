@@ -282,6 +282,23 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wp, LPARAM lp);
 // Swapchain selection, device objects and the per-frame draw (overlay_render.cpp).
 bool completed(UINT64 value, DWORD timeout_ms);
 void destroy_graphics();
+// Screen captures (frame_grab.cpp): a frame is being asked for, so the overlay keeps working; the
+// presented frame's pixels handed over before the overlay draws on it; its GPU objects let go.
+bool frame_grab_pending();
+void grab_presented_frame(State& s, ID3D12Resource* buffer);
+void release_frame_grab();
+// The depth probe (depth_probe.cpp, `capture depth`): its hook, installed with the overlay's command
+// list; whether it needs this present; and its turn at it.
+void install_depth_probe(ID3D12GraphicsCommandList* list) noexcept;
+bool depth_probe_pending();
+void depth_probe_present(State& s, std::uint32_t width, std::uint32_t height);
+// The depth tap (depth_probe.cpp): while a frame grab runs, the game's main depth buffer is copied
+// every frame. depth_tap_present runs at each present (`wanted`: a grab is running); after the
+// frame's own work is known finished, depth_tap_latest maps the newest copy the GPU has made (or
+// gives null) until depth_tap_done.
+void depth_tap_present(State& s, std::uint32_t width, std::uint32_t height, bool wanted);
+const std::uint8_t* depth_tap_latest(std::uint32_t& width, std::uint32_t& height, std::uint32_t& pitch);
+void depth_tap_done();
 ComPtr<IUnknown> object_identity(IUnknown* object);
 Binding* find_binding(IUnknown* identity);
 void guarded_render(IDXGISwapChain* chain, UINT flags) noexcept;

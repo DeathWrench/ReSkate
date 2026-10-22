@@ -227,6 +227,7 @@ const Commands &game_commands() {
         register_multiplayer_commands(*result);
         register_perf_commands(*result);
         register_item_commands(*result);
+        register_capture_commands(*result);
         register_trainer_commands(*result);
         register_replay_keyframes_commands(*result);
         register_plugin_commands(*result);

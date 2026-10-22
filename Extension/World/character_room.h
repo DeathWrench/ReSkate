@@ -21,4 +21,8 @@ void leave() noexcept;
 // `prepare`: the room is going to be wanted, so the game's navigation event is looked for now (once a map,
 // in the background), and the walk does not wait for it.
 void tick(std::uintptr_t base, std::uintptr_t skater, bool ready, bool prepare) noexcept;
+// The game menu's open page, as the navigations of its buttons in one line ("CASPresetPurchase ..."),
+// empty when none shows; and whether that is the Skaters page. Client thread.
+[[nodiscard]] std::string menu_buttons(std::uintptr_t base) noexcept;
+[[nodiscard]] bool is_skaters_page(const std::string& buttons) noexcept;
 } // namespace dingosdk::character_room

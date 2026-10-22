@@ -1489,13 +1489,6 @@ void initialize_throwdown_lab(Address base) noexcept {
 }
 
 void observe_throwdown_send(std::uint32_t hash, Address type, Address payload) noexcept {
-    if(official_panel_trace_active()) {
-        try {
-            std::array<Address,12> words{};const bool readable=payload && memory::peek_bytes(payload,words.data(),sizeof(words));
-            std::string raw;if(readable)for(const auto word:words)raw+=std::format(" {:#x}",word);
-            logging::log(logging::Level::info,logging::Channel::ui,"PanelTrace network event: tick={}, hash={:#x}, type={:#x}, payload={:#x}, injected={}; words{}.",GetTickCount64(),hash,type,payload,injecting,raw);
-        } catch(...) {}
-    }
     if(!injecting && type && payload && (hash==event_create || hash==event_add_participant) &&
        !native_flag::registration_owned()) {
         try {
@@ -1922,90 +1915,6 @@ bool lab_graph(Address vm) noexcept {
 }
 } // namespace
 
-namespace {
-
-#if !defined(DINGOSDK_LEAN_PLAYTEST)
-struct OfficialPanelTrace {
-    std::atomic<bool> active{};
-    std::uint64_t until{},epoch{};
-    bool key_down{};
-    std::mutex mutex;
-    std::map<std::uint64_t,std::uint64_t> seen;
-    unsigned count{};
-};
-OfficialPanelTrace& official_trace() {static OfficialPanelTrace trace;return trace;}
-void trace_official_expression(Address vm,Address resource,std::uint32_t hash,std::uint32_t pc) noexcept {
-    auto& trace=official_trace();
-    const bool expanded=trace.active.load(std::memory_order_relaxed);
-    static constexpr std::array rare{0x05df4a18U,0x08a3b8c5U,0x0f131312U,0x10f2a5c6U,0x159dd04cU,0x166520aeU,0x244f2b0dU,0x286f4326U,0x2c110143U,0x3a74a736U,0x3b76eec2U,0x3d87fb6bU,0x51ad4a6dU,0x52febaa3U,0x551d7071U,0x5809b5e7U,0x5ffae9baU,0x60d80d52U,0x67122a51U,0x6a24bd4aU,0x6fdbcb71U,0x73fd87efU,0x75062457U,0x7a9c4313U,0x8773c493U,0x8f02d506U,0x9371feafU,0x93b01eb9U,0x994b9db2U,0x9bfd7029U,0xa17442fdU,0xa6d46ee3U,0xa9782023U,0xa9b014d9U,0xaf97f9bfU,0xb200804aU,0xb60dd66dU,0xb624d980U,0xbc12f225U,0xc18609afU,0xcdaf878cU,0xcf03b69bU,0xd09d3a41U,0xd0ebcf79U,0xd770f2d4U,0xd944dd03U,0xdba685beU,0xdf9cfb9aU,0xe685e108U,0xe7cdd599U,0xeb4391eaU,0xee82ab76U,0xeeb9fbf3U,0xf19ac281U,0xf1d412d6U,0xf208ab5aU,0xf38d178fU,0xfb12c52eU};
-    const bool menu_entry=std::binary_search(rare.begin(),rare.end(),hash);
-    if(!expanded && !menu_entry)return;
-    try {
-        profile_runtime::PreserveError preserve;
-        const auto now=GetTickCount64();
-        std::unique_lock lock(trace.mutex,std::try_to_lock);if(!lock.owns_lock())return;
-        const auto key=(std::uint64_t{hash}<<32)|pc;
-        if(const auto found=trace.seen.find(key);found!=trace.seen.end() && (expanded || now<found->second+1000))return;
-        if(trace.count>=768 && expanded)return;
-        trace.seen[key]=now;++trace.count;
-        const auto layout=read<std::array<std::uint32_t,10>>(resource+0x20);
-        Address instance{},arguments{},locals{};
-        memory::peek(vm+0x30,instance);
-        if(instance && layout[0]<0x10000) {
-            const auto frame=(layout[0]+15U)&~15U;
-            memory::peek(instance+frame+8,arguments);memory::peek(instance+frame+16,locals);
-        }
-        std::string regs;
-        if(arguments)for(unsigned i=0;i<16;++i) {
-            Address value{};if(!memory::peek(arguments+i*8,value))break;
-            regs+=std::format(" {}:{:#x}",i,value);
-        }
-        std::array<void*,12> frames{};
-        const auto count=CaptureStackBackTrace(0,static_cast<DWORD>(frames.size()),frames.data(),nullptr);
-        std::string callers;for(unsigned i=0;i<count;++i)callers+=std::format(" {:#x}",reinterpret_cast<Address>(frames[i]));
-        Address context{},model_manager{};std::uint32_t context_realm{};
-        const auto base=lab().base;
-        if(base) {
-            reinterpret_cast<Address (*)(Address*)>(base+engine::current_context)(&context);
-            const auto manager_offset=read<std::uint32_t>(base+0x7122460);
-            const auto realm_offset=read<std::uint32_t>(base+engine::context_type_offset);
-            if(context && manager_offset<0x1000000)memory::peek(context+manager_offset,model_manager);
-            if(context && realm_offset<0x1000000)memory::peek(context+realm_offset,context_realm);
-        }
-        logging::log(logging::Level::info,logging::Channel::ui,
-            "PanelTrace expression: epoch={}, tick={}, thread={}, graph={:#x}, pc={:#x}, menu_entry={}, resource={:#x}, VM={:#x}, instance={:#x}, locals={:#x}, context={:#x}, realm={:#x}, model_manager={:#x}; args{}; callers{}.",
-            trace.epoch,now,GetCurrentThreadId(),hash,pc,menu_entry,resource,vm,instance,locals,context,context_realm,model_manager,regs,callers);
-    } catch(...) { /* Diagnostics never redirect or suppress an expression. */ }
-}
-}
-
-void tick_official_panel_trace(bool start_down,std::uint64_t now) noexcept {
-    auto& trace=official_trace();
-    try {
-        std::lock_guard lock(trace.mutex);
-        if(start_down && !trace.key_down) {
-            ++trace.epoch;trace.until=now+20000;trace.seen.clear();trace.count=0;
-            trace.active.store(true,std::memory_order_release);
-            logging::log(logging::Level::info,logging::Channel::ui,"PanelTrace input: Start/Escape down; epoch={}, tick={}, tracing native expressions and Quit for 20s.",trace.epoch,now);
-        } else if(!start_down && trace.key_down)
-            logging::log(logging::Level::info,logging::Channel::ui,"PanelTrace input: released; epoch={}, tick={}.",trace.epoch,now);
-        trace.key_down=start_down;
-        if(trace.active.load() && now>=trace.until) {
-            trace.active.store(false,std::memory_order_release);
-            logging::log(logging::Level::info,logging::Channel::ui,"PanelTrace complete: epoch={}, expression entries={}.",trace.epoch,trace.count);
-            trace.seen.clear();trace.count=0;
-        }
-    } catch(...) {}
-}
-bool official_panel_trace_active() noexcept {return official_trace().active.load(std::memory_order_acquire);}
-
-#else
-void trace_official_expression(Address,Address,std::uint32_t,std::uint32_t) noexcept {}
-} // namespace
-void tick_official_panel_trace(bool,std::uint64_t) noexcept {}
-bool official_panel_trace_active() noexcept {return false;}
-#endif
-
 void execute_throwdown_preview_expression(Address vm,std::uint32_t pc,Address profiler,
     void (*runner)(Address,std::uint32_t,Address)) {
     FlagPreviewPage private_page;
@@ -2013,7 +1922,6 @@ void execute_throwdown_preview_expression(Address vm,std::uint32_t pc,Address pr
         profile_runtime::PreserveError preserve;
         const auto resource=read<Address>(vm+0x38);
         const auto hash=read<std::uint32_t>(resource+0x10);
-        trace_official_expression(vm,resource,hash,pc);
         // Most expressions need no layout read, asset lookup or placement lock.
         if(hash==0x73fd87ef || hash==0x08a3b8c5 || hash==0x05df4a18 || hash==0x7a9c4313 ||
            hash==0xbb2b2cdd || hash==0x67122a51 || hash==0xdba685be) {
@@ -2305,8 +2213,6 @@ void pump_throwdown_lab(Address vm) noexcept {
 }
 
 void throwdown_lab_before_level_transition(unsigned next) noexcept {
-    if(official_panel_trace_active())logging::log(logging::Level::info,logging::Channel::ui,
-        "PanelTrace native level transition: tick={}, next={}.",GetTickCount64(),next);
     // 14, 22 and 3 leave a level or sublevel, 24 shuts down: the level's bundles are unloaded,
     // and the events' types with them.
     if (next != 14 && next != 22 && next != 3 && next != 24) return;

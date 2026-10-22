@@ -1,7 +1,0 @@
-{
-    "name": "FPV_Drone",
-    "version_number": "0.1.0",
-    "website_url": "https://github.com/Dingo-Shenanigans/ReSkate",
-    "description": "Fly a first-person drone over the map with a keyboard, gamepad or RC radio, or let it follow you and film while you skate.",
-    "dependencies": []
-}

@@ -19,4 +19,8 @@ void play_pad(std::vector<PadStep> steps);
 void pad_tick() noexcept;
 // True when it wrote the script's pad to `state`.
 bool scripted_pad(DWORD user, XINPUT_STATE &state) noexcept;
+// One stick of the stand-in pad held at `value` (-1..1) for `milliseconds` more, the pad otherwise
+// neutral, for turning the game menu's preview (reskate.room.turn); 0 lets go. `stick`: 0 left x,
+// 1 left y, 2 right x, 3 right y. A script playing (play_pad) comes first. Any thread.
+void hold_stick(int stick, float value, unsigned milliseconds) noexcept;
 } // namespace dingosdk::overlay

@@ -2173,61 +2173,6 @@ void match_control(const Context& c,const Action& action,std::uint64_t now) {
         s.match_panel.request_after=now;
     }
 }
-#if !defined(DINGOSDK_LEAN_PLAYTEST)
-void trace_official_panel_models(const Context& c,std::uint64_t now) noexcept {
-    try {
-        const auto& lease=match_panel_lease(c);
-        const auto docs=kit::active();
-        const auto flag=kit::flag::state();
-        logging::log(logging::Level::info,logging::Channel::ui,
-            "PanelTrace UI snapshot: tick={}, manager={:#x}, in_menu={}, custom_panel={}, requested={}, plugin={}, flag_mode={}, flag_game={}, native_activity={}, countdown_lock={}, closing={}, panel_page={:#x}, hud_root={:#x}, hud_stack={:#x}.",
-            now,c.manager,state().in_menu,state().match_panel_open.load(),state().match_panel.requested_until,
-            docs?docs->plugin:std::string{},flag.mode,flag.game,local_throwdown_active(),
-            kit::match().input_lock,lease.closing.pending(),
-            state().match_panel.page.handle,state().hud_root.handle,state().hud_stack.handle);
-        for(const auto& root:c.roots({0x1cead64a,0xcc4776b5,0xaf4c67d7})) {
-            const auto hash=read<std::uint32_t>(read<Address>(root.model.type));
-            std::string values;
-            if(hash==0x1cead64a)for(const auto value:read<std::array<std::int32_t,5>>(c.address(root.model)))values+=std::format(" {}",value);
-            else if(hash==0xaf4c67d7)values=std::to_string(read<std::int32_t>(c.address(c.field(root.model,0x88391637))));
-            else {
-                values=std::format(" action={:#x}",read<std::uint32_t>(c.address(c.field(root.model,0xf3ba9cf8))));
-                unsigned count{},stride{};const auto bytes=c.array(c.field(root.model,0xf437b255),32,count,stride);
-                if(stride==4)for(unsigned i=0;i<count;++i) {std::int32_t value{};std::memcpy(&value,bytes.data()+i*4,4);values+=std::format(" {}",value);}
-            }
-            logging::log(logging::Level::info,logging::Channel::ui,"PanelTrace navigation: tick={}, schema={:#x}, root={:#x};{}.",now,hash,root.model.handle,values);
-        }
-        unsigned captured{};
-        for(const auto& root:c.roots({0xd71ee0a1})) {
-            if(captured>=12)break;
-            if(!read<bool>(c.address(c.field(root.model,0x369babfe))))continue;
-            const auto item=active_match_panel_layer_item(c,root.model);if(!item.handle)continue;
-            const auto display=read<Widget>(c.address(c.field(item,content)));
-            if(!display.data.handle || !display.blueprint)continue;
-            const auto type=c.type_of(display.data.handle);if(type!=c.type(page))continue;
-            const Value page_model{display.data.handle,type};const auto action=back(c,page_model);
-            ++captured;
-            logging::log(logging::Level::info,logging::Channel::ui,
-                "PanelTrace native Page: tick={}, stack={:#x}, page={:#x}, item={}, blueprint={:#x}, Back={}, delegate={:#x}.",
-                now,root.model.handle,page_model.handle,read<int>(c.address(c.field(item,0x1e95752c))),display.blueprint,
-                c.text(c.field(action,0xb1e14cd6)),read<Address>(c.address(c.field(action,0x9c76b86c))));
-        }
-        const auto view_manager=read<Address>(c.base+0x75cbc48);
-        if(view_manager && read<Address>(view_manager)==c.base+0x63ece68) {
-            const auto first=read<Address>(view_manager+8),last=read<Address>(view_manager+16);
-            if(last>=first && last-first<=32*8)for(auto at=first;at<last;at+=8) {
-                const auto view=read<Address>(at);
-                if(!view || read<Address>(view)!=c.base+0x63ed0a0 || read<unsigned>(view+0x148) || read<unsigned>(view+0x14c))continue;
-                const auto camera=read<Address>(view+0x2b0);if(!camera)continue;
-                const auto pose=read<std::array<float,16>>(camera+0x50);
-                logging::log(logging::Level::info,logging::Channel::ui,
-                    "PanelTrace camera: tick={}, view={:#x}, camera={:#x}, vtable={:#x}, origin=({},{},{}), forward=({},{},{}), FOV={}.",
-                    now,view,camera,read<Address>(camera)-c.base,pose[12],pose[13],pose[14],pose[8],pose[9],pose[10],read<float>(camera+0xac));
-            }
-        }
-    } catch(const std::exception& e) {logging::log(logging::Level::info,logging::Channel::ui,"PanelTrace snapshot unavailable: {}.",e.what());}
-}
-#endif
 #include "throwdown_modes_ui.inl"
 #include "throwdown_kit_hud.inl"
 void gameplay_hud(const Context& c,std::uint64_t now) {
@@ -2360,17 +2305,6 @@ void tick_native_throwdown_menu(std::uintptr_t base,bool loading,bool in_menu) n
     // Escape. PromptKeys explicitly samples Escape from the foreground game.
     const bool escape=(DingoSDKOverlayReadPromptKeys() & 8u)!=0;
     s.panel_key_down=(panel_input.buttons & 0x0010u)!=0 || escape;
-#if !defined(DINGOSDK_LEAN_PLAYTEST)
-    tick_official_panel_trace(s.panel_key_down,now);
-    static std::uint64_t next_panel_trace{};
-    if((official_panel_trace_active() || panel_view.available || s.match_panel_open.load()) &&
-       !loading && now>=next_panel_trace) {
-        next_panel_trace=now+(official_panel_trace_active()?100:1000);
-        const auto ui=read<Address>(base+build::engine::ui_manager);
-        const auto manager=ui?read<Address>(ui+0x140):0;
-        if(manager) {const Context c(base,manager);game::ModelWriteLock lock(manager);trace_official_panel_models(c,now);}
-    }
-#endif
     DWORD foreground_process{};
     GetWindowThreadProcessId(GetForegroundWindow(),&foreground_process);
     const bool input_allowed=!loading && panel_view.available && foreground_process==GetCurrentProcessId() && !overlay::interface_open();

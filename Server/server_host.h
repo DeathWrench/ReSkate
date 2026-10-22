@@ -472,6 +472,8 @@ class Host {
     std::string start_poll(Guest *starter, std::string_view text, std::string run = {});
     void cast_vote(Guest &, bool yes);
     void answer_poll(Guest &, std::size_t answer);
+    // Whether a chat command (without its "/") answers the running vote or poll for this player.
+    bool answers_vote(const Guest &, std::string_view line) const;
     std::string end_poll(Guest *by);
     void check_vote(bool expired);
     void cancel_vote(const std::string &why);

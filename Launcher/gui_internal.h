@@ -567,9 +567,6 @@ struct ModsPanel {
     std::set<std::string, std::less<>> marked;
     std::string anchor;                  // the last mod ticked: where a Shift-click range starts
     int place{};                         // typed in a row's "move to position" popup
-    // The installed mods that are official mods (Engine/Vfs/builtin_packs.h), by folder name: found
-    // when the folder is scanned.
-    std::set<std::string, std::less<>> officials;
     int shown_tab{-1};                   // the tab drawn last, so MY MODS reads the folder again when it is opened
     // The conflicts the player settled (gui_mods.cpp): of each pair, (the mod that loads, the one left out).
     std::set<std::pair<std::string, std::string>> conflict_choices;
@@ -699,8 +696,6 @@ void mod_icon(ModsPanel& panel, const thunderstore::Package* package, ImVec2 pos
 void pump_icons(ModsPanel& panel);
 // The GET MODS page body, under the page header.
 void browse_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, float height, bool installing);
-// The official mods (official_mods.h): each to install, update or turn off, and how it is doing.
-void official_page(const Fonts& fonts, ModsPanel& panel, float height);
 // Everything Thunderstore knows about one package, in a popup over the page.
 void package_overview(const Fonts& fonts, ModsPanel& panel, ImVec2 size, bool installing);
 // The README section of an overview: the installed mod's own README.md when it has one, else

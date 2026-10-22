@@ -1,6 +1,0 @@
-{
-    "api": 1,
-    "entry": "plugin/main.lua",
-    "side": "client",
-    "permissions": ["files", "menu", "console"]
-}

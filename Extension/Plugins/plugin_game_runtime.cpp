@@ -61,6 +61,11 @@
 #include "Extension/UI/Overlay/screen_look.h"
 #include "Extension/UI/Overlay/scripted_pad.h"
 #include "Extension/World/character_room.h"
+#include "Extension/Rendering/Capture/capture_runtime.h"
+#include "Extension/Customization/item_browser.h"
+#include "Extension/Customization/worn_items.h"
+#include "Extension/Multiplayer/Hud/game_ui_state.h"
+#include <shellapi.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -1102,6 +1107,100 @@ public:
         skater_animation::show_in_room(false);
         character_room::leave();
     }
+    std::string room_turn(std::string_view, float value, int stick) override {
+        if (value != 0 && !multiplayer::sample_game_ui_state(base_).in_menu) return "the game's menu is not open";
+        overlay::hold_stick(stick, value, 300);
+        return {};
+    }
+    GameMenu game_menu() override {
+        GameMenu menu;
+        menu.open = multiplayer::sample_game_ui_state(base_).in_menu;
+        if (!menu.open) return menu;
+        const auto buttons = character_room::menu_buttons(base_);
+        menu.skaters = character_room::is_skaters_page(buttons);
+        std::size_t start = 0;
+        while (start < buttons.size() && menu.buttons.size() < 64) {
+            const auto end = std::min(buttons.find(' ', start), buttons.size());
+            if (end > start) menu.buttons.push_back(buttons.substr(start, end - start));
+            start = end + 1;
+        }
+        return menu;
+    }
+    std::optional<MenuGrid> menu_grid() override {
+        const auto view = item_browser::view();
+        if (!view.open) return std::nullopt;
+        return MenuGrid{view.focused_key, view.focused_title, view.focused_category, view.grid_keys, view.shown, view.total};
+    }
+    // ---- capture: one plugin records at a time (capture_runtime.h) --------------------------------
+    std::string capture_start(std::string_view plugin, const CaptureStart& request) override {
+        auto& recorder = capture::recorder();
+        const auto now = recorder.status().state;
+        const bool busy = now == capture::State::recording || now == capture::State::saving;
+        if (busy && !capture_owner_.empty() && capture_owner_ != plugin) return capture_owner_ + " is capturing";
+        capture::RecordRequest r;
+        r.area = {request.left, request.top, request.right, request.bottom, request.menu};
+        r.depth = request.depth;
+        r.height = request.height;
+        r.skip = request.skip;
+        r.most = request.most;
+        r.seconds = request.seconds;
+        std::string why;
+        if (!recorder.start(r, why)) return why;
+        capture_owner_ = plugin;
+        capture_file_.clear();
+        return {};
+    }
+    void capture_stop(std::string_view plugin) override {
+        if (capture_owner_ == plugin) capture::recorder().stop();
+    }
+    void capture_discard(std::string_view plugin) override {
+        // While it saves, the save goes on and is still this plugin's to read.
+        if (capture_owner_ != plugin || capture::recorder().status().state == capture::State::saving) return;
+        capture::recorder().discard();
+        capture_owner_.clear();
+    }
+    CaptureStatus capture_status(std::string_view plugin) override {
+        if (capture_owner_ != plugin) return {"idle"};
+        static constexpr const char* names[] = {"idle", "recording", "stopped", "saving", "saved", "failed"};
+        const auto s = capture::recorder().status();
+        CaptureStatus out{names[static_cast<int>(s.state)], s.taken, s.kept, s.depth, s.message, {}};
+        if (s.state == capture::State::saved) out.file = capture_file_;
+        return out;
+    }
+    float capture_compare(std::string_view plugin, std::uint32_t a, std::uint32_t b) override {
+        return capture_owner_ == plugin ? capture::recorder().compare(a, b) : -1.0f;
+    }
+    std::vector<std::uint32_t> capture_kept(std::string_view plugin) override {
+        return capture_owner_ == plugin ? capture::recorder().kept() : std::vector<std::uint32_t>{};
+    }
+    std::string capture_save(std::string_view plugin, const CaptureSave& request) override {
+        if (capture_owner_ != plugin) return "nothing was recorded";
+        std::filesystem::path root, file;
+        if (auto why = data_file(plugin, request.path, root, file); !why.empty()) return why;
+        std::error_code error;
+        if (std::filesystem::is_directory(file, error)) return "a folder is there";
+        capture::SaveRequest r;
+        r.frames = request.frames;
+        r.format = request.format == "apng" ? capture::Format::apng : request.format == "png" ? capture::Format::png
+                   : request.format == "webm" ? capture::Format::webm : capture::Format::gif;
+        r.fps = request.fps;
+        r.size = request.size;
+        if (request.background)
+            r.background = capture::Rgb{static_cast<std::uint8_t>(*request.background >> 16), static_cast<std::uint8_t>(*request.background >> 8),
+                                        static_cast<std::uint8_t>(*request.background)};
+        r.cutout = request.cutout == "depth" ? capture::Cutout::depth : request.cutout == "colour" ? capture::Cutout::colour
+                   : request.cutout == "none" ? capture::Cutout::none : capture::Cutout::automatic;
+        r.solid = request.solid;
+        r.card_title = request.card_title;
+        for (const auto& [label, value] : request.card) r.card.push_back({label, value});
+        r.fonts = capture::menu_fonts();
+        r.file = file;
+        std::string why;
+        capture::recorder().stop();
+        if (!capture::recorder().save(std::move(r), why)) return why;
+        capture_file_ = request.path;
+        return {};
+    }
     RoomState room_state(std::string_view plugin) override {
         using P = character_room::Phase;
         const auto phase = character_room::phase();
@@ -1376,7 +1475,31 @@ public:
         return why;
     }
     bool frozen() const noexcept { return !freezers_.empty(); }
+    std::vector<WornItem> outfit_worn() override {
+        std::vector<WornItem> out;
+        for (auto& w : worn_items::worn_outfit()) out.push_back({std::move(w.slot), std::move(w.item), std::move(w.title)});
+        return out;
+    }
+    std::vector<WornItem> board_parts() override {
+        std::vector<WornItem> out;
+        for (auto& w : worn_items::worn_board()) out.push_back({std::move(w.slot), std::move(w.item), std::move(w.title)});
+        return out;
+    }
+    std::string item_title(std::string_view key) override { return worn_items::item_title(std::string(key)); }
+    std::string files_reveal(std::string_view plugin, std::string_view folder) override {
+        std::filesystem::path root, at;
+        if (auto why = data_file(plugin, folder, root, at); !why.empty()) return why;
+        std::error_code error;
+        std::filesystem::create_directories(at, error);
+        if (error || !std::filesystem::is_directory(at, error)) return "not a folder";
+        const auto done = reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", at.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+        return done > 32 ? std::string{} : std::string("the folder could not be opened");
+    }
     void release(std::string_view plugin) override {
+        if (capture_owner_ == plugin) {
+            capture::recorder().discard();
+            capture_owner_.clear();
+        }
         if (hold_owner_ == plugin) (void)skater_hold(plugin, false);
         plugin_feed::release_hidden(std::string(plugin));
         world_entities::clear(plugin);
@@ -1564,6 +1687,7 @@ private:
     }
 
     std::uintptr_t base_;
+    std::string capture_owner_, capture_file_; // the plugin whose capture it is, and where it saved to
     std::string camera_holder_, follower_, camera_status_;
     std::array<float, 16> camera_pose_{};
     float camera_fov_{};

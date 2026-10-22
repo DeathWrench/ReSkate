@@ -56,9 +56,7 @@ struct State {
     std::uint64_t custom_ui_diagnostic_at{};
     std::atomic<Address> menu_trace_address{};
     std::atomic<DWORD> menu_trace_thread{};
-    std::atomic<std::int32_t> menu_trace_selection{};
     std::atomic<bool> menu_details_presence_reported{};
-    std::atomic<bool> menu_details_check_reported{};
     Address solo_client_activity{};
     std::uint32_t solo_client_player{}, solo_client_group{};
 };
@@ -245,10 +243,6 @@ void complete_custom_details_presence(Address vm) {
     std::array<std::uint8_t,140> values{};
     if(!memory::peek_bytes(locals,values.data(),values.size()))return;
     const auto original=read<std::uint8_t>(output);
-    if(!s.menu_details_check_reported.exchange(true,std::memory_order_relaxed))
-        logging::log(logging::Level::info,logging::Channel::ui,
-            "PanelTrace native Details exit predicate: graph={:#x}, selected={}, native_exit={}, close_requested={}, native_activity_present={}, frame_result={}, output={:#x}, locals={:#x}.",
-            0x05edc9f8,values[0x64],original,values[0x80],values[0x81],values[0x8b],output,locals);
     // The exact final native copy must agree with its saved result. Reject an
     // expired/nested frame or changed graph instead of borrowing its pointers.
     if(values[0x8b]!=original || values[0x89]!=1 || values[0x8a]!=1 ||
@@ -632,10 +626,8 @@ void set_custom_activity_menu_request(Address address) noexcept {
     auto& s=state();
     s.menu_trace_address.store(0,std::memory_order_release);
     s.menu_details_presence_reported.store(false,std::memory_order_relaxed);
-    s.menu_details_check_reported.store(false,std::memory_order_relaxed);
     std::int32_t value{};
     if(!address || !memory::peek(address,value))return;
-    s.menu_trace_selection.store(value,std::memory_order_relaxed);
     s.menu_trace_thread.store(GetCurrentThreadId(),std::memory_order_relaxed);
     s.menu_trace_address.store(address,std::memory_order_release);
 }
@@ -749,26 +741,6 @@ void native_throwdown_level_left() noexcept {
 
 void complete_native_throwdown_parameters(Address vm) noexcept {
     pump_throwdown_lab(vm);
-    // Native expressions can select, then immediately retire, the menu in a
-    // single frame. Sample after the deepest completed call on its UI thread
-    // so the log identifies the writer instead of only the next 100ms snapshot.
-    {
-        profile_runtime::PreserveError preserve;
-        try {
-            auto& s=state();const auto address=s.menu_trace_address.load(std::memory_order_acquire);
-            std::int32_t value{};
-            if(address && s.menu_trace_thread.load(std::memory_order_relaxed)==GetCurrentThreadId() &&
-               memory::peek(address,value)) {
-                const auto previous=s.menu_trace_selection.exchange(value,std::memory_order_relaxed);
-                if(previous!=value) {
-                    const auto resource=vm?read<Address>(vm+0x38):0;
-                    logging::log(logging::Level::info,logging::Channel::ui,
-                        "PanelTrace selection changed {} -> {} after native graph {:#x}, resource={:#x}, VM={:#x}, field={:#x}, realm={:#x}.",
-                        previous,value,resource?read<std::uint32_t>(resource+0x10):0,resource,vm,address,realm());
-                }
-            }
-        } catch(...) {}
-    }
     {
         profile_runtime::PreserveError preserve;
         try {

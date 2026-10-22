@@ -378,6 +378,58 @@ public:
         std::string state, why;
     };
     virtual RoomState room_state(std::string_view /*plugin*/) { return {"idle", {}}; }
+    // The game menu's preview (the skater on the Skaters page, the board on a Board tab) turned by a
+    // stick of a stand-in pad: `value` -1..1 of the stick held for 300 ms (call it every tick), 0 lets
+    // go; `stick` 0 left x, 1 left y, 2 right x, 3 right y. Only while the game's menu is open.
+    virtual std::string room_turn(std::string_view /*plugin*/, float /*value*/, int /*stick*/) { return unavailable; }
+    // The game's menu: whether it is open, whether it shows the Skaters page, and the navigations of
+    // the open page's buttons (how the game names where each goes: "CASPresetPurchase", ...).
+    struct GameMenu {
+        bool open{}, skaters{};
+        std::vector<std::string> buttons;
+    };
+    virtual GameMenu game_menu() { return {}; }
+    // The customization grid that has the focus (Extension/Customization/item_browser.h), when one does.
+    struct MenuGrid {
+        std::string focused, title, category; // the highlighted item: key, title, catalog category
+        std::vector<std::string> items;        // every item's key in the grid
+        unsigned shown{}, total{};
+    };
+    virtual std::optional<MenuGrid> menu_grid() { return std::nullopt; }
+    // ---- capture: the screen as the game draws it (Extension/Rendering/Capture) ---------------------
+    // One plugin records at a time; frames are numbered from 0 as they are taken.
+    struct CaptureStart {
+        float left{}, top{}, right{1}, bottom{1};
+        bool menu{};            // fractions of the game's menu frame (at most 21:9), else of the screen
+        bool depth{true};
+        std::uint32_t height{}, skip{}, most{2400};
+        double seconds{60};
+    };
+    virtual std::string capture_start(std::string_view /*plugin*/, const CaptureStart&) { return unavailable; }
+    virtual void capture_stop(std::string_view /*plugin*/) {}
+    virtual void capture_discard(std::string_view /*plugin*/) {}
+    struct CaptureStatus {
+        std::string state; // "idle", "recording", "stopped", "saving", "saved", "failed"
+        std::uint32_t taken{}, kept{};
+        bool depth{};
+        std::string message, file; // file: its path in the plugin's data folder
+    };
+    // Another plugin's capture reads as idle.
+    virtual CaptureStatus capture_status(std::string_view /*plugin*/) { return {"idle"}; }
+    virtual float capture_compare(std::string_view /*plugin*/, std::uint32_t, std::uint32_t) { return -1; }
+    virtual std::vector<std::uint32_t> capture_kept(std::string_view /*plugin*/) { return {}; }
+    struct CaptureSave {
+        std::vector<std::uint32_t> frames;
+        std::string format{"gif"}; // "gif", "apng", "png", "webm"
+        std::uint32_t fps{30}, size{512};
+        std::optional<std::uint32_t> background; // 0xRRGGBB; none: transparent
+        std::string cutout{"auto"};               // "auto", "depth", "colour", "none"
+        bool solid{true};
+        std::string card_title;
+        std::vector<std::pair<std::string, std::string>> card; // label, value
+        std::string path;                        // in the plugin's data folder
+    };
+    virtual std::string capture_save(std::string_view /*plugin*/, const CaptureSave&) { return unavailable; }
     // Game buttons kept from the game while asked (overlay::hide_game_buttons/hold_game_buttons),
     // and all game input paused for half a second at a time.
     virtual void game_buttons(std::string_view /*plugin*/, std::uint16_t /*hidden*/, std::uint16_t /*held*/, bool /*paused*/) {}
@@ -440,6 +492,8 @@ public:
     virtual std::string files_read(std::string_view /*plugin*/, std::string_view /*path*/, std::string& /*text*/) { return unavailable; }
     virtual std::string files_write(std::string_view /*plugin*/, std::string_view /*path*/, std::string_view /*text*/) { return unavailable; }
     virtual std::string files_remove(std::string_view /*plugin*/, std::string_view /*path*/) { return unavailable; }
+    // The data folder (or a folder in it) opened in the player's file manager.
+    virtual std::string files_reveal(std::string_view /*plugin*/, std::string_view /*folder*/) { return unavailable; }
     // The same, for a file up to `most` bytes (an animation clip's, say).
     virtual std::string files_read_bytes(std::string_view plugin, std::string_view path, std::string& out, std::size_t /*most*/) {
         return files_read(plugin, path, out);
@@ -605,6 +659,17 @@ public:
     virtual std::string outfit_find(std::string_view) { return {}; }
     virtual std::vector<OutfitSlot> outfit_slots() { return {}; }
     virtual std::string outfit_status() { return unavailable; }
+    // What the skater wears now (the selected preset): `slot` the kind of item ("Headwear", "Top", ...,
+    // "Shoes", in the order worn from head to foot; clothes and accessories only), or the board's part
+    // ("Deck", "Grip tape", "Grip cutout", "Trucks", "Wheels").
+    struct WornItem {
+        std::string slot, item, title;
+    };
+    virtual std::vector<WornItem> outfit_worn() { return {}; }
+    virtual std::vector<WornItem> board_parts() { return {}; }
+    // An item's title as the game shows it (its catalog's, the one an item grid showed, or its key
+    // made readable).
+    virtual std::string item_title(std::string_view key) { return std::string(key); }
     // ---- board: what is drawn of the local skateboard (Extension/Skater/board_pose.h) ------------------
     struct BoardBone {
         Vec3 position{};

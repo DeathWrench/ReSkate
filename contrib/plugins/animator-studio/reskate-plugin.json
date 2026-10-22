@@ -1,7 +1,0 @@
-{
-    "api": 1,
-    "entry": "plugin/main.lua",
-    "side": "client",
-    "permissions": ["skater.animation", "skater.read", "skater.control", "events.skater", "camera", "hud", "input", "ui.screen", "room",
-                    "files", "overlay", "console", "menu"]
-}

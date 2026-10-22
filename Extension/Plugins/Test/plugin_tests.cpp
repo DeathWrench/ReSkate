@@ -503,14 +503,74 @@ struct FakeGame final : Game {
     Track track() override { return now_playing; }
     std::string music(std::string_view command) override { calls.push_back("music " + std::string(command)); return {}; }
     Progress progress() override { return {true, {{"historic", "Historic", 4}}, {{"c1", "line", "historic", 2, 1, 3}}, 1500, 9000, 2}; }
-    std::optional<std::string> setting(std::string_view name) override { return name == "Render.Fov" ? std::optional<std::string>("90") : std::nullopt; }
-    std::vector<std::string> setting_names() override { return {"Render.Fov"}; }
+    std::optional<std::string> setting(std::string_view name) override {
+        if (std::find(render_settings.begin(), render_settings.end(), name) != render_settings.end()) return "true";
+        return name == "Render.Fov" ? std::optional<std::string>("90") : std::nullopt;
+    }
+    std::vector<std::string> setting_names() override {
+        auto names = render_settings;
+        names.insert(names.begin(), "Render.Fov");
+        return names;
+    }
     std::string bind(std::string_view plugin, std::string_view action, std::uint32_t combo) override {
         binds[std::string(plugin) + "/" + std::string(action)] = combo;
         return {};
     }
     std::vector<std::pair<std::string, std::string>> take_presses() override { return std::exchange(presses, {}); }
     void release(std::string_view plugin) override { released.emplace_back(plugin); entity_clear(plugin); }
+    // The game menu, its item grid, what is worn, and a screen capture of something turning once
+    // every `turning` frames (reskate.capture, room.turn, menu.game/grid, outfit.board).
+    GameMenu menu_now;
+    std::optional<MenuGrid> grid_now;
+    std::vector<WornItem> board_now, outfit_now;
+    std::vector<std::string> render_settings; // more settings, each on
+    CaptureStatus capture_now{"idle"};
+    double turning = 100;
+    std::vector<CaptureStart> capture_starts;
+    std::vector<CaptureSave> capture_saves;
+    float turned{};
+    std::string room_turn(std::string_view, float value, int stick) override {
+        if (value != 0 && !menu_now.open) return "the game's menu is not open";
+        turned = value;
+        calls.push_back(std::format("turn {:.2f} {}", value, stick));
+        return {};
+    }
+    GameMenu game_menu() override { return menu_now; }
+    std::optional<MenuGrid> menu_grid() override { return grid_now; }
+    std::vector<WornItem> board_parts() override { return board_now; }
+    std::vector<WornItem> outfit_worn() override { return outfit_now; }
+    std::string capture_start(std::string_view plugin, const CaptureStart& request) override {
+        capture_starts.push_back(request);
+        capture_now = {"recording"};
+        calls.push_back(std::format("capture start {}", plugin));
+        return {};
+    }
+    void capture_stop(std::string_view) override {
+        if (capture_now.state == "recording") capture_now.state = "stopped";
+    }
+    void capture_discard(std::string_view plugin) override {
+        capture_now = {"idle"};
+        calls.push_back(std::format("capture discard {}", plugin));
+    }
+    CaptureStatus capture_status(std::string_view) override { return capture_now; }
+    float capture_compare(std::string_view, std::uint32_t a, std::uint32_t b) override {
+        if (a >= capture_now.taken || b >= capture_now.taken) return -1;
+        return 100 * static_cast<float>(std::abs(std::sin(3.14159265358979 * (double(a) - double(b)) / turning)));
+    }
+    std::vector<std::uint32_t> capture_kept(std::string_view) override {
+        std::vector<std::uint32_t> out;
+        for (std::uint32_t n = 0; n < capture_now.taken; ++n) out.push_back(n);
+        return out;
+    }
+    std::string capture_save(std::string_view, const CaptureSave& request) override {
+        capture_saves.push_back(request);
+        capture_now = {"saving", capture_now.taken, capture_now.taken};
+        return {};
+    }
+    std::string files_reveal(std::string_view plugin, std::string_view folder) override {
+        calls.push_back(std::format("reveal {} {}", plugin, folder));
+        return {};
+    }
     bool called(std::string_view part) const {
         return std::any_of(calls.begin(), calls.end(), [&](const auto& c) { return c.find(part) != std::string::npos; });
     }
@@ -2672,6 +2732,92 @@ void plugins_add_throwdown_modes() {
 // The throwdown kit: a plugin registers a mode, publishes its documents (parsed into the store the
 // native UI reads), hears what the native UI posts, holds the native flag, keeps data files, opens a
 // dialog; and everything goes when it stops.
+// Fit Check as a mod (contrib/plugins/fit-check): its own checks pass, and V on the Board screen
+// turns the board until it has come round, eases the stick off when it turns too fast for the frames
+// wanted, and saves evenly spaced frames of one turn with the board's parts on its card, the
+// browsed deck in place of the worn one; the game's bloom is off while it turns.
+void fit_check_turns_the_board_and_saves_it() {
+    TestEnvironment environment;
+    std::filesystem::remove_all(scratch / "storage" / "fit-check");
+    auto& game = environment.fake;
+    const auto directory = scratch / "mods" / "fit-check";
+    std::filesystem::remove_all(directory);
+    std::filesystem::copy(std::filesystem::path(RESKATE_SOURCE_DIR) / "contrib" / "plugins" / "fit-check", directory,
+                          std::filesystem::copy_options::recursive);
+    Host host(environment, Side::client);
+    host.apply({{"fit-check", directory, "1", check_package_files(directory)}});
+    running(host, "fit-check", environment);
+    check(host.run_console("fitcheck test") && environment.printed("fitcheck: 10 passed, 0 failed") && !environment.printed("FAIL"),
+          "Fit Check's own checks pass:\n" + printed_lines(environment) + environment.all());
+    check(game.binds.contains("fit-check/fitcheck"), "V is bound");
+
+    // V in the world does nothing; on the Board screen, with a deck browsed, it turns the board.
+    game.presses = {{"fit-check", "fitcheck"}};
+    ticks(host, environment, 1);
+    check(game.capture_starts.empty(), "Not out of the menu");
+    game.menu_now = {true, false, {}};
+    game.grid_now = Game::MenuGrid{"deck_b", "Deck B", "Decks", {"deck_a", "deck_b"}, 2, 2};
+    game.board_now = {{"Deck", "deck_a", "Deck A"}, {"Wheels", "wheels_a", "Wheels A"}};
+    game.render_settings = {"PostProcess.BloomEnable", "Render.ShadowsEnable"};
+    game.presses = {{"fit-check", "fitcheck"}};
+    ticks(host, environment, 1);
+    check(game.capture_starts.size() == 1 && game.capture_starts[0].menu && game.capture_starts[0].left == 0.655f &&
+              game.capture_starts[0].skip == 45 && game.capture_starts[0].height == 640,
+          "The board's area of the menu is captured\n" + environment.all());
+    check(game.called("setting fit-check PostProcess.BloomEnable false") && !game.called("Render.ShadowsEnable"),
+          "Bloom is off while it turns, the shadow maps left\n" + environment.all());
+    ticks(host, environment, 1);
+    check(game.called("turn 0.50 2"), "The right stick is held half over\n" + environment.all());
+    // Its banner over the game, and its page saying what it is doing.
+    environment.panels_open = true;
+    ticks(host, environment, 10);
+    const auto banner = std::any_of(environment.layers.begin(), environment.layers.end(), [](const plugin_ui::Layer& layer) {
+        return std::any_of(layer.shapes.begin(), layer.shapes.end(), [](const auto& s) { return s.text.starts_with("RECORDING FIT CHECK"); });
+    });
+    check(banner, "The banner shows while it records\n" + environment.all());
+    check(environment.panels.size() == 1 && environment.panels[0].title == "Fit Check" && environment.panels[0].widgets.size() > 8,
+          std::format("Its page is built ({} panels, {} widgets)\n", environment.panels.size(),
+                      environment.panels.empty() ? 0 : environment.panels[0].widgets.size()) + environment.all());
+    environment.panels_open = false;
+
+    // Round in 100 frames, too few for 120 (4 s at 30): slower, and again.
+    game.capture_now.taken = 130;
+    ticks(host, environment, 1);
+    check(game.capture_starts.size() == 2 && game.capture_saves.empty(), "Too fast: started again\n" + environment.all());
+
+    // Round in 130: its 120 evenly spaced frames saved, the card with the browsed deck.
+    game.turning = 130;
+    game.capture_now.taken = 150;
+    ticks(host, environment, 1);
+    check(game.called("turn 0.46 2"), "The stick eased off to 0.5 x 0.92\n" + environment.all());
+    check(game.capture_saves.size() == 1, "Saved once it came round\n" + environment.all());
+    const auto& saved = game.capture_saves[0];
+    check(saved.frames.size() == 120 && saved.frames[0] == 0 && saved.frames[60] == 65 && saved.format == "gif" && saved.size == 512 &&
+              !saved.background && saved.solid,
+          "Evenly spaced frames of one turn, as a transparent GIF");
+    check(saved.path.starts_with("fit-checks/Deck-B-") && saved.path.ends_with(".gif"), "named after the deck: " + saved.path);
+    check(saved.card_title == "Board" && saved.card.size() == 2 && saved.card[0].second == "Deck B" && saved.card[1].second == "Wheels A",
+          "The card has the browsed deck and the worn wheels");
+    check(game.called("setting fit-check PostProcess.BloomEnable none") && game.turned == 0, "Bloom back and the stick let go\n" + environment.all());
+    game.capture_now = {"saved", 150, 150, true, "cut out by depth", saved.path};
+    ticks(host, environment, 1);
+    check(environment.logged("[fit-check] Saved Deck-B-") && environment.logged(".gif in the Fit Checks folder (cut out by depth)."),
+          "And it says where\n" + environment.all());
+
+    check(game.called("capture discard fit-check"), "Its pictures are let go once saved");
+    game.calls.clear();
+    // V on the Skaters screen with no grid: the skater; V again stops it.
+    game.grid_now.reset();
+    game.menu_now = {true, true, {}};
+    game.presses = {{"fit-check", "fitcheck"}};
+    ticks(host, environment, 1);
+    check(game.capture_starts.size() == 3 && game.capture_starts.back().left == 0.27f, "The skater's area\n" + environment.all());
+    game.presses = {{"fit-check", "fitcheck"}};
+    ticks(host, environment, 1);
+    check(game.called("capture discard fit-check") && game.turned == 0, "V again stops it\n" + environment.all());
+    check(host.run_console("fitcheck open") && game.called("reveal fit-check fit-checks"), "The folder is shown");
+}
+
 void plugins_drive_the_throwdown_kit() {
     namespace kit = dingosdk::throwdowns::kit;
     TestEnvironment environment;
@@ -3298,6 +3444,7 @@ int main() {
         grind_exits_pick_the_side();
         smokey_throwdowns_register_and_play_one_up();
         plugins_drive_the_throwdown_kit();
+        fit_check_turns_the_board_and_saves_it();
         the_throwdowns_page_lists_the_stock_cards_and_plugin_modes();
         plugins_add_throwdown_modes();
         reskate_hostile_is_stopped_or_refused_every_time();

@@ -221,6 +221,20 @@ Rows read_rows(const md::Context& context, md::Value items, const Layout& layout
     return rows;
 }
 
+// Every item's title as the grids showed it this session (a mod's item has none in the game's own
+// catalog), for plugins (reskate.outfit.title).
+struct Titles {
+    std::mutex mutex;
+    std::map<std::string, std::string, std::less<>> by_key;
+};
+Titles& titles() { static auto* value = new Titles; return *value; }
+void remember_title(const std::string& key, const std::string& title) {
+    if (key.empty() || title.empty()) return;
+    auto& t = titles();
+    std::lock_guard lock(t.mutex);
+    if (t.by_key.size() < 65536) t.by_key.insert_or_assign(key, title);
+}
+
 // The catalog item behind a tile's item model. Empty key: the tile does not show a cosmetic.
 Item resolve(const md::Context& context, std::uint64_t content) {
     Item item;
@@ -236,6 +250,7 @@ Item resolve(const md::Context& context, std::uint64_t content) {
     item.key = md::string(md::read<md::Address>(at + context.member(data.type, data_key).offset), 255);
     item.title = md::string(md::read<md::Address>(at + context.member(data.type, data_title).offset), 255);
     item.category = md::string(md::read<md::Address>(at + context.member(data.type, data_category).offset), 96);
+    remember_title(item.key, item.title);
     const auto& catalogs = content_cache::catalogs();
     item.modded = catalogs.available && !catalogs.items.contains(folded(item.key));
     return item;
@@ -551,6 +566,12 @@ void set_search(std::string text) {
     sh.search_pending = true;
 }
 void set_filter(Filter filter) noexcept { shared().filter.store(static_cast<int>(filter)); }
+std::string known_title(std::string_view key) {
+    auto& t = titles();
+    std::lock_guard lock(t.mutex);
+    const auto found = t.by_key.find(key);
+    return found == t.by_key.end() ? std::string() : found->second;
+}
 const overlay::ItemBrowserHost* overlay_host() noexcept {
     static const overlay::ItemBrowserHost host{
         [] {
@@ -675,6 +696,7 @@ void follow_focus(State& s, Shared& sh, std::uintptr_t base) {
         if (item == grid->native.end() || item->key == next.focused_key) return;
         next.focused_title = item->title;
         next.focused_key = item->key;
+        next.focused_category = item->category;
         next.focused_favorite = s.favorites.keys.contains(item->key);
     }
     std::lock_guard shared_lock(sh.mutex);
@@ -786,10 +808,13 @@ void update(std::uintptr_t base) noexcept {
             next.shown = static_cast<unsigned>(active->shown.size()) - (std::min)(blanks, static_cast<unsigned>(active->shown.size()));
             next.total = static_cast<unsigned>(active->native.size()) - blanks;
             for (const auto& item : active->native) next.favorites += s.favorites.keys.contains(item.key);
+            for (const auto& item : active->native)
+                if (!item.key.empty()) next.grid_keys.push_back(item.key);
         }
         if (focused) {
             next.focused_title = focused->title;
             next.focused_key = focused->key;
+            next.focused_category = focused->category;
             next.focused_favorite = s.favorites.keys.contains(focused->key);
         }
         std::lock_guard shared_lock(sh.mutex);
