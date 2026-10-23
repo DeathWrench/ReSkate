@@ -295,6 +295,14 @@ void register_movement_commands(Commands &registry) {
         };
         registry.add(std::move(entry));
     }
+    // What "bind reskatemenu" runs, for a player who cannot press the menu's key (no Insert key).
+    auto open_menu = action("menu", "Open the ReSkate menu (bind it to a controller combo or key: bind reskatemenu)", Group::console);
+    open_menu.inspect = [](const Model &) { return State{true, {}, {}, {}, false}; };
+    open_menu.run = [](const Model &, const Values &, const Output &out) {
+        overlay::menu_open_flag().store(true);
+        out("Opening the ReSkate menu.");
+    };
+    registry.add(std::move(open_menu));
 }
 void register_ai_commands(Commands &registry) {
     const auto ready = [](const Model &m) {
