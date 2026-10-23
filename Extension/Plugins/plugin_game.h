@@ -768,6 +768,23 @@ public:
         float axle = 1.0f;
     };
     virtual std::string board_fit(std::string_view /*plugin*/, std::optional<BoardFit>) { return unavailable; }
+    // The shader parameters of a part of the local board (Extension/Customization/board_material.h):
+    // part 0 the deck, 1 its grip, 2 the trucks, 3 the wheels. `type` is "colour", "number",
+    // "integer", "switch" or "other"; `value` a colour's three channels or a number in [0], and
+    // `integer` an integer's or a switch's. None without a board.
+    struct BoardParameter {
+        std::uint64_t key{};
+        std::string type;
+        std::array<float, 3> value{};
+        std::int32_t integer{};
+    };
+    virtual std::optional<std::vector<BoardParameter>> board_parameters(int /*part*/) { return std::nullopt; }
+    // A colour (`colour`, all three) or a number (value[0]) held there until cleared; empty when held.
+    virtual std::string board_set_parameter(std::string_view /*plugin*/, int /*part*/, std::uint64_t, std::array<float, 3>, bool /*colour*/) {
+        return unavailable;
+    }
+    // Part -1: every part; no key: every key.
+    virtual void board_clear_parameter(std::string_view /*plugin*/, int /*part*/, std::optional<std::uint64_t>) {}
     // ---- variants: of the plugin's own mod (Engine/Vfs/mod_list.h Variants) -----------------------------
     struct VariantState {
         std::vector<std::string> installed; // its "order" first
@@ -783,6 +800,8 @@ public:
     // ---- the skater's physics -----------------------------------------------------------------------
     virtual SkaterNews take_skater_news() { return {}; }
     virtual std::optional<Vec3> board_velocity() { return std::nullopt; }
+    // Its spin in that step: angular velocity in the world, radians a second.
+    virtual std::optional<Vec3> board_spin() { return std::nullopt; }
     virtual std::optional<SlamNews> last_slam() { return std::nullopt; }
     // Every physics step since the last tick (kept once asked for: at most 512).
     virtual std::vector<PhysicsStep> take_physics_steps() { return {}; }

@@ -141,7 +141,9 @@ struct WorldApi {
         if (!shape.across && !shape.along && !shape.up) luaL_argerror(L, 2, "a launch's shape sets across, along or up");
         return result(L, game(plugin).shape_launch(plugin.id(), from, shape));
     }
-    // board.motion(): the board's velocity in the last physics step, or nil.
+    // board.motion(): the board's velocity and spin in the last physics step, and where it and its deck
+    // were last drawn in the world (bone 1, the board's place, is drawn in the world; the deck is bone 3
+    // on bone 2 on it), or nil.
     static int board_motion(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "skater.read", "reskate.board.motion");
@@ -150,9 +152,41 @@ struct WorldApi {
             lua_pushnil(L);
             return 1;
         }
-        lua_createtable(L, 0, 1);
+        lua_createtable(L, 0, 4);
         push_position(L, *v);
         lua_setfield(L, -2, "velocity");
+        if (const auto spin = game(plugin).board_spin()) {
+            push_position(L, *spin);
+            lua_setfield(L, -2, "spin");
+        }
+        if (const auto bones = game(plugin).board_bones()) {
+            const auto push_place = [&](const anim_studio::Joint& at, const char* field) {
+                lua_createtable(L, 0, 2);
+                push_position(L, at.position);
+                lua_setfield(L, -2, "position");
+                push_quaternion(L, at.rotation);
+                lua_setfield(L, -2, "rotation");
+                lua_setfield(L, -2, field);
+            };
+            const auto joint = [&](int b) {
+                const auto& bone = (*bones)[static_cast<std::size_t>(b)];
+                anim_studio::Joint j;
+                j.position = bone.position;
+                j.rotation = anim_studio::normalised(bone.rotation);
+                return j;
+            };
+            // A child placed on its parent: turned by it, and moved by it from its own position.
+            const auto on = [](const anim_studio::Joint& parent, const anim_studio::Joint& child) {
+                anim_studio::Joint out;
+                const auto moved = anim_studio::rotate(parent.rotation, child.position);
+                out.position = {parent.position[0] + moved[0], parent.position[1] + moved[1], parent.position[2] + moved[2]};
+                out.rotation = anim_studio::normalised(anim_studio::multiply(parent.rotation, child.rotation));
+                return out;
+            };
+            const auto place = joint(1);
+            push_place(place, "place");
+            push_place(on(on(place, joint(2)), joint(3)), "deck");
+        }
         return 1;
     }
     // ---- camera -------------------------------------------------------------------------------------
@@ -1718,6 +1752,109 @@ struct WorldApi {
         if (!within(plugin.services_.now_ms(), plugin.control_second_, plugin.controls_, 4)) return result(L, "asked more than 4 times in a second");
         return result(L, game(plugin).board_toss(plugin.id(), std::move(bones), velocity, spin, static_cast<float>(ground)));
     }
+    // ---- board parameters: the shader values of a part of the local board (board_material.h) ---------------
+    static constexpr std::array<std::string_view, 4> board_parts{"deck", "grip", "trucks", "wheels"};
+    // The two colours known by what they colour (board_material.h graphic_colour and base_colour).
+    static constexpr std::array<std::pair<std::string_view, std::uint64_t>, 2> named_board_parameters{{
+        {"graphic", 0x873f48af36e50d59ULL}, {"base", 0x8c46cd354b18a9e2ULL}}};
+    static int board_part(lua_State* L, int index) {
+        const std::string_view name = luaL_checkstring(L, index);
+        for (std::size_t i = 0; i < board_parts.size(); ++i)
+            if (name == board_parts[i]) return static_cast<int>(i);
+        luaL_argerror(L, index, "a part is \"deck\", \"grip\", \"trucks\" or \"wheels\"");
+        return 0;
+    }
+    static std::uint64_t board_parameter_key(lua_State* L, int index) {
+        std::size_t length{};
+        const char* text = luaL_checklstring(L, index, &length);
+        for (const auto& [name, key] : named_board_parameters)
+            if (std::string_view(text, length) == name) return key;
+        std::uint64_t key{};
+        const auto [end, error] = std::from_chars(text, text + length, key, 16);
+        if (length != 16 || error != std::errc{} || end != text + length) luaL_argerror(L, index, "a key is 16 hex digits, \"graphic\" or \"base\"");
+        return key;
+    }
+    // parameters(part): {{key = "873f48af36e50d59", name = "graphic", type = "colour", value = {r, g, b}}, ...}
+    // as the part's material holds them now, or nil without a board. A number's value is a number, an
+    // integer's an integer, a switch's true or false.
+    static int board_parameters(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "board", "reskate.board.parameters");
+        const auto found = game(plugin).board_parameters(board_part(L, 1));
+        if (!found) {
+            lua_pushnil(L);
+            return 1;
+        }
+        lua_createtable(L, static_cast<int>(found->size()), 0);
+        int at = 0;
+        for (const auto& p : *found) {
+            lua_createtable(L, 0, 4);
+            const auto key = std::format("{:016x}", p.key);
+            lua_pushlstring(L, key.data(), key.size());
+            lua_setfield(L, -2, "key");
+            for (const auto& [name, known] : named_board_parameters)
+                if (known == p.key) {
+                    lua_pushlstring(L, name.data(), name.size());
+                    lua_setfield(L, -2, "name");
+                }
+            lua_pushlstring(L, p.type.data(), p.type.size());
+            lua_setfield(L, -2, "type");
+            if (p.type == "colour") {
+                lua_createtable(L, 0, 3);
+                const char* channels[] = {"r", "g", "b"};
+                for (std::size_t c = 0; c < 3; ++c) {
+                    lua_pushnumber(L, p.value[c]);
+                    lua_setfield(L, -2, channels[c]);
+                }
+                lua_setfield(L, -2, "value");
+            } else if (p.type == "number") {
+                lua_pushnumber(L, p.value[0]);
+                lua_setfield(L, -2, "value");
+            } else if (p.type == "integer") {
+                lua_pushinteger(L, p.integer);
+                lua_setfield(L, -2, "value");
+            } else if (p.type == "switch") {
+                lua_pushboolean(L, p.integer != 0);
+                lua_setfield(L, -2, "value");
+            }
+            lua_rawseti(L, -2, ++at);
+        }
+        return 1;
+    }
+    // set_parameter(part, key, value): a colour {r, g, b} (0 to 1) or a number held on the part until
+    // cleared, on this screen; an integer or a switch is only read.
+    static int board_set_parameter(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "board", "reskate.board.set_parameter");
+        const int part = board_part(L, 1);
+        const auto key = board_parameter_key(L, 2);
+        std::array<float, 3> value{};
+        bool colour{};
+        if (lua_type(L, 3) == LUA_TTABLE) {
+            colour = true;
+            const char* channels[] = {"r", "g", "b"};
+            for (std::size_t c = 0; c < 3; ++c) {
+                lua_getfield(L, 3, channels[c]);
+                if (!lua_isnumber(L, -1)) luaL_argerror(L, 3, "a colour is {r, g, b}, each 0 to 1");
+                value[c] = static_cast<float>(lua_tonumber(L, -1));
+                lua_pop(L, 1);
+            }
+        } else {
+            value[0] = static_cast<float>(luaL_checknumber(L, 3));
+        }
+        if (!std::all_of(value.begin(), value.end(), [](float v) { return std::isfinite(v); })) luaL_argerror(L, 3, "a value is finite");
+        return result(L, game(plugin).board_set_parameter(plugin.id(), part, key, value, colour));
+    }
+    // clear_parameter([part [, key]]): what the plugin holds there put back (every part, every key).
+    static int board_clear_parameter(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "board", "reskate.board.clear_parameter");
+        const int part = lua_isnoneornil(L, 1) ? -1 : board_part(L, 1);
+        std::optional<std::uint64_t> key;
+        if (!lua_isnoneornil(L, 2)) key = board_parameter_key(L, 2);
+        game(plugin).board_clear_parameter(plugin.id(), part, key);
+        return 0;
+    }
     // ---- outfit ------------------------------------------------------------------------------------------
     // set(slot, item, {placement = {...}, covers = bool}): the item worn over the outfit in that slot.
     static int outfit_set(lua_State* L) {
@@ -2634,7 +2771,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "skater", {{"state", state}, {"noclip", noclip}, {"boost", boost}, {"freeze", freeze}, {"wipeout", wipeout}, {"xray", xray},
                                 {"shape_launch", shape_launch}, {"hide", hide_skater}, {"reach", reach}, {"carry", carry}, {"hand", hand}, {"joint", skater_joint}, {"pose", skater_pose}});
     add_functions(L, "board", {{"motion", board_motion}, {"bones", board_bones}, {"set", board_set}, {"hide", board_hide}, {"clear", board_clear},
-                               {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}});
+                               {"park", board_park}, {"fit", board_fit}, {"toss", board_toss}, {"parameters", board_parameters},
+                               {"set_parameter", board_set_parameter}, {"clear_parameter", board_clear_parameter}});
     add_functions(L, "camera", {{"look", camera_look}, {"set", camera_set}, {"follow", camera_follow}, {"release", camera_release}, {"held", camera_held}, {"get", camera_get}, {"cycle", camera_cycle}});
     add_functions(L, "trainer", {{"set_point", set_point}, {"back", back}});
     add_functions(L, "hud", {{"hide", hide_hud}, {"corner", hud_corner}});

@@ -18,6 +18,7 @@
 #include "Extension/Skater/skater_events.h"
 #include "Extension/Skater/outfit_overlay.h"
 #include "Extension/Skater/board_pose.h"
+#include "Extension/Customization/board_material.h"
 #include "Engine/Vfs/mod_catalog.h"
 #include "Engine/Core/Log/logging.h"
 #include <mutex>
@@ -518,6 +519,24 @@ public:
         if (!fit) return board_pose::fit(plugin, std::nullopt);
         return board_pose::fit(plugin, board_pose::Fit{fit->plates, fit->axle});
     }
+    std::optional<std::vector<BoardParameter>> board_parameters(int part) override {
+        const auto found = board_material::read(static_cast<board_material::Part>(part));
+        if (!found) return std::nullopt;
+        std::vector<BoardParameter> out;
+        for (const auto& p : *found) {
+            using board_material::Kind;
+            const char* type = p.kind == Kind::colour ? "colour" : p.kind == Kind::number ? "number" : p.kind == Kind::integer ? "integer"
+                             : p.kind == Kind::toggle ? "switch" : "other";
+            out.push_back({p.key, type, p.value, p.integer});
+        }
+        return out;
+    }
+    std::string board_set_parameter(std::string_view plugin, int part, std::uint64_t key, std::array<float, 3> value, bool colour) override {
+        return board_material::set(plugin, static_cast<board_material::Part>(part), key, value, colour);
+    }
+    void board_clear_parameter(std::string_view plugin, int part, std::optional<std::uint64_t> key) override {
+        board_material::clear(plugin, part < 0 ? std::nullopt : std::optional(static_cast<board_material::Part>(part)), key);
+    }
     // ---- variants ------------------------------------------------------------------------------------
     // The mod's folder is read again at most every 2 s: a menu page asks every frame.
     std::optional<VariantState> variants(std::string_view plugin, const std::filesystem::path& package) override {
@@ -812,6 +831,7 @@ public:
         pad_hide::hide(plugin, {h.left_trigger, h.right_trigger, h.left_x_grinding, h.right_stick, h.left_stick_click, h.right_stick_click});
         return {};
     }
+    std::optional<Vec3> board_spin() override { return skater_events::board_spin(); }
     std::optional<Vec3> board_velocity() override {
         skater_events::want();
         return skater_events::board_velocity();
@@ -1153,6 +1173,7 @@ public:
         launches::tick(client);
         outfit_overlay::tick();
         board_pose::tick(base, local_skater_component(base, client));
+        board_material::tick(base, client);
         const bool allowed = !multiplayer::local_throwdown_active();
         const auto component = local_skater_component(base, client);
         skater_animation::tick(base, component, allowed);
@@ -1650,6 +1671,7 @@ public:
         board_pose::clear(plugin);
         board_pose::park(plugin, {});
         (void)board_pose::fit(plugin, std::nullopt);
+        board_material::clear(plugin);
         cancel_throwdown(plugin);
         multiplayer::custom_throwdowns::remove_plugin(plugin);
         if (capturer_ == plugin) capturer_.clear();

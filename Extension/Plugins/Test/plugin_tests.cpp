@@ -72,6 +72,20 @@ struct FakeGame final : Game {
         return {};
     }
     void board_park(std::string_view plugin, std::vector<int> bones) override { calls.push_back(std::format("board park {} {}", plugin, bones.size())); }
+    std::optional<std::vector<BoardParameter>> board_parameters(int part) override {
+        if (part != 1) return std::vector<BoardParameter>{};
+        return std::vector<BoardParameter>{{0x873f48af36e50d59ULL, "colour", {.2f, .3f, .4f}, 0},
+                                           {0x841c7d74837f1d39ULL, "number", {1, 0, 0}, 0},
+                                           {0xb00abec403499469ULL, "integer", {}, 13},
+                                           {0xa5f9a6b8098279adULL, "switch", {}, 1}};
+    }
+    std::string board_set_parameter(std::string_view plugin, int part, std::uint64_t key, std::array<float, 3> value, bool colour) override {
+        calls.push_back(std::format("board parameter {} {} {:016x} {} {:.1f}", plugin, part, key, colour ? "colour" : "number", value[0]));
+        return {};
+    }
+    void board_clear_parameter(std::string_view plugin, int part, std::optional<std::uint64_t> key) override {
+        calls.push_back(std::format("board parameter clear {} {} {}", plugin, part, key ? std::format("{:016x}", *key) : "all"));
+    }
     // The general services a game layer in Lua reads and drives (plugin_api_services.cpp).
     std::optional<SkaterTelemetry> telemetry;
     std::optional<SkaterTelemetry> skater_telemetry(std::string_view) override { return telemetry; }
@@ -248,6 +262,7 @@ struct FakeGame final : Game {
         return {};
     }
     std::optional<Vec3> board_velocity() override { return Vec3{1, -2, 3}; }
+    std::optional<Vec3> board_spin() override { return Vec3{0, 4, 0}; }
     std::optional<SlamNews> last_slam() override { return SlamNews{7.5f, 12, 100}; }
     std::string wipeout(float force) override {
         calls.push_back(std::format("wipeout {:.1f}", force));
@@ -864,6 +879,10 @@ void a_permission_must_be_declared() {
         assert(not ok and err:find("needs the \"skater.control\" permission"), err)
         ok, err = pcall(reskate.mods.content, "parks")
         assert(not ok and err:find("needs the \"mods.read\" permission"), err)
+        ok, err = pcall(reskate.board.set_parameter, "grip", "graphic", {r = 1, g = 0, b = 0})
+        assert(not ok and err:find("needs the \"board\" permission"), err)
+        ok, err = pcall(reskate.board.parameters, "deck")
+        assert(not ok and err:find("needs the \"board\" permission"), err)
         reskate.console.print("never")
     )")});
     stopped(host, "bare", "raised an error");
@@ -2245,10 +2264,27 @@ void the_wider_set_reaches_the_game() {
             assert(reskate.board.hide(3))
             reskate.board.park({12, 13, 14, 15})
             assert(reskate.board.toss({12, 4}, {velocity = vector.create(1, 3, 0), spin = vector.create(0, 5, 0), ground = -2}))
+            local grip = reskate.board.parameters("grip")
+            assert(#grip == 4 and grip[1].key == "873f48af36e50d59" and grip[1].name == "graphic" and grip[1].type == "colour", "the grip's parameters")
+            assert(math.abs(grip[1].value.g - 0.3) < 1e-6 and grip[2].value == 1 and grip[2].name == nil, "a colour and a number")
+            assert(grip[3].type == "integer" and grip[3].value == 13 and grip[4].type == "switch" and grip[4].value == true, "an integer and a switch")
+            assert(#reskate.board.parameters("wheels") == 0)
+            assert(reskate.board.set_parameter("grip", "graphic", {r = 1, g = 0, b = 0}))
+            assert(reskate.board.set_parameter("deck", "841C7D74837F1D39", 2.5))
+            assert(not pcall(reskate.board.parameters, "rail"), "a part is one of four")
+            assert(not pcall(reskate.board.set_parameter, "grip", "123", 1), "a key is 16 hex digits")
+            assert(not pcall(reskate.board.set_parameter, "grip", "graphic", {r = 1}), "a colour has three channels")
+            assert(not pcall(reskate.board.set_parameter, "grip", "graphic", math.huge), "a value is finite")
+            reskate.board.clear_parameter("grip", "base")
+            reskate.board.clear_parameter()
             reskate.log("deck fine")
         end)
         reskate.console.command("physics", "x", function()
             assert(reskate.board.motion().velocity.y == -2)
+            local m = reskate.board.motion()
+            assert(m.spin.y == 4, "the board's spin")
+            assert(m.place.position.y == 0 and m.place.rotation[4] == 1, "where the board is")
+            assert(math.abs(m.deck.position.y - 0.1) < 1e-6, "and its deck, on the board's place")
             assert(reskate.skater.wipeout(2))
             local again, two = reskate.skater.wipeout(2)
             assert(not again and two:find("2 s"), "one wipeout every 2 s")
@@ -2371,6 +2407,9 @@ void the_wider_set_reaches_the_game() {
     check(environment.logged("[wide] deck fine") && game.called("board wide 12 2.0 world") && game.called("board hide wide 3") &&
               game.called("board park wide 4") && game.called("board toss wide 2 3 -2"),
           "A plugin changes what is drawn of the board\n" + environment.all());
+    check(game.called("board parameter wide 1 873f48af36e50d59 colour 1.0") && game.called("board parameter wide 0 841c7d74837f1d39 number 2.5") &&
+              game.called("board parameter clear wide 1 8c46cd354b18a9e2") && game.called("board parameter clear wide -1 all"),
+          "and holds its shader parameters\n" + environment.all());
     host.run_console("physics");
     check(environment.logged("[wide] physics fine") && game.called("wipeout 2.0"), "The board's motion reads, and a wipeout is asked for\n" + environment.all());
     ticks(host, environment, 10);

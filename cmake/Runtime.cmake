@@ -173,6 +173,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Boot/discord_presence.cpp
     Extension/Customization/developer_hoodie.cpp
     Extension/Customization/developer_board.cpp
+    Extension/Customization/board_material.cpp
     Extension/Skater/skater_model.cpp
     Extension/Skater/skater_observer.cpp
     Extension/Skater/client_source_spawn.cpp
