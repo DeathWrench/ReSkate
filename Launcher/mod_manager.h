@@ -3,6 +3,7 @@
 #include <atomic>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -52,6 +53,22 @@ std::string install(const std::filesystem::path& mods_root, const std::filesyste
 
 // Moves Mods/<name> to the Recycle Bin. Throws a user-facing message.
 void remove(const std::filesystem::path& mods_root, const std::string& name);
+
+// What the mods give the game's data, as one line: each mod that ships a layout, in load order, with
+// its folder name and its files' fingerprint (Engine/Vfs/mod_list.h mod_fingerprint), then the
+// variants in play. A mod that only holds a plugin, or loose files the game does not draw with, is not
+// in it. When it changes between launches, the launcher empties the game's shader cache: shaders built
+// for the last set of mods, kept and reused, were found to break the picture after many changes.
+struct DataMod {
+    std::string name;
+    std::filesystem::path directory;
+};
+std::string game_data_signature(const std::vector<DataMod>& mods, const std::map<std::string, std::string, std::less<>>& variants);
+// The game's own shader cache, kept apart from the normal game's (Extension/Boot/user_data_redirect.cpp):
+// %LOCALAPPDATA%\ReSkate\Game\Skate\cache. Not the shader_cache folder the game ships with.
+std::filesystem::path game_shader_cache();
+// Removes everything in `folder`, never the folder itself. What could not be removed, a line each.
+std::vector<std::string> empty_folder(const std::filesystem::path& folder);
 
 
 } // namespace dingosdk::launcher_mods

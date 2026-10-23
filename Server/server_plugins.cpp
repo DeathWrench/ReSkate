@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <map>
 
@@ -78,6 +79,27 @@ class ServerGame final : public Game {
                                                      (p.tuning ? 0 : lock_tuning) | (p.objects ? 0 : lock_objects) | (p.ollies ? 0 : lock_ollies));
         host_.set_locks(player, locks, "plugin " + std::string(plugin));
         return {};
+    }
+    std::vector<ServerPark> server_parks() override {
+        std::vector<ServerPark> result;
+        for (auto &p : host_.park_status()) result.push_back({std::move(p.name), std::move(p.map), p.here, p.spawned, p.objects, p.minutes_left});
+        return result;
+    }
+    std::string spawn_park(std::string_view plugin, std::string_view name, unsigned minutes) override {
+        return host_.plugin_park(plugin, true, name, minutes);
+    }
+    std::string remove_park(std::string_view plugin, std::string_view name) override { return host_.plugin_park(plugin, false, name, 0); }
+    // The skaters of the players in the world, as their latest poses put them. The server has
+    // no skater of its own, so this is every player's.
+    std::vector<PeerSkater> peer_skaters() override {
+        std::vector<PeerSkater> result;
+        for (const auto &s : host_.skater_poses()) {
+            const auto &q = s.root.rotation;
+            // The rotation's +Z about world up, as a client's plugin_game_runtime.cpp reads it.
+            const float heading = std::atan2(2 * (q[0] * q[2] + q[3] * q[1]), 1 - 2 * (q[0] * q[0] + q[1] * q[1]));
+            result.push_back({s.id, s.root.position, heading, static_cast<double>(s.age_us) / 1000.0});
+        }
+        return result;
     }
     // Through the console's own ban and unban, so they keep its checks and save the bans file.
     std::string ban(std::uint64_t player) override {
@@ -197,6 +219,9 @@ void ServerPlugins::tick(std::uint64_t now_us) {
         }
         const double dt = s.last_tick ? static_cast<double>(now_us - s.last_tick) / 1000.0 : 0;
         s.last_tick = now_us;
+        // The map the server runs, so plugins hear level_unloading and level_loaded when it
+        // changes, as a game's plugins do (when the server changes it; players load it after).
+        s.plugins.set_level(s.server.map_level());
         s.plugins.tick(dt);
         for (auto &bytes : std::exchange(s.environment.outbox, {})) s.server.send_plugin_message(wire::to_of(bytes), bytes);
     } catch (const std::exception &error) {

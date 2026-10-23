@@ -333,6 +333,8 @@ public:
     virtual std::vector<std::uint64_t> hidden_players(std::string_view /*plugin*/) { return {}; }
     // A short tag beside a player's nametag, the plugin's own (empty text takes it away).
     virtual void set_nametag(std::string_view /*plugin*/, std::uint64_t, std::string, std::uint32_t) {}
+    // The names over the other players held off while any plugin asks (chat bubbles still show).
+    virtual void hide_nametags(std::string_view /*plugin*/, bool /*hidden*/) {}
     // 0 mutes, 1 is as heard, up to 10. The local player's ears only.
     virtual std::string voice_volume(std::uint64_t, float) { return unavailable; }
     // Chat lines after `sequence`, as this player sees them (filtered when they filter).
@@ -564,6 +566,17 @@ public:
     virtual void release_camera(std::string_view /*plugin*/) {}
     // "" while the plugin's view is the one shown, otherwise why not.
     virtual std::string camera_status(std::string_view /*plugin*/) { return unavailable; }
+    // The plugin's camera as a step of the game's camera height button cycle (Engine/Game/Skater/
+    // first_person_cycle.h): out of it, in it and off (ready to start), or in it and on. Held 300 ms,
+    // so said every tick; one plugin at a time. The steps the button asks for come back from
+    // take_camera_cycle, for the plugin in the cycle.
+    enum class CycleCamera : std::uint8_t { out, ready, active };
+    virtual std::string camera_cycle(std::string_view /*plugin*/, CycleCamera) { return unavailable; }
+    struct CycleNews {
+        std::string plugin;
+        bool enter{};
+    };
+    virtual std::vector<CycleNews> take_camera_cycle() { return {}; }
     // Holds the skater where it is (noclip, with no input), while any plugin asks.
     virtual std::string freeze(std::string_view /*plugin*/, bool) { return unavailable; }
     // ---- the session's authority (plugins' server copies) --------------------------------------------
@@ -583,6 +596,18 @@ public:
     };
     virtual std::optional<Permissions> permissions(std::uint64_t) { return std::nullopt; }
     virtual std::string apply_permissions(std::string_view /*plugin*/, std::uint64_t, const Permissions&) { return unavailable; }
+    // A dedicated server's park mods (server.parks): those it has set up, whether each fits the map
+    // running now and is spawned (its objects, and minutes left; 0 until removed). Spawning one (for
+    // `minutes`, 0 until removed) or removing it goes as the server's own park-mod does.
+    struct ServerPark {
+        std::string name, map;
+        bool here{}, spawned{};
+        std::size_t objects{};
+        unsigned minutes_left{};
+    };
+    virtual std::vector<ServerPark> server_parks() { return {}; }
+    virtual std::string spawn_park(std::string_view /*plugin*/, std::string_view /*name*/, unsigned /*minutes*/) { return unavailable; }
+    virtual std::string remove_park(std::string_view /*plugin*/, std::string_view /*name*/) { return unavailable; }
     // ---- skater.animation: clips on the local skater's body (Extension/Skater/skater_animation.h) ------
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.
@@ -616,6 +641,9 @@ public:
     virtual void pause_clip(std::string_view /*plugin*/, bool /*paused*/) {}
     virtual std::optional<float> clip_time(std::string_view /*plugin*/) { return std::nullopt; }
     virtual bool clip_playing(std::string_view /*plugin*/) { return false; }
+    // Who sees a pose, a carry or a reach of the local skater (Extension/Skater/skater_animation.h
+    // Shown): everyone, only the other players (sent, not drawn), or only this player (drawn, not sent).
+    enum class Shown : std::uint8_t { everyone, others, me };
     // An arm of the local skater reaching (Extension/Skater/arm_reach.h): its hand joint to `at` in the
     // world, turned to `rotation` when given, `weight` of the way; held 0.3 s, set every tick. One
     // plugin at a time; none ends that plugin's. Empty when done, else why not.
@@ -624,18 +652,36 @@ public:
         Vec3 at{};
         std::optional<std::array<float, 4>> rotation;
         float weight{1};
+        Shown shown{};
     };
     virtual std::string skater_reach(std::string_view /*plugin*/, std::optional<Reach>) { return unavailable; }
+    // Something held out in the local skater's hands and aimed (Extension/Skater/carry.h): its front
+    // to `front` in the world, pointing as `aim` says (its -Z the way it points); held 0.3 s, set every
+    // tick. One plugin at a time; none ends that plugin's. Empty when done, else why not.
+    struct Carry {
+        bool left{}, both{};
+        Vec3 front{};
+        std::array<float, 4> aim{0, 0, 0, 1};
+        Vec3 front_from_grip{};
+        // Worn on the hand: the item's rotation in the hand joint's frame, and its grip from the hand joint.
+        std::optional<std::pair<std::array<float, 4>, Vec3>> worn;
+        float weight{1}, crouch{}, hunch{}, turn{}, step{}, step_phase{};
+        bool still{}, push_straightens{};
+        Shown shown{};
+    };
+    virtual std::string skater_carry(std::string_view /*plugin*/, std::optional<Carry>) { return unavailable; }
     // Joints of the local skater turned (in their own frame) and scaled on top of the animation, in
-    // the pose drawn and sent (Extension/Skater/skater_animation.h pose); held 0.3 s, so set every
-    // tick; empty ends it. One plugin at a time.
+    // the pose drawn and sent (Extension/Skater/skater_animation.h pose) or one of them (`shown`); held
+    // 0.3 s, so set every tick; empty ends it. One plugin at a time.
     struct JointOffset {
         std::uint16_t joint{};
         std::array<float, 4> rotation{0, 0, 0, 1};
         float scale{1};
         Vec3 offset{}; // added to its position, in its parent's frame
     };
-    virtual std::string skater_pose(std::string_view /*plugin*/, const std::vector<JointOffset>&, float /*weight*/) { return unavailable; }
+    virtual std::string skater_pose(std::string_view /*plugin*/, const std::vector<JointOffset>&, float /*weight*/, Shown /*shown*/) {
+        return unavailable;
+    }
     // Where a hand joint of the local skater is in the world, as last evaluated (after any reach).
     struct HandPlace {
         Vec3 position{};
@@ -711,7 +757,8 @@ public:
     };
     virtual std::optional<std::array<BoardBone, 16>> board_bones() { return std::nullopt; }
     virtual std::string board_set(std::string_view /*plugin*/, int, const BoardBone&, bool /*world*/) { return unavailable; }
-    virtual std::string board_hide(std::string_view /*plugin*/, int) { return unavailable; }
+    // `everyone`: hidden from the other players too, not only on this screen.
+    virtual std::string board_hide(std::string_view /*plugin*/, int, bool /*everyone*/) { return unavailable; }
     virtual void board_clear(std::string_view /*plugin*/, int /*bone, -1: all*/) {}
     virtual void board_park(std::string_view /*plugin*/, std::vector<int>) {}
     virtual std::string board_toss(std::string_view /*plugin*/, std::vector<int>, const Vec3&, const Vec3&, float) { return unavailable; }

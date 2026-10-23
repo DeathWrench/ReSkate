@@ -466,6 +466,31 @@ int main() {
               "Only a retired mod is left out");
     }
 
+    {
+        // What the mods give the game's data, for emptying the game's shader cache when it changes: the mods
+        // with a layout, in load order, with their files, and the variants in play.
+        const auto park = root / L"signature" / L"Park", skin = root / L"signature" / L"Skin";
+        write(park / L"layout.toc", "toc");
+        write(skin / L"layout.toc", "toc");
+        const std::vector<launcher_mods::DataMod> both{{"Park", park}, {"Skin", skin}}, swapped{{"Skin", skin}, {"Park", park}};
+        const auto before = launcher_mods::game_data_signature(both, {});
+        check(before == launcher_mods::game_data_signature(both, {}), "The same mods give the same signature");
+        check(before != launcher_mods::game_data_signature(swapped, {}), "Another load order is another signature");
+        check(before != launcher_mods::game_data_signature({{"Park", park}}, {}), "A mod taken out is another");
+        check(before != launcher_mods::game_data_signature(both, {{"Skin", "red"}}), "Another variant is another");
+        write(skin / L"Win32" / L"skin.sb", "bundle");
+        check(before != launcher_mods::game_data_signature(both, {}), "A mod's files changing is another");
+        // Emptying the cache: everything in it goes, the folder stays.
+        const auto cache = root / L"cache";
+        write(cache / L"6803938.PcDx12", "shaders");
+        write(cache / L"nested" / L"cache.manifest", "manifest");
+        check(launcher_mods::empty_folder(cache).empty() && fs::is_directory(cache) && fs::is_empty(cache), "The shader cache is emptied, its folder kept");
+        check(launcher_mods::empty_folder(root / L"no such folder").empty(), "No cache folder is nothing to do");
+        check(launcher_mods::game_shader_cache().filename() == L"cache" &&
+                  launcher_mods::game_shader_cache().parent_path().filename() == L"Skate",
+              "The game's shader cache is ReSkate's own, under Game/Skate");
+    }
+
     std::error_code ignored;
     fs::remove_all(root, ignored);
     if (failures) {

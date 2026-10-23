@@ -25,6 +25,8 @@
 #include "Extension/Skater/game_speed.h"
 #include "Extension/Skater/launches.h"
 #include "Extension/Skater/pad_hide.h"
+#include "Engine/Game/Skater/first_person_cycle.h"
+#include "Extension/Multiplayer/Hud/custom_nametags.h"
 #include "Extension/Skater/xray.h"
 #include "Extension/UI/hud_corner.h"
 #include "Extension/Throwdowns/custom_modes.h"
@@ -376,6 +378,11 @@ public:
     void set_nametag(std::string_view plugin, std::uint64_t player, std::string text, std::uint32_t colour) override {
         plugin_feed::set_tag(std::string(plugin), player, std::move(text), colour);
     }
+    void hide_nametags(std::string_view plugin, bool hidden) override {
+        if (hidden) nametag_hiders_.emplace(plugin);
+        else if (const auto at = nametag_hiders_.find(plugin); at != nametag_hiders_.end()) nametag_hiders_.erase(at);
+        multiplayer::nametags_held_off.store(!nametag_hiders_.empty(), std::memory_order_relaxed);
+    }
     std::string voice_volume(std::uint64_t player, float volume) override {
         const auto id = std::to_string(player);
         const auto mute = multiplayer::command("voice-mute", id + (volume <= 0 ? " on" : " off"));
@@ -456,7 +463,7 @@ public:
 
     // ---- input -------------------------------------------------------------------------------------------
     std::string bind(std::string_view plugin, std::string_view action, std::uint32_t combo) override {
-        if (!valid_action_binding(combo)) return "that is not a key or pad combo";
+        if (combo && !valid_action_binding(combo)) return "that is not a key or pad combo"; // (0: none of its own)
         binds_[{std::string(plugin), std::string(action)}].own = combo;
         publish_binds();
         return {};
@@ -501,7 +508,7 @@ public:
     std::string board_set(std::string_view plugin, int bone, const BoardBone& value, bool world) override {
         return board_pose::set(plugin, bone, {value.position, value.rotation, value.scale}, world ? board_pose::Space::world : board_pose::Space::local);
     }
-    std::string board_hide(std::string_view plugin, int bone) override { return board_pose::hide(plugin, bone); }
+    std::string board_hide(std::string_view plugin, int bone, bool everyone) override { return board_pose::hide(plugin, bone, everyone); }
     void board_clear(std::string_view plugin, int bone) override { board_pose::clear(plugin, bone); }
     void board_park(std::string_view plugin, std::vector<int> bones) override { board_pose::park(plugin, std::move(bones)); }
     std::string board_toss(std::string_view plugin, std::vector<int> bones, const Vec3& velocity, const Vec3& spin, float ground) override {
@@ -978,7 +985,10 @@ public:
         screen_look::slap();
         return {};
     }
-    std::string skater_pose(std::string_view plugin, const std::vector<JointOffset>& offsets, float weight) override {
+    static skater_animation::Shown shown_of(Shown shown) {
+        return shown == Shown::others ? skater_animation::Shown::others : shown == Shown::me ? skater_animation::Shown::me : skater_animation::Shown::everyone;
+    }
+    std::string skater_pose(std::string_view plugin, const std::vector<JointOffset>& offsets, float weight, Shown shown) override {
         const auto now = GetTickCount64();
         if (!poser_.empty() && poser_ != plugin && now < pose_at_ + 300) return offsets.empty() ? std::string{} : poser_ + " poses the skater";
         if (offsets.empty()) {
@@ -992,7 +1002,65 @@ public:
         pose_at_ = now;
         std::vector<skater_animation::PoseOffset> out;
         for (const auto& o : offsets) out.push_back({o.joint, o.rotation, o.scale, o.offset});
-        skater_animation::pose(std::move(out), weight);
+        skater_animation::pose(std::move(out), weight, shown_of(shown));
+        return {};
+    }
+    std::string camera_cycle(std::string_view plugin, CycleCamera state) override {
+        const auto now = GetTickCount64();
+        auto& link = first_person::plugin_link;
+        if (!cycler_.empty() && cycler_ != plugin && now < cycle_at_ + 300)
+            return state == CycleCamera::out ? std::string{} : cycler_ + " is in the camera cycle";
+        if (state == CycleCamera::out) {
+            if (cycler_ == plugin) {
+                link.flags.store(0, std::memory_order_release);
+                cycler_.clear();
+            }
+            return {};
+        }
+        if (cycler_ != plugin) link.request.store(0, std::memory_order_release); // (a step asked of another plugin)
+        cycler_ = plugin;
+        cycle_at_ = now;
+        link.flags.store(static_cast<std::uint8_t>(first_person::plugin_flag_enabled |
+                                                   (state == CycleCamera::active ? first_person::plugin_flag_on : first_person::plugin_flag_can_enter)),
+                         std::memory_order_release);
+        link.published.store(now, std::memory_order_release);
+        return {};
+    }
+    std::vector<CycleNews> take_camera_cycle() override {
+        const auto step = static_cast<first_person::CycleStep>(first_person::plugin_link.request.exchange(0, std::memory_order_acq_rel));
+        if (step == first_person::CycleStep::none || cycler_.empty() || GetTickCount64() >= cycle_at_ + 300) return {};
+        return {{cycler_, step == first_person::CycleStep::enter}};
+    }
+    std::string skater_carry(std::string_view plugin, std::optional<Carry> goal) override {
+        const auto now = GetTickCount64();
+        if (!carrier_.empty() && carrier_ != plugin && now < carry_at_ + 300) {
+            if (!goal) return {};
+            return carrier_ + " has the skater carrying";
+        }
+        if (!goal) {
+            if (carrier_ == plugin) {
+                skater_animation::carry(std::nullopt);
+                carrier_.clear();
+            }
+            return {};
+        }
+        carrier_ = plugin;
+        carry_at_ = now;
+        carry::Goal g;
+        g.hand = goal->left ? arm_reach::Hand::left : arm_reach::Hand::right;
+        g.both = goal->both;
+        g.front = goal->front;
+        g.aim = goal->aim;
+        g.front_from_grip = goal->front_from_grip;
+        if (goal->worn) g.worn = carry::Grip{goal->worn->first, goal->worn->second};
+        g.weight = goal->weight;
+        g.crouch = goal->crouch;
+        g.hunch = goal->hunch;
+        g.still = goal->still;
+        g.turn = goal->turn;
+        g.step = goal->step;
+        g.step_phase = goal->step_phase;
+        skater_animation::carry(g, goal->push_straightens, shown_of(goal->shown));
         return {};
     }
     std::string skater_reach(std::string_view plugin, std::optional<Reach> goal) override {
@@ -1015,7 +1083,7 @@ public:
         g.at = goal->at;
         if (goal->rotation) g.rotation = *goal->rotation;
         g.weight = goal->weight;
-        skater_animation::reach(g);
+        skater_animation::reach(g, shown_of(goal->shown));
         return {};
     }
     static Tuning tuning_of(const trainer::TuningValue& v) {
@@ -1611,6 +1679,15 @@ public:
             skater_animation::pose({}, 1);
             poser_.clear();
         }
+        if (carrier_ == plugin) {
+            skater_animation::carry(std::nullopt);
+            carrier_.clear();
+        }
+        if (cycler_ == plugin) {
+            first_person::plugin_link.flags.store(0, std::memory_order_release);
+            cycler_.clear();
+        }
+        hide_nametags(plugin, false);
         if (room_owner_ == plugin) room_leave(plugin);
         if (const auto seen = telemetry_seen_.find(plugin); seen != telemetry_seen_.end()) telemetry_seen_.erase(seen);
         plugin_feed::release_tags(std::string(plugin));
@@ -1645,6 +1722,11 @@ private:
     std::vector<EnabledMod> enabled_mods_;
     std::string reacher_; // the plugin holding the skater's arm (skater_reach)
     std::string poser_;   // the plugin turning the skater's joints (skater_pose)
+    std::string carrier_; // the plugin having the skater carry something (skater_carry)
+    std::uint64_t carry_at_{};
+    std::set<std::string, std::less<>> nametag_hiders_; // the plugins holding the nametags off (hide_nametags)
+    std::string cycler_; // the plugin whose camera is in the camera height cycle (camera_cycle)
+    std::uint64_t cycle_at_{};
     std::string room_owner_; // the plugin in the character room (room_open)
     std::uint64_t pose_at_{};
     std::string looker_;  // the plugin whose look is on the screen (screen_look)

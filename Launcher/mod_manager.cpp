@@ -436,6 +436,33 @@ std::string install(const fs::path& mods, const fs::path& source, bool replace,
     }
 }
 
+std::string game_data_signature(const std::vector<DataMod>& mods, const std::map<std::string, std::string, std::less<>>& variants) {
+    std::string text;
+    for (const auto& mod : mods) text += mod.name + '=' + mods::mod_fingerprint(mod.directory) + ';';
+    for (const auto& [mod, variant] : variants) text += "variant " + mod + '=' + variant + ';';
+    return text;
+}
+
+std::filesystem::path game_shader_cache() {
+    std::array<wchar_t, 32768> local{};
+    const auto size = GetEnvironmentVariableW(L"LOCALAPPDATA", local.data(), static_cast<DWORD>(local.size()));
+    if (!size || size >= local.size()) return {};
+    return fs::path(local.data()) / L"ReSkate" / L"Game" / L"Skate" / L"cache";
+}
+
+std::vector<std::string> empty_folder(const std::filesystem::path& folder) {
+    std::vector<std::string> failed;
+    std::error_code error;
+    if (folder.empty() || !fs::is_directory(folder, error)) return failed;
+    for (fs::directory_iterator it(folder, error), end; !error && it != end; it.increment(error)) {
+        std::error_code removing;
+        fs::remove_all(it->path(), removing);
+        if (removing) failed.push_back(utf8(it->path().filename().wstring()) + ": " + removing.message());
+    }
+    if (error) failed.push_back("the folder could not be read: " + error.message());
+    return failed;
+}
+
 void remove(const fs::path& mods, const std::string& name) {
     if (!mods::valid_mod_name(name)) fail("\"" + name + "\" is not a mod folder.");
     const auto target = mods / from_utf8(name);

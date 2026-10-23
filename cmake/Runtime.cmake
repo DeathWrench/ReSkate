@@ -151,6 +151,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/pad_hide.cpp
     Extension/Skater/trick_rewrite.cpp
     Extension/Skater/arm_reach.cpp
+    Extension/Skater/carry.cpp
     Extension/UI/hud_corner.cpp
     Extension/Assets/morph_memory_pool.cpp
     Extension/Assets/native_render_resource_pool.cpp

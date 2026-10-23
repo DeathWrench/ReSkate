@@ -401,7 +401,16 @@ std::string kind_of(const mods::Mod& mod) {
 
 // The rows the list shows, as places in the load order: what the search and the
 // filter leave, in the order asked for.
-std::vector<int> visible_mods(const ModsPanel& panel, const thunderstore::Installed& installed) {
+// An installed mod's categories, as Thunderstore lists its package ("No category" when it lists none,
+// or does not list the mod at all).
+constexpr const char* no_category = "No category";
+std::vector<std::string> categories_of(const ModsPanel& panel, const mods::Mod& mod) {
+    const auto found = panel.categories_by_folder.find(mod.name);
+    if (found == panel.categories_by_folder.end() || found->second.empty()) return {no_category};
+    return found->second;
+}
+
+std::vector<int> visible_mods(const ModsPanel& panel, const thunderstore::Installed& installed, const thunderstore::CategoryFilter& categories) {
     const auto& entries = panel.list.entries;
     const auto query = folded(panel.search.data());
     std::vector<int> view;
@@ -419,6 +428,7 @@ std::vector<int> visible_mods(const ModsPanel& panel, const thunderstore::Instal
         case 7: keep = mod.outdated.empty() && (!conflict_winner(panel, mod.name).empty() || conflict_beats(panel, mod.name)); break;
         default: break;
         }
+        if (keep && !categories.empty()) keep = thunderstore::shown_by(categories_of(panel, mod), categories);
         if (keep && !query.empty())
             keep = folded(mod.title).find(query) != std::string::npos ||
                    folded(mod.name).find(query) != std::string::npos ||
@@ -1124,7 +1134,7 @@ void installed_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, co
 
     // ------------------------------------------------ search, filter, order, check, refresh
     const float combo = S(150), check = S(160), refresh = S(96), gap = S(10);
-    ImGui::SetNextItemWidth(std::max(S(140), ImGui::GetContentRegionAvail().x - (combo + gap) * 2 - check - gap - refresh - gap));
+    ImGui::SetNextItemWidth(std::max(S(140), ImGui::GetContentRegionAvail().x - (combo + gap) * 3 - check - gap - refresh - gap));
     // Ctrl+F jumps to the search, as it does in a browser.
     if (!installing && ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false) &&
         !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
@@ -1142,6 +1152,15 @@ void installed_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, co
     };
     choice("##installed_filter", filter_names, panel.filter);
     ImGui::SameLine(0, gap);
+    {
+        std::vector<std::pair<std::string, int>> categories;
+        for (const auto& entry : entries)
+            for (const auto& category : categories_of(panel, entry.mod)) ++category_count(categories, category);
+        auto& settings = launcher.settings();
+        if (category_menu("##installed_category", settings.installed_categories_only, settings.installed_categories_hidden, std::move(categories), combo))
+            launcher.save();
+    }
+    ImGui::SameLine(0, gap);
     choice("##installed_order", order_names, panel.order);
     ImGui::SameLine(0, gap);
     {
@@ -1156,7 +1175,7 @@ void installed_page(Launcher& launcher, const Fonts& fonts, ModsPanel& panel, co
     ImGui::SameLine(0, gap);
     if (ImGui::Button("Refresh", ImVec2(refresh, 0))) refresh_mods(launcher, panel);
 
-    const auto view = visible_mods(panel, installed);
+    const auto view = visible_mods(panel, installed, {launcher.settings().installed_categories_only, launcher.settings().installed_categories_hidden});
     // Dragging, and typing a place, move a mod among the others in the load order: the order the
     // list must be shown in for where it lands to be what it looks like.
     const bool reorder = panel.order == 0 && !installing;

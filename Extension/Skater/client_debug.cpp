@@ -1276,12 +1276,22 @@ constexpr ULONGLONG cycle_flags_lifetime_ms = 250;
 bool first_person_camera_height_write(bool high) noexcept {
     const auto published = cycle_published.load(std::memory_order_acquire);
     const auto flags = cycle_flags.load(std::memory_order_acquire);
+    // A plugin's camera in the cycle (reskate.camera.cycle), last; its flags come from the plugin runtime.
+    auto& plugin = first_person::plugin_link;
+    const auto plugin_published = plugin.published.load(std::memory_order_acquire);
+    const auto plugin_flags = plugin.flags.load(std::memory_order_acquire);
     const auto now = GetTickCount64();
-    if (now < published || now - published > cycle_flags_lifetime_ms) return high;
+    const bool fresh = now >= published && now - published <= cycle_flags_lifetime_ms;
+    const bool plugin_fresh = now >= plugin_published && now - plugin_published <= cycle_flags_lifetime_ms;
+    if (!fresh && !plugin_fresh) return high;
     const auto write = first_person::cycle_height_write(
-        {(flags & cycle_enabled) != 0, (flags & cycle_first_person) != 0, (flags & cycle_can_enter) != 0}, high);
+        {fresh && (flags & cycle_enabled) != 0, fresh && (flags & cycle_first_person) != 0, fresh && (flags & cycle_can_enter) != 0,
+         plugin_fresh && (plugin_flags & first_person::plugin_flag_enabled) != 0, plugin_fresh && (plugin_flags & first_person::plugin_flag_on) != 0,
+         plugin_fresh && (plugin_flags & first_person::plugin_flag_can_enter) != 0},
+        high);
     if (write.step != first_person::CycleStep::none)
         cycle_request.store(static_cast<std::uint8_t>(write.step), std::memory_order_release);
+    if (write.plugin != first_person::CycleStep::none) plugin.request.store(static_cast<std::uint8_t>(write.plugin), std::memory_order_release);
     return write.high;
 }
 void first_person_cycle_tick(SourceTrial& trial, std::uintptr_t client, bool can_control, bool phase, DWORD error) {
