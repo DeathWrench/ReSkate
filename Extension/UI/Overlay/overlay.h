@@ -693,6 +693,13 @@ inline std::atomic<bool>& menu_open_flag() {
 // Plugins read controllers this way (Extension/Plugins/plugin_joystick.h).
 void begin_input_access() noexcept;
 void end_input_access() noexcept;
+// When the player last worked the controls (GetTickCount64 ms; 0: not since the game started): a
+// key or a mouse button or move the game read, a gamepad's buttons, sticks or triggers, or a
+// joystick a plugin reads. A multiplayer server is told while they do (PacketKind::present), so a
+// player whose skater stands still (flying a plugin's drone) is not taken for away. Any thread.
+std::uint64_t controls_touched_at() noexcept;
+// A joystick a plugin read (Extension/Plugins/plugin_joystick.h): its buttons and six axes.
+void note_joystick(std::uint32_t buttons, const std::array<float, 6>& axes) noexcept;
 }
 
 // Nonblocking. A later Present releases GPU resources after its fence completes.

@@ -80,6 +80,7 @@ void reset_peer(Session &s, std::size_t slot) {
 }
 void stop(Session &s, std::string reason) {
     s.local_typing_until = 0;
+    s.next_presence = s.presence_for = 0;
     // A join that ends before the host's map was ready never got in.
     if (s.mode == Mode::join && s.awaiting_map && !s.travelling && s.join_started)
         trace::record("multiplayer.join", "app.join", std::chrono::milliseconds((now_us() - s.join_started) / 1000), false);
@@ -826,6 +827,7 @@ void render(Session &s, std::uintptr_t client, const NativeFrame &local, std::ui
                                 s.nametag_dots);
 }
 } // namespace
+void note_player_input() noexcept { note_input(); }
 MultiplayerModel model() {
     auto &s = session();
     std::lock_guard lock(s.mutex);

@@ -902,6 +902,7 @@ public:
         if (!joystick::game_in_foreground()) return std::nullopt;
         const auto sample = joystick::poll();
         if (!sample.valid) return std::nullopt;
+        overlay::note_joystick(sample.buttons, sample.axes);
         return StickInput{sample.axes, sample.buttons, sample.name};
     }
     std::string capture_input(std::string_view plugin, bool on) override {

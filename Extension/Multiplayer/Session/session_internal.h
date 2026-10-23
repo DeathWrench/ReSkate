@@ -320,6 +320,8 @@ struct Session {
     // Grey dots above this skater until this time. The overlay sets it while the chat
     // input is changing, and clears it after three seconds idle or when the box closes.
     std::uint64_t local_typing_until{};
+    // The next presence notice may go then, for input after `presence_for` (update_presence).
+    std::uint64_t next_presence{}, presence_for{};
     float chat_bubbles_distance = 40.f, chat_bubbles_duration = 5.f;
     int chat_bubbles_history = 3;
     bool game_menu{};            // a game menu is up or the game's UI is hidden: no chat on screen
@@ -546,6 +548,10 @@ void update_physics_tuning(Session &s, const NativeFrame &local, std::uint64_t n
 // How the local mods change trick scoring (Engine/Vfs/mod_scoring.h). Guest: reported to the host
 // or dedicated server once known and whenever it changes. Host: judged like a guest's.
 void update_scoring(Session &s, std::uint64_t now);
+// Guest of a dedicated server: tells it the player is at their game while they work the controls
+// (note_player_input), every present_interval_us at most.
+void update_presence(Session &s, std::uint64_t now);
+void note_input() noexcept; // (note_player_input)
 // Host: flags or clears a guest from its report and the host's choice.
 void judge_scoring(Session &s, Peer &peer);
 // The chat line for the local player's own mods changing scoring or physics.

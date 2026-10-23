@@ -692,6 +692,22 @@ void chat_codec() {
     auto bad = encode(typing);
     bad.back() = 2; // the on/off byte; anything but 0 or 1 is refused
     check(!decode(bad), "A typing notice with a bad flag decoded");
+    // At the game: nothing but the header, from a sender.
+    Packet present;
+    present.kind = PacketKind::present; present.session = 9; present.epoch = 10; present.map = 11;
+    present.source = 76561198000000001ULL;
+    const auto bytes_present = encode(present);
+    const auto here = decode(bytes_present);
+    check(here && here->kind == PacketKind::present && here->source == present.source && bytes_present.size() == packet_header_size,
+          "A presence notice failed to round-trip, or carried more than its header");
+    check(decode_wire(encode_wire(present)) && decode_wire(encode_wire(present))->kind == PacketKind::present,
+          "A presence notice failed the wire codec");
+    auto longer = bytes_present;
+    longer.push_back(0);
+    longer[8] = 1; // its payload length
+    check(!decode(longer), "A presence notice with a payload decoded");
+    present.source = 0;
+    check(reject(present), "A presence notice without a sender was encoded");
 }
 // Linked throwdowns: the packet carries one opaque message; the message codec is strict.
 void throwdown_codec() {

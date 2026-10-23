@@ -25,6 +25,9 @@ using MapLoader = MapLoadResult (*)(std::string_view map, bool submitted, std::s
 void tick(std::uintptr_t base, std::uintptr_t client, bool gameplay_ready, std::string_view map,
           MapLoader loader = nullptr);
 MultiplayerModel model();
+// The player worked the game's controls just now (overlay.h controls_touched_at). While they do, a
+// dedicated server is told they are at their game (PacketKind::present). Any thread.
+void note_player_input() noexcept;
 std::string take_leave_notice(); // why the session just ended over a missing map, once; client thread
 // What the host or server said as it put the player out of the session (kicked, banned, away too
 // long, a mod or a cheat it does not allow), or refused to let them in for it; once. Client thread.

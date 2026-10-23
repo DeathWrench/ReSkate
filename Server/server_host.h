@@ -203,6 +203,7 @@ class Host {
         // been told they are about to be removed for being away.
         std::uint64_t active_at{};
         bool away_warned{};
+        std::uint64_t present_at{}; // their game's last presence notice counted (PacketKind::present)
         std::uint64_t pose_arrival{};
         std::array<PoseDelivery, max_players> pose_delivery;
         CrowdLimits crowd; // how far the full and half rates reach for them in a crowd

@@ -204,7 +204,9 @@ allow_parties      Let players form parties (default true): invite each other
 party_size         Most players in one party, 2-8 (default 8).
 afk_kick_minutes   Remove a player who has been away this many minutes, 1-1440
                    (default 0: never). Away is not moving, speaking, typing
-                   in chat or changing their objects. They are warned in chat
+                   in chat, changing their objects or using the game's
+                   controls (a player flying a plugin's drone is not away,
+                   though their skater stands still). They are warned in chat
                    a minute before and can join again at once. Admins are
                    never removed for it. Console: afk-kick <minutes>|off.
 kick_minutes       How long a player kicked by an admin is kept out: 1-1440

@@ -1548,6 +1548,12 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
             context_ready();
         {
             DINGO_PROFILE_ZONE("tick/multiplayer");
+            // The player at the controls, whatever the controls drive (the skater, or a plugin's drone).
+            static std::uint64_t controls_worked{};
+            if (const auto at = dingosdk::overlay::controls_touched_at(); at != controls_worked) {
+                controls_worked = at;
+                dingosdk::multiplayer::note_player_input();
+            }
             dingosdk::multiplayer::tick(r.base,client,multiplayer_ready,r.multiplayer_map,load_multiplayer_map);
             if (auto notice = dingosdk::multiplayer::take_leave_notice(); !notice.empty())
                 dingosdk::overlay::notify(dingosdk::overlay::NoticeLevel::warning, "Map not installed", std::move(notice));

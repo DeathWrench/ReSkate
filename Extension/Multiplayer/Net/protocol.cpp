@@ -426,6 +426,8 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         throw std::invalid_argument("Invalid chat message");
     if (p.kind == PacketKind::typing && !p.source)
         throw std::invalid_argument("Invalid typing notice");
+    if (p.kind == PacketKind::present && !p.source)
+        throw std::invalid_argument("Invalid presence notice");
     if (p.kind == PacketKind::admin && (!p.source || !valid_admin_text(p.text)))
         throw std::invalid_argument("Invalid admin message");
     if (p.kind == PacketKind::throwdown && (!p.source || p.throwdown.empty() || p.throwdown.size() > max_throwdown_message))
@@ -497,7 +499,7 @@ std::vector<std::uint8_t> encode(const Packet &p, bool compact_pose, std::uint32
         p.kind != PacketKind::throwdown && p.kind != PacketKind::teleport && p.kind != PacketKind::physics_tuning &&
         p.kind != PacketKind::party && p.kind != PacketKind::scoring && p.kind != PacketKind::physics_extras &&
         p.kind != PacketKind::effects && p.kind != PacketKind::permissions && p.kind != PacketKind::words &&
-        p.kind != PacketKind::next_maps && p.kind != PacketKind::typing)
+        p.kind != PacketKind::next_maps && p.kind != PacketKind::typing && p.kind != PacketKind::present)
         throw std::invalid_argument("Unknown packet kind");
     const auto payload = greeting ? 72
                          : p.kind == PacketKind::away
@@ -1287,6 +1289,8 @@ std::optional<Packet> decode(std::span<const std::uint8_t> bytes) noexcept {
             }
             for (std::uint64_t i = 0; i < removed; ++i) chunk.removed.push_back(r.integer(8));
             if (!valid_object_chunk(chunk)) return {};
+        } else if (p.kind == PacketKind::present) {
+            if (!p.source) return {};
         } else if (p.kind != PacketKind::away)
             return {};
         if (r.at != bytes.size())

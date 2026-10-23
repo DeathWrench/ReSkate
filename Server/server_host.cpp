@@ -1431,6 +1431,15 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
     if (!link->world_ready) return;
     if (!routed_source(p, link->member, peer, true, id_)) return;
     if (p.kind == PacketKind::away) return drop(peer, "A player ended their session.");
+    // At their game though their skater may stand still (a plugin's drone): their time away starts
+    // again. Counted once in present_least_us, so a flood of them does nothing more.
+    if (p.kind == PacketKind::present) {
+        if (link->present_at && now_ < link->present_at + multiplayer::present_least_us) return;
+        link->present_at = now_;
+        link->last_packet = now_;
+        active(*link);
+        return;
+    }
     if (p.kind == PacketKind::objects) {
         const auto before = link->objects.revision();
         if (link->objects.receive(p.objects) == ObjectState::Result::invalid)
@@ -1512,8 +1521,9 @@ void Host::receive_cosmetics() {
 
 // Players who have been away longer than the server allows ("afk_kick_minutes") are removed,
 // with a warning a minute before. Away is doing nothing a player at their game does: not
-// moving, speaking, typing in chat or changing their objects. Admins stay, and so does anyone
-// whose game is still loading the map.
+// moving, speaking, typing in chat, changing their objects or working the controls (their game's
+// presence notice, PacketKind::present). Admins stay, and so does anyone whose game is still
+// loading the map.
 void Host::remove_away() {
     if (!config_.afk_kick) return;
     const auto limit = static_cast<std::uint64_t>(config_.afk_kick) * 60000000;

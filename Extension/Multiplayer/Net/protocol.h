@@ -27,7 +27,7 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 53;
+constexpr std::uint16_t protocol_version = 54;
 // How long a receiver keeps typing dots after the last "still typing" notice. The sender
 // clears them after three seconds without input; this only covers a lost "stopped" packet.
 constexpr std::uint64_t typing_hold_us = 4000000;
@@ -152,7 +152,14 @@ enum class PacketKind : std::uint16_t {
     // Relayed like chat. Not a chat line: receivers draw grey dots above that skater.
     typing = 35,
     // 36 was the FPV drone's marker, before the drone became a plugin: not used again.
+    // A player telling a dedicated server they are at their game: they worked its controls
+    // lately, though their skater may stand still (flying a plugin's drone). The server counts
+    // it as activity for its away limit. Nothing but the header; never relayed.
+    present = 37,
 };
+// How often a game says it is present (PacketKind::present) while its player works the controls,
+// and the least time a server lets pass between two it counts.
+constexpr std::uint64_t present_interval_us = 20000000, present_least_us = 10000000;
 // Packet::party_action. Requests go from a player to whoever hosts, a dedicated server or a
 // lobby's host (party_player = the other player involved, 0 for leave/open/close); invited
 // and withdrawn go from the host to the invitee (party_player = the inviter). The host
