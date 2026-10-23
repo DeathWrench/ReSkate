@@ -40,8 +40,8 @@ struct InstallOptions {
 };
 
 // Installs `source` (a .zip, or a folder) as Mods/<name> and returns <name>.
-// The mod is the shallowest folder holding layout.toc, reskate-levels.json or
-// parks/<map>.park.json, else the shallowest holding manifest.json or
+// The mod is the shallowest folder holding layout.toc, reskate-levels.json,
+// reskate-plugin.json or parks/<map>.park.json, else the shallowest holding manifest.json or
 // reskate-mod.json. Thunderstore's manifest.json, icon.png, README.md and
 // CHANGELOG.md at the top of a package are copied in when the mod sits one
 // folder deeper. A top-level mod takes the archive's name without a trailing

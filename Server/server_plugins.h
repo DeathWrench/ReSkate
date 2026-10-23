@@ -12,7 +12,8 @@
 // a game mode's rules run. The operator installs them in Plugins beside the server, a folder a
 // plugin (with its reskate-plugin.json, "side" "server" or "both"); they load, reload and unload as
 // the folder changes, checked every 2 s. The server has no game: what a plugin may do here is the
-// session's messages, its players, the server API (kick, say, tell, move) and its storage.
+// session's messages, its players, the server API (kick, say, tell, move), its storage and reading
+// the content folders of the mods in Mods (mods.content).
 // Everything here runs on the server's tick thread.
 namespace dingosdk::server {
 class Host;

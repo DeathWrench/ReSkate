@@ -596,6 +596,15 @@ public:
     };
     virtual std::optional<Permissions> permissions(std::uint64_t) { return std::nullopt; }
     virtual std::string apply_permissions(std::string_view /*plugin*/, std::uint64_t, const Permissions&) { return unavailable; }
+    // A player's role on a dedicated server (data/roles.json): its name, its rank (0 to 1000), and
+    // whether it gives any of the server's commands. Nothing for a player with no role, nor where
+    // there are no roles (a lobby's host).
+    struct Role {
+        std::string name;
+        int rank{};
+        bool staff{};
+    };
+    virtual std::optional<Role> role(std::uint64_t) { return std::nullopt; }
     // A dedicated server's park mods (server.parks): those it has set up, whether each fits the map
     // running now and is spawned (its objects, and minutes left; 0 until removed). Spawning one (for
     // `minutes`, 0 until removed) or removing it goes as the server's own park-mod does.
@@ -608,6 +617,32 @@ public:
     virtual std::vector<ServerPark> server_parks() { return {}; }
     virtual std::string spawn_park(std::string_view /*plugin*/, std::string_view /*name*/, unsigned /*minutes*/) { return unavailable; }
     virtual std::string remove_park(std::string_view /*plugin*/, std::string_view /*name*/) { return unavailable; }
+    // Cards and polls on players' screens (a dedicated server's only): each player's own, shown over
+    // the server's announcement or vote until it ends, then the server's again. `players` empty is
+    // everyone on the server now. A card is up for `seconds` (0: long enough to read). A poll has
+    // 2 to max_vote_answers answers and runs `seconds` (0: the server's poll time); it is one card
+    // with one `id` for all its players, and closes for each when they answer. A newer poll for a
+    // player replaces theirs. What each player did comes back from take_poll_news.
+    virtual std::string server_card(std::string_view /*plugin*/, const std::vector<std::uint64_t>& /*players*/, std::string_view /*text*/,
+                                    unsigned /*seconds*/) {
+        return unavailable;
+    }
+    virtual std::string server_poll(std::string_view /*plugin*/, const std::vector<std::uint64_t>& /*players*/, std::string_view /*question*/,
+                                    const std::vector<std::string>& /*answers*/, unsigned /*seconds*/, std::uint32_t& /*id*/) {
+        return unavailable;
+    }
+    // Closes a poll of the plugin's for everyone it is still open for.
+    virtual std::string server_poll_close(std::string_view /*plugin*/, std::uint32_t /*id*/) { return unavailable; }
+    // A player answered a plugin's poll (`answer` from 1, its text), or it closed for them unanswered
+    // (`answer` 0, and why: "timeout", "left", "replaced" or "closed").
+    struct PollNews {
+        std::string plugin;
+        std::uint32_t id{};
+        std::uint64_t player{};
+        std::size_t answer{};
+        std::string text, why;
+    };
+    virtual std::vector<PollNews> take_poll_news() { return {}; }
     // ---- skater.animation: clips on the local skater's body (Extension/Skater/skater_animation.h) ------
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.

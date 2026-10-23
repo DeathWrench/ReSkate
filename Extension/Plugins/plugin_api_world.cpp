@@ -2063,6 +2063,83 @@ struct WorldApi {
         auto& plugin = authority(L, "reskate.server.unban");
         return result(L, game(plugin).unban(player_of(L, 1)));
     }
+    // ---- cards and polls on players' screens ---------------------------------------------------------
+    // Who a card or poll is for: "all" (empty: everyone on the server), one player (an id or a player
+    // table) or a list of them, 1 to 128.
+    static std::vector<std::uint64_t> players_of(lua_State* L, int index) {
+        if (lua_isstring(L, index) && std::string_view(lua_tostring(L, index)) == "all") return {};
+        if (!lua_istable(L, index)) return {player_of(L, index)};
+        lua_getfield(L, index, "id");
+        const bool one = !lua_isnil(L, -1);
+        lua_pop(L, 1);
+        if (one) return {player_of(L, index)};
+        const int count = lua_objlen(L, index);
+        if (count < 1 || count > 128) luaL_argerror(L, index, "a player, a list of 1 to 128 players, or \"all\"");
+        std::vector<std::uint64_t> players;
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, index, i);
+            const auto id = player_of(L, lua_gettop(L));
+            if (std::find(players.begin(), players.end(), id) == players.end()) players.push_back(id);
+            lua_pop(L, 1);
+        }
+        return players;
+    }
+    // As the roster carries an announcement and a vote (Extension/Multiplayer/Net/protocol.h:
+    // max_vote_label, max_vote_answers, max_vote_answer).
+    static constexpr std::size_t card_text = 120, poll_answers = 6, poll_answer = 48;
+    static std::string line_of(lua_State* L, int index, std::size_t most, const char* what) {
+        auto text = checked_text(L, index, most, what);
+        if (text.empty()) luaL_error(L, "%s is empty", what);
+        return text;
+    }
+    // server.card(players, text, seconds?): up for 1 to 60 s (none: long enough to read).
+    static int server_card(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.card");
+        const auto players = players_of(L, 1);
+        const auto text = line_of(L, 2, card_text, "a card's text");
+        const auto seconds = lua_isnoneornil(L, 3) ? 0 : luaL_checkinteger(L, 3);
+        if (!lua_isnoneornil(L, 3) && (seconds < 1 || seconds > 60)) luaL_argerror(L, 3, "seconds, 1 to 60 (none: long enough to read)");
+        return result(L, game(plugin).server_card(plugin.id(), players, text, static_cast<unsigned>(seconds)));
+    }
+    // server.poll(players, question, answers, {seconds}?): the poll's id, or nil and why. 2 to 6
+    // answers; it runs 5 to 300 s (none: the server's poll time).
+    static int server_poll(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.poll");
+        const auto players = players_of(L, 1);
+        const auto question = line_of(L, 2, card_text, "a poll's question");
+        luaL_checktype(L, 3, LUA_TTABLE);
+        const int count = lua_objlen(L, 3);
+        if (count < 2 || count > static_cast<int>(poll_answers)) luaL_argerror(L, 3, "2 to 6 answers");
+        std::vector<std::string> answers;
+        for (int i = 1; i <= count; ++i) {
+            lua_rawgeti(L, 3, i);
+            answers.push_back(line_of(L, lua_gettop(L), poll_answer, "a poll's answer"));
+            lua_pop(L, 1);
+        }
+        lua_Integer seconds = 0;
+        if (!lua_isnoneornil(L, 4)) {
+            luaL_checktype(L, 4, LUA_TTABLE);
+            if (lua_getfield(L, 4, "seconds") != LUA_TNIL) {
+                seconds = luaL_checkinteger(L, -1);
+                if (seconds < 5 || seconds > 300) luaL_argerror(L, 4, "seconds, 5 to 300 (none: the server's poll time)");
+            }
+            lua_pop(L, 1);
+        }
+        std::uint32_t id = 0;
+        if (const auto why = game(plugin).server_poll(plugin.id(), players, question, answers, static_cast<unsigned>(seconds), id); !why.empty()) {
+            lua_pushnil(L);
+            lua_pushlstring(L, why.data(), why.size());
+            return 2;
+        }
+        lua_pushnumber(L, static_cast<double>(id));
+        return 1;
+    }
+    static int server_poll_close(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.poll_close");
+        const double id = luaL_checknumber(L, 1);
+        if (!(id >= 1 && id <= 4294967295.0) || id != std::floor(id)) luaL_argerror(L, 1, "a poll's id");
+        return result(L, game(plugin).server_poll_close(plugin.id(), static_cast<std::uint32_t>(id)));
+    }
     // ---- server.parks: a dedicated server's park mods -----------------------------------------------
     // parks(): {name, map, here (fits the map running now), spawned, objects, minutes_left}[];
     // park_spawn(name, minutes?): for that long (1-1440), or until removed; park_remove(name).
@@ -2152,14 +2229,30 @@ struct WorldApi {
         const auto player = player_of(L, 1);
         return result(L, game(plugin).apply_permissions(plugin.id(), player, permissions_of(L, 2)));
     }
-    // A player table's own names: permissions (read when asked, so always the server's now) and
-    // apply_permissions. Anything else a player table does not have is nil.
+    // player.role: {name, rank, staff}, read-only, or nil for a player with no role.
+    static int player_role(lua_State* L) {
+        auto& plugin = authority(L, "player.role");
+        const auto role = game(plugin).role(player_of(L, 1));
+        if (!role) return 0;
+        lua_createtable(L, 0, 3);
+        lua_pushlstring(L, role->name.data(), role->name.size());
+        lua_setfield(L, -2, "name");
+        lua_pushinteger(L, role->rank);
+        lua_setfield(L, -2, "rank");
+        lua_pushboolean(L, role->staff);
+        lua_setfield(L, -2, "staff");
+        lua_setreadonly(L, -1, true);
+        return 1;
+    }
+    // A player table's own names: permissions and role (read when asked, so always the server's
+    // now) and apply_permissions. Anything else a player table does not have is nil.
     static int player_index(lua_State* L) {
         const char* key = lua_type(L, 2) == LUA_TSTRING ? lua_tostring(L, 2) : "";
         if (std::string_view(key) == "apply_permissions") {
             lua_pushcfunction(L, player_apply_permissions, "apply_permissions");
             return 1;
         }
+        if (std::string_view(key) == "role") return player_role(L);
         if (std::string_view(key) != "permissions") return 0;
         auto& plugin = authority(L, "player.permissions");
         const auto permissions = game(plugin).permissions(player_of(L, 1));
@@ -2799,7 +2892,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
     add_functions(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},
                                 {"ban", server_ban}, {"unban", server_unban}, {"parks", server_parks}, {"park_spawn", server_park_spawn},
-                                {"park_remove", server_park_remove}});
+                                {"park_remove", server_park_remove}, {"card", server_card}, {"poll", server_poll}, {"poll_close", server_poll_close}});
     add_functions(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
                                     {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}});
     add_functions(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},

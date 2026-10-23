@@ -1,5 +1,6 @@
 #include "server_plugins.h"
 #include "server_host.h"
+#include "Extension/Plugins/plugin_content.h"
 #include "Extension/Plugins/plugin_host.h"
 #include "Extension/Plugins/plugin_manifest.h"
 #include "Extension/Plugins/plugin_wire.h"
@@ -80,6 +81,13 @@ class ServerGame final : public Game {
         host_.set_locks(player, locks, "plugin " + std::string(plugin));
         return {};
     }
+    // The role they have (the one given them, or the server's default role), here or not.
+    std::optional<Role> role(std::uint64_t player) override {
+        if (!multiplayer::individual_steam_id(player)) return std::nullopt; // the server itself has none
+        const auto *held = host_.player_role(player);
+        if (!held) return std::nullopt;
+        return Role{held->name, held->rank, server::staff(held)};
+    }
     std::vector<ServerPark> server_parks() override {
         std::vector<ServerPark> result;
         for (auto &p : host_.park_status()) result.push_back({std::move(p.name), std::move(p.map), p.here, p.spawned, p.objects, p.minutes_left});
@@ -89,6 +97,21 @@ class ServerGame final : public Game {
         return host_.plugin_park(plugin, true, name, minutes);
     }
     std::string remove_park(std::string_view plugin, std::string_view name) override { return host_.plugin_park(plugin, false, name, 0); }
+    // Cards and polls on the players' screens, as the roster carries the server's own.
+    std::string server_card(std::string_view plugin, const std::vector<std::uint64_t> &players, std::string_view text, unsigned seconds) override {
+        return host_.plugin_card(plugin, players, text, seconds);
+    }
+    std::string server_poll(std::string_view plugin, const std::vector<std::uint64_t> &players, std::string_view question,
+                            const std::vector<std::string> &answers, unsigned seconds, std::uint32_t &id) override {
+        return host_.plugin_poll(plugin, players, question, answers, seconds, id);
+    }
+    std::string server_poll_close(std::string_view plugin, std::uint32_t id) override { return host_.plugin_poll_close(plugin, id); }
+    std::vector<PollNews> take_poll_news() override {
+        std::vector<PollNews> news;
+        for (auto &n : host_.take_poll_news()) news.push_back({std::move(n.plugin), n.id, n.player, n.answer, std::move(n.text), std::move(n.why)});
+        return news;
+    }
+    void release(std::string_view plugin) override { host_.plugin_screens_release(plugin); }
     // The skaters of the players in the world, as their latest poses put them. The server has
     // no skater of its own, so this is every player's.
     std::vector<PeerSkater> peer_skaters() override {
@@ -100,6 +123,15 @@ class ServerGame final : public Game {
             result.push_back({s.id, s.root.position, heading, static_cast<double>(s.age_us) / 1000.0});
         }
         return result;
+    }
+    // mods.content: every mod folder in the server's Mods, as a game reads its enabled mods. The
+    // server has no load order or mods.json of its own; the folders come by name, as for its maps.
+    std::string content_list(std::string_view folder, std::vector<ContentFile> &files) override {
+        content::list(mod_folders(), folder, files);
+        return {};
+    }
+    std::string content_read(std::string_view mod, std::string_view folder, std::string_view path, std::string &text) override {
+        return content::read(mod_folders(), mod, folder, path, text);
     }
     // Through the console's own ban and unban, so they keep its checks and save the bans file.
     std::string ban(std::uint64_t player) override {
@@ -116,6 +148,15 @@ class ServerGame final : public Game {
     }
 
   private:
+    // Read again at most every 2 s: a plugin may list them every tick.
+    const std::vector<content::Mod> &mod_folders() {
+        const auto now = std::chrono::steady_clock::now();
+        if (!mods_read_ || now - *mods_read_ >= std::chrono::seconds(2)) {
+            mods_read_ = now;
+            mods_ = content::mod_folders(host_.config().mods);
+        }
+        return mods_;
+    }
     bool present(std::uint64_t player) const {
         for (const auto &p : host_.player_list())
             if (p.id == player) return true;
@@ -123,6 +164,8 @@ class ServerGame final : public Game {
     }
     Host &host_;
     ServerPlugins::Log log_;
+    std::vector<content::Mod> mods_;
+    std::optional<std::chrono::steady_clock::time_point> mods_read_;
 };
 
 class ServerEnvironment final : public Environment {

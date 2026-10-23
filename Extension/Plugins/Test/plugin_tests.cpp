@@ -1,5 +1,6 @@
 // The plugin host apart from the game: manifests, the reskate API, storage, modules, hot reload,
 // and the sandbox against plugins written to break it (loops, memory, error floods, escapes).
+#include "Extension/Plugins/plugin_content.h"
 #include "Extension/Plugins/plugin_discovery.h"
 #include "Extension/Plugins/plugin_host.h"
 #include "Extension/Plugins/plugin_manifest.h"
@@ -546,6 +547,10 @@ struct FakeGame final : Game {
         calls.push_back(std::format("announce {} {}", plugin, text));
         return {};
     }
+    std::optional<Role> role(std::uint64_t player) override {
+        if (player == 1) return Role{"moderator", 50, true};
+        return std::nullopt;
+    }
     std::vector<ServerPark> server_parks() override { return {{"street", "San Vansterdam", true, true, 12, 5}, {"plaza", "Isle of Grom", false, false, 0, 0}}; }
     std::string spawn_park(std::string_view plugin, std::string_view name, unsigned minutes) override {
         calls.push_back(std::format("park spawn {} {} {}", plugin, name, minutes));
@@ -555,6 +560,31 @@ struct FakeGame final : Game {
         calls.push_back(std::format("park remove {} {}", plugin, name));
         return {};
     }
+    static std::string players_text(const std::vector<std::uint64_t>& players) {
+        std::string text;
+        for (const auto id : players) text += (text.empty() ? "" : ",") + std::to_string(id);
+        return text.empty() ? "all" : text;
+    }
+    std::string server_card(std::string_view plugin, const std::vector<std::uint64_t>& players, std::string_view text, unsigned seconds) override {
+        calls.push_back(std::format("card {} {} {} {}", plugin, players_text(players), text, seconds));
+        return {};
+    }
+    std::uint32_t next_poll = 41;
+    std::string server_poll(std::string_view plugin, const std::vector<std::uint64_t>& players, std::string_view question,
+                            const std::vector<std::string>& answers, unsigned seconds, std::uint32_t& id) override {
+        std::string listed;
+        for (const auto& answer : answers) listed += (listed.empty() ? "" : "|") + answer;
+        calls.push_back(std::format("poll {} {} {} {} {}", plugin, players_text(players), question, listed, seconds));
+        if (players == std::vector<std::uint64_t>{9}) return "that player is not on the server";
+        id = next_poll++;
+        return {};
+    }
+    std::string server_poll_close(std::string_view plugin, std::uint32_t id) override {
+        calls.push_back(std::format("poll close {} {}", plugin, id));
+        return {};
+    }
+    std::vector<PollNews> poll_news;
+    std::vector<PollNews> take_poll_news() override { return std::exchange(poll_news, {}); }
     std::optional<CameraView> camera_view() override { return CameraView{{1, 2, 3}, {0, 0, 1}, 60}; }
     std::string set_camera(std::string_view plugin, const std::array<float, 16>& pose, float fov) override {
         calls.push_back(std::format("camera {} {:.1f} {:.1f} {:.1f} back {:.2f} {:.2f} {:.2f} fov {:.0f}", plugin, pose[12], pose[13], pose[14],
@@ -1741,11 +1771,17 @@ void plugins_draw_on_the_overlay() {
             local on = d:world_to_screen(vector.create(1, 0, -10))
             assert(on and math.abs(on.x - 1060) < 0.01 and math.abs(on.z - 10) < 0.01, "world_to_screen")
             assert(d:world_to_screen(vector.create(0, 0, 5)) == nil, "behind the camera")
+            -- Just in front of the camera and off to the side the point is millions of pixels
+            -- out, which d:poly would refuse.
+            assert(d:world_to_screen(vector.create(1000, 0, -0.06)) == nil, "far off the screen")
+            assert(d:world_to_screen(vector.create(0, 1000, -0.06)) == nil, "far above the screen")
+            assert(d:world_to_screen(vector.create(1, 0, -0.06)), "off the screen but drawable")
             assert(d:size().x == 1920 and d:size().y == 1080)
             assert(not pcall(d.text, d, vector.create(0, 0, 0), "x", {colour = "red"}), "a colour by name")
             assert(not pcall(d.text, d, vector.create(0 / 0, 0, 0), "x"), "NaN")
             assert(not pcall(d.poly, d, {vector.create(0, 0, 0)}), "a polygon of one point")
             assert(not pcall(d.text, d, vector.create(0, 0, 0), string.rep("x", 600)), "a long text")
+            reskate.log("drawn")
         end)
         reskate.console.command("outside", "x", function()
             local ok, err = pcall(saved.text, saved, vector.create(0, 0, 0), "x")
@@ -1769,6 +1805,7 @@ void plugins_draw_on_the_overlay() {
     running(host, "painter", environment);
     check(environment.layers.size() == 1 && environment.layers[0].plugin == "painter" && environment.layers[0].shapes.size() == 8,
           "Its shapes are handed to the overlay each tick\n" + environment.all());
+    check(environment.logged("drawn"), "and the draw handler ran to its end\n" + environment.all());
     const auto& first = environment.layers[0].shapes[0];
     check(first.kind == plugin_ui::Shape::Kind::text && first.text == "hello" && first.style.colour == 0xff0080ff &&
           first.style.size == 24 && first.style.align == 1, "with their style (colours as ImGui keeps them)");
@@ -2106,6 +2143,103 @@ void plugins_server_copies_spawn_park_mods() {
           "A player's copy used the server's park mods\n" + player.all());
     check(!blind.logged("parks done") && blind.all().find("server.parks") != std::string::npos,
           "A plugin without server.parks used the park mods\n" + blind.all());
+}
+
+// A player's role, for a server copy with server: read-only, nil for one with none. Not for a copy
+// without the permission, nor for a player's copy.
+void plugins_server_copies_see_roles() {
+    TestEnvironment server, player, blind;
+    for (auto* environment : {&server, &player, &blind}) environment->session_now = {true, false, {{1, "Ann", false, false}, {2, "Bob", false, false}}};
+    const std::string main = R"(
+        reskate.console.command("roles", "x", function()
+            local ann, bob = reskate.session.players()[1], reskate.session.players()[2]
+            local role = ann.role
+            assert(role and role.name == "moderator" and role.rank == 50 and role.staff == true)
+            assert(not pcall(function() role.rank = 1000 end), "read-only")
+            assert(bob.role == nil, "nil with no role")
+            reskate.log("roles done")
+        end)
+    )";
+    const auto roles = [&](const char* id, const char* permissions, const char* side) {
+        return package(id, {{manifest_file, manifest(permissions, side)}, {"plugin/main.lua", main}});
+    };
+    Host server_host(server, Side::server), player_host(player, Side::client), blind_host(blind, Side::server);
+    server_host.apply({roles("roles-s", R"("console", "session.read", "server")", "server")});
+    player_host.apply({roles("roles-p", R"("console", "session.read", "server")", "client")});
+    blind_host.apply({roles("roles-b", R"("console", "session.read")", "server")});
+    // a tick first: the host takes the session's players then (Host::follow_session), so they are there to ask
+    ticks(server_host, server, 1);
+    ticks(player_host, player, 1);
+    ticks(blind_host, blind, 1);
+    for (auto* host : {&server_host, &player_host, &blind_host}) host->run_console("roles");
+    check(server.logged("[roles-s] roles done"), "A server copy could not read the players' roles\n" + server.all());
+    check(!player.logged("roles done") && player.all().find("server copy") != std::string::npos,
+          "A player's copy read the players' roles\n" + player.all());
+    check(!blind.logged("roles done") && blind.all().find("\"server\"") != std::string::npos,
+          "A plugin without server read the players' roles\n" + blind.all());
+}
+
+// Cards and polls on players' screens, for a server copy with "server": for a player, a list of
+// them or "all", with checked text, and each answer or close coming back as an event to the plugin
+// that asked. Not for a copy without the permission, nor for a player's copy.
+void plugins_server_copies_show_cards_and_polls() {
+    TestEnvironment server, player, blind;
+    const std::string main = R"(
+        local heard = pcall(reskate.on, "poll_answer", function(e)
+            reskate.log(string.format("answer %d %s %d %s", e.id, e.player, e.answer, e.text))
+        end)
+        pcall(reskate.on, "poll_closed", function(e) reskate.log(string.format("closed %d %s %s", e.id, e.player, e.why)) end)
+        if not heard then reskate.log("no poll events") end
+        reskate.console.command("cards", "x", function()
+            assert(reskate.server.card("all", "Race in 30 s"))
+            assert(reskate.server.card({"7", {id = "8"}}, "Ready?", 5))
+            assert(reskate.server.card({id = "7"}, "Go"))
+            local id = assert(reskate.server.poll("all", "Next track?", {"Docks", "Hill"}, {seconds = 20}))
+            assert(id == 41, tostring(id))
+            assert(reskate.server.poll("7", "Again?", {"Yes", "No", "Later"}) == 42)
+            local none, why = reskate.server.poll("9", "Anyone?", {"a", "b"})
+            assert(none == nil and why == "that player is not on the server", tostring(why))
+            assert(reskate.server.poll_close(41))
+            assert(not pcall(reskate.server.card, "all", ""), "a card says something")
+            assert(not pcall(reskate.server.card, "all", string.rep("x", 121)), "120 characters at most")
+            assert(not pcall(reskate.server.card, "all", "x", 0), "1 to 60 s")
+            assert(not pcall(reskate.server.card, "all", "x", 61), "1 to 60 s")
+            assert(not pcall(reskate.server.card, "everyone", "x"), "a player, a list of them or all")
+            assert(not pcall(reskate.server.card, {}, "x"), "at least one player")
+            assert(not pcall(reskate.server.poll, "all", "", {"a", "b"}), "a question")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"only one"}), "2 to 6 answers")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"1", "2", "3", "4", "5", "6", "7"}), "2 to 6 answers")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"a", string.rep("x", 49)}), "48 characters an answer at most")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"a", ""}), "an answer says something")
+            assert(not pcall(reskate.server.poll, "all", "q?", {"a", "b"}, {seconds = 4}), "5 to 300 s")
+            assert(not pcall(reskate.server.poll_close, "x"), "a poll's id")
+            reskate.log("cards done")
+        end)
+    )";
+    const auto cards = [&](const char* id, const char* permissions, const char* side) {
+        return package(id, {{manifest_file, manifest(permissions, side)}, {"plugin/main.lua", main}});
+    };
+    Host server_host(server, Side::server), player_host(player, Side::client), blind_host(blind, Side::server);
+    server_host.apply({cards("cards-s", R"("console", "server")", "server")});
+    player_host.apply({cards("cards-p", R"("console", "server")", "client")});
+    blind_host.apply({cards("cards-b", R"("console")", "server")});
+    for (auto* host : {&server_host, &player_host, &blind_host}) host->run_console("cards");
+    check(server.logged("[cards-s] cards done"), "A server copy could not show cards and polls\n" + server.all());
+    for (const auto* call : {"card cards-s all Race in 30 s 0", "card cards-s 7,8 Ready? 5", "card cards-s 7 Go 0",
+                             "poll cards-s all Next track? Docks|Hill 20", "poll cards-s 7 Again? Yes|No|Later 0", "poll close cards-s 41"})
+        check(server.fake.called(call), std::string("The server was asked: ") + call + "\n" + server.all());
+    check(!server.fake.called("card cards-s all  0") && !server.fake.called("poll cards-s all q? only one 0"), "A refused call reached the server");
+    // Answers and closes, each to the plugin that asked.
+    server.fake.poll_news = {{"cards-s", 41, 7, 2, "Hill", ""}, {"cards-s", 42, 7, 0, "", "timeout"}, {"someone", 50, 8, 1, "Docks", ""}};
+    ticks(server_host, server, 1);
+    check(server.logged("[cards-s] answer 41 7 2 Hill") && server.logged("[cards-s] closed 42 7 timeout"),
+          "The plugin hears its polls answered and closed\n" + server.all());
+    check(!server.logged("answer 50"), "and only its own");
+    check(!player.logged("cards done") && player.all().find("server copy") != std::string::npos,
+          "A player's copy showed cards\n" + player.all());
+    check(!blind.logged("cards done") && blind.all().find("\"server\"") != std::string::npos && blind.logged("no poll events"),
+          "A plugin without server showed cards or heard polls\n" + blind.all());
+    running(server_host, "cards-s", server);
 }
 
 // Clips on the skater's body: from the package or recorded, played, replacing a trick.
@@ -2884,6 +3018,54 @@ void a_plugin_reads_the_content_folder_it_names() {
     )"}})});
     running(host, "reader", environment);
     check(environment.printed("content ok") && game.called("content list parks"), "The plugin reads its content folder\n" + environment.all());
+}
+
+// What the game and a dedicated server read for mods.content (plugin_content.h), from real folders:
+// every mod folder in a Mods folder by name, each one's files under the folder asked for, and the
+// limits a plugin cannot get past.
+void content_is_read_from_the_mod_folders() {
+    namespace content = dingosdk::plugins::content;
+    const auto mods = scratch / "content mods";
+    const auto write = [](const std::filesystem::path& file, const std::string& text) {
+        std::filesystem::create_directories(file.parent_path());
+        std::ofstream(file, std::ios::binary) << text;
+    };
+    write(mods / "b_track" / "parks" / "start.json", "{}");
+    write(mods / "b_track" / "parks" / "deep" / "a" / "b" / "c" / "level4.json", "{}");
+    write(mods / "b_track" / "parks" / "deep" / "a" / "b" / "c" / "d" / "level5.json", "{}");
+    write(mods / "b_track" / "parks" / "half.tmp", "");
+    write(mods / "b_track" / "parks" / "big.json", std::string((1u << 20) + 1, ' '));
+    write(mods / "b_track" / "manifest.json", R"({"name": "B Track", "version_number": "1.0.0"})");
+    write(mods / "A_Park" / "parks" / "z.json", "zz");
+    write(mods / "A_Park" / "reskate-levels.json", "{}");
+    write(mods / "no parks" / "manifest.json", "not JSON");
+    write(mods / ".reskate_plugin_data" / "parks" / "secret.json", "{}");
+    write(mods / "loose.json", "{}");
+
+    const auto found = content::mod_folders(mods);
+    check(found.size() == 3 && found[0].name == "A_Park" && found[1].name == "b_track" && found[2].name == "no parks",
+          "Every mod folder, by name, none hidden");
+    check(found[0].title == "A_Park" && found[1].title == "B Track" && found[2].title == "no parks", "titled as their manifest names them");
+    check(content::mod_folders(scratch / "no such folder").empty(), "No Mods folder, no mods");
+
+    std::vector<Game::ContentFile> files;
+    content::list(found, "parks", files);
+    std::string listed;
+    for (const auto& file : files) listed += std::format("{}:{}:{} ", file.mod, file.path, file.size);
+    check(listed == std::format("A_Park:z.json:2 b_track:big.json:{} b_track:deep/a/b/c/level4.json:2 b_track:start.json:2 ", (1u << 20) + 1),
+          "Mod by mod, sorted, four folders deep at most, no .tmp: " + listed);
+
+    std::string text;
+    check(content::read(found, "B_TRACK", "parks", "start.json", text).empty() && text == "{}", "A file is read, the mod named in any case");
+    check(content::read(found, "b_track", "parks", "missing.json", text) == "not found", "A missing file");
+    check(content::read(found, "b_track", "parks", "big.json", text) == "the file is larger than 1 MB", "A file over 1 MB");
+    check(content::read(found, "nobody", "parks", "start.json", text) == "no such mod is on", "A mod that is not there");
+    check(content::read(found, ".reskate_plugin_data", "parks", "secret.json", text) == "no such mod is on", "A hidden folder is no mod");
+
+    for (int i = 0; i < 1005; ++i) write(mods / "c_many" / "parks" / std::format("{:04}.json", i), "");
+    files.clear();
+    content::list(content::mod_folders(mods), "parks", files);
+    check(files.size() == content::most_files, std::format("At most {} files, {} listed", content::most_files, files.size()));
 }
 
 void board_break_snaps_the_board_on_a_slam() {
@@ -3870,6 +4052,8 @@ int main() {
         run(animator_studio_records_and_saves);
         run(plugins_server_copies_are_the_authority);
         run(plugins_server_copies_spawn_park_mods);
+        run(plugins_server_copies_see_roles);
+        run(plugins_server_copies_show_cards_and_polls);
         run(plugins_animate_the_skater);
         run(plugins_play_their_own_sounds);
         run(plugins_have_menu_panels);
@@ -3889,6 +4073,7 @@ int main() {
         run(dual_stick_edits_the_companions_settings);
         run(rock_to_fakie_relabels_and_records_the_stall);
         run(a_plugin_reads_the_content_folder_it_names);
+        run(content_is_read_from_the_mod_folders);
         run(board_break_snaps_the_board_on_a_slam);
         run(fpv_drone_flies_and_follows);
         run(hall_of_meat_scores_a_bail);

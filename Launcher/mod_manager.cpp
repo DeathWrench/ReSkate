@@ -23,13 +23,15 @@ namespace fs = std::filesystem;
 namespace dingosdk::launcher_mods {
 namespace {
 
-// What the game loads from a mod, and the files that only describe one.
-constexpr std::array<std::string_view, 2> content_markers{"layout.toc", "reskate-levels.json"};
+// What the game loads from a mod (a plugin's reskate-plugin.json sits at its
+// mod's top), and the files that only describe one.
+constexpr std::array<std::string_view, 3> content_markers{"layout.toc", "reskate-levels.json", "reskate-plugin.json"};
 constexpr std::array<std::string_view, 2> info_markers{"manifest.json", "reskate-mod.json"};
 // Thunderstore requires these at the top of a package (lower case here); they
 // follow the mod in when it is packed one folder deeper.
 constexpr std::array<std::string_view, 4> package_files{"manifest.json", "icon.png", "readme.md", "changelog.md"};
-constexpr char no_mod[] = " does not contain a ReSkate mod (no layout.toc, reskate-levels.json or manifest.json).";
+constexpr char no_mod[] =
+    " does not contain a ReSkate mod (no layout.toc, reskate-levels.json, reskate-plugin.json or manifest.json).";
 // Staging lives inside Mods so the final move is a rename on one volume; the
 // leading dot keeps the runtime from ever treating it as a mod.
 constexpr wchar_t staging_folder[] = L".reskate-install";
@@ -84,8 +86,9 @@ struct Root {
     bool content{};       // holds something the game loads
 };
 
-// The shallowest folder holding game content (layout.toc, reskate-levels.json
-// or parks/<map>.park.json), else the shallowest holding only a description.
+// The shallowest folder holding game content (layout.toc, reskate-levels.json,
+// reskate-plugin.json or parks/<map>.park.json), else the shallowest holding
+// only a description.
 // Content wins so a package's own manifest.json at the top cannot hide a mod
 // packed one folder down.
 std::optional<Root> mod_root(const std::vector<std::string>& files) {
@@ -146,15 +149,11 @@ std::string mod_name(const Root& root, const std::string& source_name, const Ins
     return folder_name(root.folder.empty() ? without_version(source_name) : last_folder(root.folder));
 }
 
-// Last steps in staging: a source that gives the game nothing to load is
-// refused when asked, and the author goes into manifest.json.
-void finish(const fs::path& staging, const Root& root, const std::string& source_name, const InstallOptions& options) {
-    if (options.require_content && !root.content)
-        fail(source_name + " has nothing for ReSkate to load: no layout.toc, reskate-levels.json or parks folder. "
-             "Only mods built with ReSkate Studio, and park mods, can be installed.");
-    const auto manifest = staging / mods::manifest_file;
+// The mod's manifest.json as an object, if it has a readable one. An unreadable
+// manifest is the mod's own business; the game reports it.
+std::optional<Json> read_manifest(const fs::path& manifest) {
     std::error_code error;
-    if (options.author.empty() || !fs::is_regular_file(manifest, error)) return;
+    if (!fs::is_regular_file(manifest, error)) return std::nullopt;
     try {
         std::string text;
         {
@@ -163,13 +162,28 @@ void finish(const fs::path& staging, const Root& root, const std::string& source
         }
         if (text.starts_with("\xef\xbb\xbf")) text.erase(0, 3);
         auto json = Json::parse(text, JsonLimits{1024 * 1024, 16, 65536});
-        if (!json.is_object()) return;
-        if (json.contains("author") && json.at("author").is_string() && !json.at("author").string().empty()) return;
-        json.items()["author"] = Json(options.author);
-        std::ofstream(manifest, std::ios::binary | std::ios::trunc) << json.dump(4) << '\n';
+        if (json.is_object()) return json;
     } catch (...) {
-        // An unreadable manifest is the mod's own business; the game reports it.
     }
+    return std::nullopt;
+}
+
+// Last steps in staging: a source that gives the game nothing to load is
+// refused when asked, unless its manifest.json lists dependencies (a mod pack:
+// what it brings is those), and the author goes into manifest.json.
+void finish(const fs::path& staging, const Root& root, const std::string& source_name, const InstallOptions& options) {
+    const auto manifest = staging / mods::manifest_file;
+    auto json = read_manifest(manifest);
+    const bool pack = json && json->contains("dependencies") && json->at("dependencies").is_array() &&
+        !json->at("dependencies").empty();
+    if (options.require_content && !root.content && !pack)
+        fail(source_name + " has nothing for ReSkate to load: no layout.toc, reskate-levels.json, reskate-plugin.json "
+             "or parks folder, and no dependencies. Only mods built with ReSkate Studio, park mods, plugins and mod "
+             "packs can be installed.");
+    if (options.author.empty() || !json) return;
+    if (json->contains("author") && json->at("author").is_string() && !json->at("author").string().empty()) return;
+    json->items()["author"] = Json(options.author);
+    std::ofstream(manifest, std::ios::binary | std::ios::trunc) << json->dump(4) << '\n';
 }
 
 // Entry names from an archive are untrusted: no absolute paths, drive

@@ -203,6 +203,19 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         if (r.custom_levels.present)
             dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::level,
                 "Custom-level destinations after merging: {}.", r.custom_levels.levels.size());
+        // Names and Quick Drop families mods give their own objects, before anything lists objects.
+        {
+            std::vector<std::pair<std::string, std::filesystem::path>> object_files;
+            for (const auto& mod : mod_catalog.mods)
+                object_files.emplace_back(mod.name, mod.directory / dingosdk::content_cache::mod_objects_file);
+            const auto declared = dingosdk::content_cache::install_mod_objects(object_files);
+            for (const auto& note : declared.notes)
+                dingosdk::logging::log(dingosdk::logging::Level::warning, dingosdk::logging::Channel::objects,
+                    "Mod objects: {}.", note);
+            if (declared.mods)
+                dingosdk::logging::log(dingosdk::logging::Level::info, dingosdk::logging::Channel::objects,
+                    "Mod objects: {} named by {} mod(s).", declared.objects, declared.mods);
+        }
         auto interposer = GetModuleHandleW(L"sl.interposer.dll");
         if (!interposer) interposer = LoadLibraryExW(interposer_path.c_str(), nullptr,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);

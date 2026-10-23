@@ -1,5 +1,6 @@
 #include "plugin_game_runtime.h"
 #include "plugin_session_feed.h"
+#include "plugin_content.h"
 #include "Runtime/runtime_internal.h"
 #include "plugin_ui.h"
 #include "Engine/Game/World/park_rotation.h"
@@ -1443,13 +1444,9 @@ public:
         tricks::prepare_trick_gestures();
         return tricks::trick_gesture(trick);
     }
-    // ---- content: <mod>/<folder>/ of every enabled mod ---------------------------------------------
+    // ---- content: <mod>/<folder>/ of every enabled mod (plugin_content.h) --------------------------
     // The enabled mods, read again at most every 2 s: a page may list them every frame.
-    struct EnabledMod {
-        std::string name, title;
-        std::filesystem::path directory;
-    };
-    std::vector<EnabledMod> enabled_mods() {
+    std::vector<content::Mod> enabled_mods() {
         const auto now = GetTickCount64();
         if (enabled_read_at_ && now - enabled_read_at_ < 2000) return enabled_mods_;
         enabled_read_at_ = now;
@@ -1460,56 +1457,12 @@ public:
                 if (entry.enabled) enabled_mods_.push_back({entry.mod.name, entry.mod.title.empty() ? entry.mod.name : entry.mod.title, entry.mod.directory});
         return enabled_mods_;
     }
-    static constexpr std::size_t most_content_files = 1000, most_content_bytes = 1u << 20;
     std::string content_list(std::string_view folder, std::vector<ContentFile>& files) override {
-        for (const auto& mod : enabled_mods()) {
-            const auto root = mod.directory / std::filesystem::path(std::string(folder));
-            std::error_code error;
-            if (!std::filesystem::is_directory(root, error)) continue;
-            std::vector<ContentFile> found;
-            for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::none, error), end;
-                 !error && it != end; it.increment(error)) {
-                if (it.depth() >= 4) it.disable_recursion_pending();
-                if (!it->is_regular_file(error)) continue;
-                const auto relative = it->path().lexically_relative(root).generic_wstring();
-                std::string path;
-                bool plain = true;
-                for (const auto c : relative) {
-                    if (c < 0x20 || c > 0x7e) plain = false;
-                    path.push_back(static_cast<char>(c));
-                }
-                if (!plain || path.ends_with(".tmp")) continue; // a name a plugin could not ask for again
-                found.push_back({mod.name, mod.title, std::move(path), static_cast<std::uint64_t>(it->file_size(error))});
-                if (files.size() + found.size() >= most_content_files) break;
-            }
-            std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.path < b.path; });
-            for (auto& file : found) files.push_back(std::move(file));
-            if (files.size() >= most_content_files) break;
-        }
+        content::list(enabled_mods(), folder, files);
         return {};
     }
     std::string content_read(std::string_view mod, std::string_view folder, std::string_view path, std::string& text) override {
-        const auto mods_now = enabled_mods();
-        const auto found = std::find_if(mods_now.begin(), mods_now.end(), [&](const EnabledMod& each) {
-            return each.name.size() == mod.size() && _strnicmp(each.name.c_str(), mod.data(), mod.size()) == 0;
-        });
-        if (found == mods_now.end()) return "no such mod is on";
-        const auto root = found->directory / std::filesystem::path(std::string(folder));
-        const auto file = root / std::filesystem::path(std::string(path));
-        std::error_code error;
-        const auto real_root = std::filesystem::weakly_canonical(root, error);
-        const auto real_file = error ? std::filesystem::path{} : std::filesystem::weakly_canonical(file, error);
-        if (error) return "not found";
-        const auto relative = real_file.lexically_relative(real_root);
-        if (relative.empty() || *relative.begin() == "..") return "outside the mod's folder";
-        if (!std::filesystem::is_regular_file(file, error)) return "not found";
-        const auto size = std::filesystem::file_size(file, error);
-        if (error) return "the file cannot be read";
-        if (size > most_content_bytes) return "the file is larger than 1 MB";
-        std::ifstream in(file, std::ios::binary);
-        text.resize(static_cast<std::size_t>(size));
-        if (!in || !in.read(text.data(), static_cast<std::streamsize>(size))) return "the file cannot be read";
-        return {};
+        return content::read(enabled_mods(), mod, folder, path, text);
     }
     std::string trick_label(std::string_view plugin, std::string_view from, std::string_view to) override {
         return trick_rewrite::label(plugin, from, to);
@@ -1742,7 +1695,7 @@ private:
         std::vector<std::string> installed;
     };
     std::map<std::string, VariantRead, std::less<>> variant_reads_;
-    std::vector<EnabledMod> enabled_mods_;
+    std::vector<content::Mod> enabled_mods_;
     std::string reacher_; // the plugin holding the skater's arm (skater_reach)
     std::string poser_;   // the plugin turning the skater's joints (skater_pose)
     std::string carrier_; // the plugin having the skater carry something (skater_carry)

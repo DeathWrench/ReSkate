@@ -823,11 +823,13 @@ void Host::send_roster() {
         if (m.party && std::none_of(p.members.begin(), p.members.end(),
                                     [&](const Member &o) { return o.party == m.party && o.party_leader; }))
             m.party_leader = true; // the first listed member of a party missing its leader
-    // An announcement for one player: everyone else's roster goes without it. And a player with
-    // locked tools is told those are off for them. Everyone else gets the same roster; players
-    // whose roster differs in the same way share one.
+    // An announcement for one player: everyone else's roster goes without it. A player with
+    // locked tools is told those are off for them, and one with a plugin's card or poll is shown
+    // it (by its id) over the server's. Everyone else gets the same roster; players whose roster
+    // differs in the same way share one.
     struct Variant {
         bool noclip{}, no_bail{}, boosts{}, ollies{}, enforce_tuning{}, announcement{};
+        std::uint32_t plugin_card{}, plugin_poll{};
         auto operator<=>(const Variant &) const = default;
     };
     const Variant common{config_.noclip, config_.no_bail, config_.boosts, true, config_.enforce_tuning, !announcement_for_};
@@ -837,6 +839,8 @@ void Host::send_roster() {
         if (!guest->handshaken) continue;
         auto variant = common;
         variant.announcement = !announcement_for_ || id == announcement_for_;
+        if (const auto card = plugin_cards_.find(id); card != plugin_cards_.end()) variant.plugin_card = card->second.card.id;
+        if (const auto poll = plugin_polls_.find(id); poll != plugin_polls_.end()) variant.plugin_poll = poll->second.id;
         if (const auto locks = locks_of(id)) {
             // Without "movement" (send_permissions), the tools their role gives are said here instead.
             const bool movement = (locks & lock_movement) && has(id, multiplayer::role_movement);
@@ -853,6 +857,7 @@ void Host::send_roster() {
         others.insert(id);
     }
     const auto shown = p.announcement;
+    const auto vote = p.vote;
     if (announcement_for_) p.announcement = {};
     broadcast(p, true, false, 0, nullptr, others.empty() ? nullptr : &others);
     for (const auto &[variant, players] : variants) {
@@ -862,6 +867,9 @@ void Host::send_roster() {
         p.guest_ollies = variant.ollies;
         p.enforce_tuning = variant.enforce_tuning;
         p.announcement = variant.announcement ? shown : multiplayer::ServerAnnouncement{};
+        p.vote = vote;
+        // The same card and poll ids: the same card and poll, so any of these players' is theirs.
+        if (variant.plugin_card || variant.plugin_poll) plugin_screens_roster(*players.begin(), p.announcement, p.vote);
         broadcast(p, true, false, 0, &players);
     }
     roster_dirty_ = false;
@@ -1031,6 +1039,7 @@ void Host::drop(std::uint64_t id, const std::string &reason, const std::string &
         guest->sound_sender.forget(id);
     }
     party_left(id, name);
+    plugin_screens_left(id);
     // Their vote cooldown stays (tick() drops it once it has run out): leaving and coming
     // back does not let a player start another vote sooner.
     // One voter fewer, or the player a kick vote was about. Counted in tick(): a passing kick

@@ -4,7 +4,9 @@
 #include "Engine/Core/Json/json.h"
 #include "Engine/Core/Platform/path_text.h"
 
+#ifdef _WIN32
 #include <Windows.h>
+#endif
 
 #include <algorithm>
 #include <cstdint>
@@ -429,7 +431,13 @@ void write_exclusions(const std::filesystem::path& mods_root,
             output.write(text.data(), static_cast<std::streamsize>(text.size()));
             if (!output.flush()) return;
         }
+#ifdef _WIN32
         MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+#else
+        // rename replaces the old file in one step on POSIX, as MoveFileExW does on Windows.
+        std::error_code ignored;
+        fs::rename(temporary, path, ignored);
+#endif
     } catch (...) {}
 }
 
@@ -615,12 +623,23 @@ void save_mod_order(const std::filesystem::path& mods_root, const std::vector<Mo
         if (!output || !output.write(text.data(), static_cast<std::streamsize>(text.size())) || !output.flush())
             throw std::runtime_error("Cannot write " + path_utf8(temporary));
     }
+#ifdef _WIN32
     if (!MoveFileExW(temporary.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
         std::error_code ignored;
         fs::remove(temporary, ignored);
         throw std::runtime_error("Cannot replace " + path_utf8(target) + " (Windows error " +
             std::to_string(GetLastError()) + ")");
     }
+#else
+    // Elsewhere (the plugin tests on Linux) rename replaces the old file in one step.
+    std::error_code renamed;
+    fs::rename(temporary, target, renamed);
+    if (renamed) {
+        std::error_code ignored;
+        fs::remove(temporary, ignored);
+        throw std::runtime_error("Cannot replace " + path_utf8(target) + " (" + renamed.message() + ")");
+    }
+#endif
 }
 
 } // namespace dingosdk::mods

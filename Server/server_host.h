@@ -23,6 +23,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 #include <array>
 
@@ -85,6 +86,8 @@ class Host {
     std::uint8_t player_locks(std::uint64_t id) const { return locks_of(id); }
     std::uint8_t set_locks(std::uint64_t id, std::uint8_t locks, const std::string &source);
     std::optional<std::array<float, 3>> player_position(std::uint64_t steam_id) const;
+    // The role a player has (data/roles.json: given them, or the default), here or not; or none.
+    const Role *player_role(std::uint64_t id) const { return role_of(id); }
     // Where each player in the world last said their skater was (their latest pose's root), and
     // how long ago that arrived: what the server's plugins see of the skaters.
     struct SkaterPose {
@@ -110,6 +113,26 @@ class Host {
     std::string plugin_park(std::string_view plugin, bool spawn, std::string_view name, unsigned minutes);
     // A plugin message from the server's plugins (server_plugins.h) to one player, or everyone (0).
     void send_plugin_message(std::uint64_t to, const std::vector<std::uint8_t> &bytes);
+    // Cards and polls for the server's plugins (server_votes.cpp), on the players' screens: each
+    // player's own, shown over the server's announcement and vote until it ends, then those again.
+    // `players` empty is everyone on now. A card is up `seconds` (0: as long as an announcement);
+    // a poll runs `seconds` (0: votes.poll_seconds), one id for all its players, closed for each
+    // as they answer ("/2"); a player's newer poll replaces theirs. "" when shown, else why not.
+    std::string plugin_card(std::string_view plugin, const std::vector<std::uint64_t> &players, std::string_view text, unsigned seconds);
+    std::string plugin_poll(std::string_view plugin, const std::vector<std::uint64_t> &players, std::string_view question,
+                            const std::vector<std::string> &answers, unsigned seconds, std::uint32_t &id);
+    std::string plugin_poll_close(std::string_view plugin, std::uint32_t id);
+    void plugin_screens_release(std::string_view plugin); // a plugin that stopped: its cards and polls go
+    // A player's answer (from 1) to a plugin's poll, or (answer 0) the poll closed for them and why:
+    // "timeout", "left", "replaced" or "closed".
+    struct PollNews {
+        std::string plugin;
+        std::uint32_t id{};
+        std::uint64_t player{};
+        std::size_t answer{};
+        std::string text, why;
+    };
+    std::vector<PollNews> take_poll_news() { return std::exchange(poll_news_, {}); }
 
     enum class VoteKind { map, kick, time, custom, poll, extend };
 
@@ -294,6 +317,22 @@ class Host {
     std::uint64_t announcement_until_{};
     std::uint64_t announcement_for_{}; // the one player shown it, or 0: everyone
     std::uint32_t announcement_ids_{};
+    // The plugins' cards and polls, by the player they are shown to (plugin_card, plugin_poll).
+    struct PluginCard {
+        std::string plugin;
+        multiplayer::ServerAnnouncement card;
+        std::uint64_t until{};
+    };
+    struct PluginPoll {
+        std::string plugin;
+        std::uint32_t id{};
+        std::string question;
+        std::vector<std::string> answers;
+        std::uint64_t ends{};
+    };
+    std::map<std::uint64_t, PluginCard> plugin_cards_;
+    std::map<std::uint64_t, PluginPoll> plugin_polls_;
+    std::vector<PollNews> poll_news_;
     std::uint64_t announced_at_{}; // the last timed announcement, or while nobody is on
     std::size_t next_announcement_{};
     void active(Guest &guest) {
@@ -518,6 +557,17 @@ class Host {
     // The announcement card on every player's screen, or only on player `to`'s (not in chat).
     void announce(std::string_view text, std::uint64_t to = 0);
     void tick_announcements(); // the owner's messages in turn, on their timer
+    // The plugins' cards and polls (plugin_card, plugin_poll): a poll closed for one player, with
+    // why; a number they typed, true when it was about their plugin poll (answered or refused);
+    // what ran out; a player who left; and the card and vote player `id`'s roster carries instead
+    // of `card` and `vote`.
+    // The players a plugin named who are on now (everyone for none); empty, and why, when none is.
+    std::vector<Guest *> plugin_screen_players(const std::vector<std::uint64_t> &players, std::string &why);
+    void close_plugin_poll(std::uint64_t player, std::string_view why);
+    bool answer_plugin_poll(Guest &, std::size_t answer);
+    void tick_plugin_screens();
+    void plugin_screens_left(std::uint64_t player);
+    void plugin_screens_roster(std::uint64_t id, multiplayer::ServerAnnouncement &card, multiplayer::ServerVote &vote) const;
     void reply(Guest &, std::string_view text, unsigned max_lines = 12);
     Guest *match_player(std::string_view text);
     // Sends each mover to a ring of `radius` around `at`, 1 m up, so nobody lands inside anyone; how many were sent.
