@@ -192,6 +192,17 @@ park_mods          Parks built in the game's Park Editor and shared as mods,
 park_limits        How much may be spawned at once (default {"parks": 3,
                    "objects": 512}): parks 1-16, their objects in all 1-1024.
 
+"plugins" - What players must have to join.
+required           Thunderstore plugins every player must have (default []),
+                   such as "neekgate-FPV_Drone", or "neekgate-FPV_Drone-1.0.0"
+                   for at least that version; at most 16. A player without
+                   them is asked once, on the card that offers a missing map,
+                   and their game downloads, installs and applies them and
+                   joins. Only plugins: the server checks each on Thunderstore
+                   as it starts and leaves out one not listed as a plugin, and
+                   players' games fetch nothing that is not a plugin, whatever
+                   a server asks for.
+
 "players" - What players may do.
 allow_noclip, allow_no_bail, allow_boosts
                    Let players use noclip (and tp) / No Bail / the forward and up

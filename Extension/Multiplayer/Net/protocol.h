@@ -27,7 +27,7 @@ namespace dingosdk::multiplayer {
 constexpr std::size_t max_skater_bones = 512, max_board_bones = 64;
 constexpr std::size_t max_packet = 24576;
 constexpr std::size_t packet_header_size = 64;
-constexpr std::uint16_t protocol_version = 54;
+constexpr std::uint16_t protocol_version = 55;
 // How long a receiver keeps typing dots after the last "still typing" notice. The sender
 // clears them after three seconds without input; this only covers a lost "stopped" packet.
 constexpr std::uint64_t typing_hold_us = 4000000;
@@ -224,6 +224,12 @@ inline constexpr std::uint64_t map_fetch_limit_us = map_fetch_policy::session_us
 // maps and for a map mod that is not from Thunderstore.
 inline constexpr std::size_t max_map_package = 96;
 bool valid_map_package(std::string_view package) noexcept;
+// The plugins a dedicated server needs its players to have, named as map packages are
+// ("Owner-Name", or "Owner-Name-1.2.3" for at least that version): each a valid_map_package,
+// none empty, none twice. A player's game fetches only what Thunderstore lists as a plugin and
+// what runs Luau code, whatever a server names (Extension/Assets/map_download.h).
+inline constexpr std::size_t max_required_plugins = 16;
+bool valid_required_plugins(const std::vector<std::string> &packages) noexcept;
 // That name for a mod folder and the version its manifest gives; empty when the folder is not
 // named as a package: "Owner-Name", as the launcher installs one, or "Owner-Name-1.2.3", as its
 // zip unpacks by hand. The manifest's version comes before the folder's; one that is not three
@@ -373,6 +379,7 @@ struct Packet {
     std::uint16_t map_rotation{};             // maps: minutes per map (0: off)
     std::string map_label;                    // map_offer, world_state: the map's name for people (may be empty)
     std::string map_package;                  // map_offer, world_state: valid_map_package (may be empty)
+    std::vector<std::string> required_plugins; // map_offer: valid_required_plugins (a player's lobby: none)
     std::vector<std::uint8_t> throwdown;      // throwdown: one encoded message (1..max_throwdown_message bytes)
     std::array<float, 3> teleport{};          // teleport: where the receiver goes (world position)
     std::vector<std::uint8_t> tuning;         // physics_tuning: 0..max_physics_tuning bytes

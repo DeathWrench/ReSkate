@@ -8,6 +8,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <span>
 
 // The wider set's game parts of the reskate API: the skater's state, control and save points, the
@@ -2140,6 +2141,44 @@ struct WorldApi {
         if (!(id >= 1 && id <= 4294967295.0) || id != std::floor(id)) luaL_argerror(L, 1, "a poll's id");
         return result(L, game(plugin).server_poll_close(plugin.id(), static_cast<std::uint32_t>(id)));
     }
+    // ---- hiding a player from others ----------------------------------------------------------------
+    // server.hide(target, viewers, {skater, name, voice, sound}?): each true unless said. The name
+    // goes with the skater (a game has no skater without its player); without them, only the voice
+    // and/or the sound is held back.
+    static int server_hide(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.hide");
+        const auto target = player_of(L, 1);
+        if (lua_isnoneornil(L, 2)) luaL_argerror(L, 2, "who they are hidden from: a player, a list of players, or \"all\"");
+        const auto viewers = players_of(L, 2);
+        Game::Hiding what;
+        if (!lua_isnoneornil(L, 3)) {
+            luaL_checktype(L, 3, LUA_TTABLE);
+            std::optional<bool> skater, name, voice, sound;
+            lua_pushnil(L);
+            while (lua_next(L, 3)) {
+                const std::string_view key = lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : "";
+                auto* field = key == "skater" ? &skater : key == "name" ? &name : key == "voice" ? &voice : key == "sound" ? &sound : nullptr;
+                if (!field) luaL_argerror(L, 3, "only skater, name, voice and sound");
+                if (!lua_isboolean(L, -1)) luaL_argerror(L, 3, "skater, name, voice and sound are true or false");
+                *field = lua_toboolean(L, -1) != 0;
+                lua_pop(L, 1);
+            }
+            if (skater && name && *skater != *name) luaL_argerror(L, 3, "the name goes with the skater: both true or both false");
+            what.skater = skater.value_or(name.value_or(true));
+            what.voice = voice.value_or(true);
+            what.sound = sound.value_or(true);
+            if (what.skater && (!what.voice || !what.sound)) luaL_argerror(L, 3, "a hidden skater's voice and sound are hidden too");
+            if (!what.skater && !what.voice && !what.sound) luaL_argerror(L, 3, "nothing to hide: the skater, the voice or the sound");
+        }
+        return result(L, game(plugin).server_hide(plugin.id(), target, viewers, what));
+    }
+    // server.unhide(target, viewers?): shown again to them (none: to everyone this plugin hid them from).
+    static int server_unhide(lua_State* L) {
+        auto& plugin = authority(L, "reskate.server.unhide");
+        const auto target = player_of(L, 1);
+        const auto viewers = lua_isnoneornil(L, 2) ? std::vector<std::uint64_t>{} : players_of(L, 2);
+        return result(L, game(plugin).server_unhide(plugin.id(), target, viewers));
+    }
     // ---- server.parks: a dedicated server's park mods -----------------------------------------------
     // parks(): {name, map, here (fits the map running now), spawned, objects, minutes_left}[];
     // park_spawn(name, minutes?): for that long (1-1440), or until removed; park_remove(name).
@@ -2892,7 +2931,8 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
     add_functions(L, "audio", {{"play", audio_play}, {"set", audio_set}, {"stop", audio_stop}, {"playing", audio_playing}});
     add_functions(L, "server", {{"kick", server_kick}, {"say", server_say}, {"tell", server_tell}, {"move", server_move},
                                 {"ban", server_ban}, {"unban", server_unban}, {"parks", server_parks}, {"park_spawn", server_park_spawn},
-                                {"park_remove", server_park_remove}, {"card", server_card}, {"poll", server_poll}, {"poll_close", server_poll_close}});
+                                {"park_remove", server_park_remove}, {"card", server_card}, {"poll", server_poll}, {"poll_close", server_poll_close},
+                                {"hide", server_hide}, {"unhide", server_unhide}});
     add_functions(L, "throwdowns", {{"state", throwdown_state}, {"host", throwdown_host}, {"cancel", throwdown_cancel}, {"hosting", throwdown_hosting},
                                     {"mode", throwdown_mode}, {"remove_mode", throwdown_remove_mode}});
     add_functions(L, "music", {{"current", current}, {"play", play}, {"pause", pause}, {"next", next}, {"previous", previous},

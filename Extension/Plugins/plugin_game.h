@@ -643,6 +643,22 @@ public:
         std::string text, why;
     };
     virtual std::vector<PollNews> take_poll_news() { return {}; }
+    // One player hidden from others (a dedicated server's only): `skater` takes them out of those
+    // players' games altogether (skater, name, objects, voice and sound, as if they had left);
+    // without it, only their voice and/or sound is held back. `viewers` empty is everyone on now
+    // but the target. Refused while the target shares a party or a throwdown with one of them.
+    // Showing them again (`viewers` empty: everyone the plugin hid them from) sends their outfit,
+    // poses and objects anew.
+    struct Hiding {
+        bool skater = true, voice = true, sound = true;
+    };
+    virtual std::string server_hide(std::string_view /*plugin*/, std::uint64_t /*target*/, const std::vector<std::uint64_t>& /*viewers*/,
+                                    const Hiding&) {
+        return unavailable;
+    }
+    virtual std::string server_unhide(std::string_view /*plugin*/, std::uint64_t /*target*/, const std::vector<std::uint64_t>& /*viewers*/) {
+        return unavailable;
+    }
     // ---- skater.animation: clips on the local skater's body (Extension/Skater/skater_animation.h) ------
     // One plugin plays at a time; none while a throwdown runs. A replacement plays when the game does
     // `trick` ("kickflip") with that pop ("" any, "low", "mid", "high"); a null clip takes it away.

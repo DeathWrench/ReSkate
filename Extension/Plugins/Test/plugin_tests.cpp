@@ -560,6 +560,15 @@ struct FakeGame final : Game {
         calls.push_back(std::format("park remove {} {}", plugin, name));
         return {};
     }
+    std::string server_hide(std::string_view plugin, std::uint64_t target, const std::vector<std::uint64_t>& viewers, const Hiding& what) override {
+        calls.push_back(std::format("hide {} {} from {} skater {} voice {} sound {}", plugin, target, players_text(viewers), what.skater, what.voice,
+                                    what.sound));
+        return target == 9 ? "that player is not on the server" : std::string{};
+    }
+    std::string server_unhide(std::string_view plugin, std::uint64_t target, const std::vector<std::uint64_t>& viewers) override {
+        calls.push_back(std::format("unhide {} {} from {}", plugin, target, players_text(viewers)));
+        return {};
+    }
     static std::string players_text(const std::vector<std::uint64_t>& players) {
         std::string text;
         for (const auto id : players) text += (text.empty() ? "" : ",") + std::to_string(id);
@@ -2107,6 +2116,53 @@ void plugins_server_copies_are_the_authority() {
 
 // A dedicated server's park mods, for a server copy with server.parks: listed, spawned and removed
 // as the server's park-mod does. Not for a copy without the permission, nor for a player's copy.
+// One player hidden from others, for a server copy with "server": wholly (skater, name, voice,
+// sound) or only their voice or sound, from a player, a list of them or "all", and shown again.
+// Not for a copy without the permission, nor for a player's copy.
+void plugins_server_copies_hide_players() {
+    TestEnvironment server, player, blind;
+    const std::string main = R"(
+        reskate.console.command("hide", "x", function()
+            assert(reskate.server.hide("7", "all"))
+            assert(reskate.server.hide({id = "7"}, {"8", {id = "5"}}))
+            assert(reskate.server.hide("7", "8", {skater = false, voice = true, sound = false}))
+            assert(reskate.server.hide("7", "8", {skater = false, sound = true}))
+            assert(reskate.server.hide("7", "8", {skater = true, name = true}))
+            local ok, why = reskate.server.hide("9", "8")
+            assert(not ok and why == "that player is not on the server", tostring(why))
+            assert(reskate.server.unhide("7", "8"))
+            assert(reskate.server.unhide("7"))
+            assert(not pcall(reskate.server.hide, "7"), "who it is hidden from")
+            assert(not pcall(reskate.server.hide, "7", {}), "at least one viewer")
+            assert(not pcall(reskate.server.hide, "7", "8", {skater = false, voice = false, sound = false}), "it hides something")
+            assert(not pcall(reskate.server.hide, "7", "8", {skater = true, voice = false}), "a hidden skater's voice goes too")
+            assert(not pcall(reskate.server.hide, "7", "8", {skater = false, name = true}), "the name goes with the skater")
+            assert(not pcall(reskate.server.hide, "7", "8", {colour = true}), "only skater, name, voice and sound")
+            assert(not pcall(reskate.server.hide, "7", "8", {skater = "yes"}), "true or false")
+            assert(not pcall(reskate.server.unhide, "nobody"), "a player")
+            reskate.log("hide done")
+        end)
+    )";
+    const auto hider = [&](const char* id, const char* permissions, const char* side) {
+        return package(id, {{manifest_file, manifest(permissions, side)}, {"plugin/main.lua", main}});
+    };
+    Host server_host(server, Side::server), player_host(player, Side::client), blind_host(blind, Side::server);
+    server_host.apply({hider("hide-s", R"("console", "server")", "server")});
+    player_host.apply({hider("hide-p", R"("console", "server")", "client")});
+    blind_host.apply({hider("hide-b", R"("console")", "server")});
+    for (auto* host : {&server_host, &player_host, &blind_host}) host->run_console("hide");
+    check(server.logged("[hide-s] hide done"), "A server copy could not hide players\n" + server.all());
+    for (const auto* call : {"hide hide-s 7 from all skater true voice true sound true", "hide hide-s 7 from 8,5 skater true voice true sound true",
+                             "hide hide-s 7 from 8 skater false voice true sound false", "hide hide-s 7 from 8 skater false voice true sound true",
+                             "hide hide-s 9 from 8 skater true voice true sound true", "unhide hide-s 7 from 8", "unhide hide-s 7 from all"})
+        check(server.fake.called(call), std::string("The server was asked: ") + call + "\n" + server.all());
+    check(!server.fake.called("hide hide-s 7 from 8 skater false voice false sound false") && !server.fake.called("unhide hide-s 0"),
+          "A refused call reached the server");
+    check(!player.logged("hide done") && player.all().find("server copy") != std::string::npos, "A player's copy hid players\n" + player.all());
+    check(!blind.logged("hide done") && blind.all().find("\"server\"") != std::string::npos, "A plugin without server hid players\n" + blind.all());
+    running(server_host, "hide-s", server);
+}
+
 void plugins_server_copies_spawn_park_mods() {
     TestEnvironment server, player, blind;
     const std::string main = R"(
@@ -4052,6 +4108,7 @@ int main() {
         run(animator_studio_records_and_saves);
         run(plugins_server_copies_are_the_authority);
         run(plugins_server_copies_spawn_park_mods);
+        run(plugins_server_copies_hide_players);
         run(plugins_server_copies_see_roles);
         run(plugins_server_copies_show_cards_and_polls);
         run(plugins_animate_the_skater);

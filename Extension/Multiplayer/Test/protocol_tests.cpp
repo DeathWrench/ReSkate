@@ -1185,6 +1185,28 @@ void dedicated_server_codec() {
     const auto offer_arrived = decode_wire(encode_wire(offered));
     check(offer_arrived && offer_arrived->map_package == "Sandos-Vancouver_Plaza" && offer_arrived->destination == offered.destination,
           "The map's package lost from a map offer");
+    // A dedicated server's required plugins ride on its map offer.
+    check(offer_arrived && offer_arrived->required_plugins.empty(), "A map offer without plugins arrived with some");
+    auto requiring = offered;
+    requiring.required_plugins = {"neekgate-FPV_Drone", "Team-Filmer-1.2.0"};
+    const auto required_arrived = decode_wire(encode_wire(requiring));
+    check(required_arrived && required_arrived->required_plugins == requiring.required_plugins &&
+              required_arrived->map_package == "Sandos-Vancouver_Plaza",
+          "The required plugins lost from a map offer");
+    for (const auto &bad : std::vector<std::vector<std::string>>{{""}, {"Filmer"}, {"Team-Filmer", "team-filmer-1.0.0"},
+                                                                 {"Team-A/B"}, std::vector<std::string>(max_required_plugins + 1, "Team-X")}) {
+        auto wrong = offered;
+        wrong.required_plugins = bad;
+        check(reject(wrong) && !valid_required_plugins(bad), "A required plugin list that is not one encoded");
+    }
+    {
+        std::vector<std::string> sixteen;
+        for (std::size_t i = 0; i < max_required_plugins; ++i) sixteen.push_back("Team-Plugin_" + std::to_string(i));
+        check(valid_required_plugins(sixteen) && valid_required_plugins({}), "A full required plugin list refused");
+    }
+    auto wrong_kind = packaged;
+    wrong_kind.required_plugins = {"Team-Filmer"};
+    check(reject(wrong_kind), "Required plugins encoded on something other than a map offer");
     for (const char *bad : {"Sandos", "Sandos-", "-Plaza", "San dos-Plaza", "Sandos-Plaza-2.0", "Sandos-Plaza-2.0.0.1", "../x-y",
                             "Sandos-Pla/za", "Sandos-Plaza-1.2.3-4", "https://thunderstore.io/x-y"}) {
         auto wrong = packaged;

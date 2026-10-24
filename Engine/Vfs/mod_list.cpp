@@ -22,6 +22,8 @@ namespace fs = std::filesystem;
 
 constexpr char layout_name[] = "layout.toc";
 constexpr char levels_name[] = "reskate-levels.json";
+constexpr char objects_name[] = "reskate-objects.json"; // content_catalogs.h's mod_objects_file
+constexpr char music_name[] = "reskate-music.json";     // mod_music.h
 // Written by the tool that built the mod (Studio, since 2026-09-24): who made
 // it and when. Purely informational, so it is read loosely and never rejected.
 constexpr char build_name[] = "reskate-build.json";
@@ -227,6 +229,19 @@ void read_variants(Mod& mod, std::vector<std::string>& notes) {
         mod.variants = std::move(result);
     } catch (const std::exception& failure) {
         notes.push_back("Mod " + mod.name + ": " + plugin_manifest_file + "'s variants could not be read (" + failure.what() + ")");
+    }
+}
+
+// Whether reskate-plugin.json names code to run. A file with only "resident" or "variants" serves
+// the mod's game data and is no plugin. The plugin host reports what else is wrong with it.
+void read_plugin_entry(Mod& mod) {
+    const auto path = mod.directory / plugin_manifest_file;
+    std::error_code error;
+    if (!fs::is_regular_file(path, error) || error) return;
+    try {
+        const auto root = parse(path, maximum_plugin_bytes);
+        mod.provides_plugin = root.is_object() && root.contains("entry") && root.at("entry").is_string();
+    } catch (...) {
     }
 }
 
@@ -469,6 +484,8 @@ Mod describe_mod(const std::filesystem::path& directory, std::string name, std::
     mod.directory = directory;
     mod.provides_layout = fs::is_regular_file(mod.directory / layout_name, error);
     mod.provides_levels = fs::is_regular_file(mod.directory / levels_name, error);
+    mod.provides_objects = fs::is_regular_file(mod.directory / objects_name, error);
+    mod.provides_music = fs::is_regular_file(mod.directory / music_name, error);
     for (fs::directory_iterator it(mod.directory / "parks", error), end; !error && it != end; it.increment(error)) {
         auto file = ascii_path(it->path().filename());
         if (!file.ends_with(".park.json") || mod.park_maps.size() >= 16) continue;
@@ -481,8 +498,22 @@ Mod describe_mod(const std::filesystem::path& directory, std::string name, std::
     read_levels(mod);
     read_resident(mod, notes);
     read_variants(mod, notes);
+    read_plugin_entry(mod);
     read_studio_marker(mod);
     return mod;
+}
+
+std::vector<std::string> mod_contents(const Mod& mod) {
+    std::vector<std::string> parts;
+    if (mod.provides_levels)
+        parts.push_back(mod.levels.size() > 1 ? std::to_string(mod.levels.size()) + " maps" : "Map");
+    if (!mod.park_maps.empty()) parts.push_back(mod.park_maps.size() == 1 ? "Park" : "Parks");
+    if (mod.provides_plugin) parts.push_back("Plugin");
+    // A map's own game data is part of the map.
+    if (mod.provides_layout && !mod.provides_levels) parts.push_back("Game data");
+    if (mod.provides_objects) parts.push_back("Objects");
+    if (mod.provides_music) parts.push_back("Music");
+    return parts;
 }
 
 bool resident_root(const Mod& mod, std::string_view bundle, std::string_view name) noexcept {

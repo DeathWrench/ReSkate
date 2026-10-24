@@ -56,7 +56,7 @@ ReSkate/
 ├── assets/                files embedded into the binaries
 ├── config/defaults/       default profile/settings JSON embedded into ReSkate.dll
 ├── contrib/               server hosting files, design notes, release script
-├── README.md, MACOS-SETUP.md, MUSIC-SETUP.md, LICENSE
+├── README.md, LICENSE
 └── .clangd, .gitattributes, .gitignore
 ```
 

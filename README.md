@@ -84,7 +84,7 @@ custom map and then join a server on another map, the screen can stay black
 ### macOS (NotProton / CrossOver)
 
 Steam for Mac with a Wine-based compatibility tool works much the same way; see
-[MACOS-SETUP.md](MACOS-SETUP.md) for its launch option.
+[macOS](https://docs.reskate.dev/macos) in the docs for its launch option.
 
 ### Multiplayer map downloads
 
@@ -110,6 +110,10 @@ being forcibly interrupted. Retry after that work has finished, without restarti
 | **T** | chat, in multiplayer |
 
 The menu and console keys can be changed in the launcher's Settings.
+
+The music player can play Spotify, YouTube Music, your own music files, internet radio and any app
+on your PC: type `music setup` in the console, and see
+[Music sources](https://docs.reskate.dev/music-sources) in the docs.
 
 In **MAP → ROTATING PARKS** and the controller-friendly **MOD OPTIONS → PARKS** screen,
 **Load Random Parks** chooses and loads one random layout for each of
@@ -150,7 +154,7 @@ into a new, empty folder of their own and run the launcher from there (see [Gett
 **The ReSkate menu (Insert) doesn't open.** ReSkate isn't running. On Windows, always start the game with
 **PLAY** in the ReSkate launcher: pressing Play on skate. in Steam starts the normal game, without ReSkate.
 On Linux and macOS, use the launch option in [Linux (Proton)](#linux-proton) or
-[MACOS-SETUP.md](MACOS-SETUP.md).
+[macOS](https://docs.reskate.dev/macos) in the docs.
 
 **The game crashes.** Turn your mods off and try again first: many crashes come from mods. If it still
 crashes, [open an issue](https://github.com/Dingo-Shenanigans/ReSkate/issues/new/choose) with your ReSkate

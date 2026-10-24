@@ -8,6 +8,7 @@
 #include "Extension/Multiplayer/Net/pose_codec.h"
 #include "Extension/Multiplayer/Net/wire_codec.h"
 #include "Extension/Multiplayer/Steam/steam_transport.h"
+#include "Extension/Throwdowns/throwdown_wire.h"
 #include "Engine/Game/Build/supported_build.h"
 #include "Engine/Game/World/world_names.h"
 
@@ -143,16 +144,41 @@ struct Player {
         p.text = text;
         wire().inbound.push_back({id, encode_wire(p), now});
     }
-    // The latest roster the server sent this player (and forgets what else it sent).
-    std::optional<Packet> roster() {
-        std::optional<Packet> latest;
-        for (const auto &bytes : std::exchange(wire().sent[id], {}))
-            if (auto p = decode_wire(bytes); p && p->kind == PacketKind::roster) latest = std::move(p);
-        return latest;
+    void throwdown(std::uint64_t now, const ThrowdownMessage &message) {
+        auto p = header(PacketKind::throwdown, now);
+        p.throwdown = encode_throwdown(message);
+        wire().inbound.push_back({id, encode_wire(p), now});
     }
+    // A moment of voice chat, heard everywhere (no hearing distance).
+    void speak(std::uint64_t now) {
+        auto p = header(PacketKind::voice, now);
+        p.voice.distance = 0.f;
+        p.voice.bytes = {1, 2, 3, 4};
+        wire().inbound.push_back({id, encode_wire(p), now});
+    }
+    // What the server sent this player since the last look: the latest roster, how many skaters'
+    // poses (entries of its pose messages) and how much voice. Acks for their own poses are taken.
+    struct Seen {
+        std::optional<Packet> roster;
+        std::size_t poses{}, voices{};
+    };
+    Seen seen;
+    void read_sent() {
+        for (const auto &bytes : std::exchange(wire().sent[id], {})) {
+            if (const auto ack = pose_batch::Ack::read(bytes)) upload.ack(*ack);
+            else if (const auto batch = pose_batch::read(bytes)) seen.poses += batch->entries.size();
+            else if (auto p = decode_wire(bytes); p && p->kind == PacketKind::roster) seen.roster = std::move(p);
+            else if (p && p->kind == PacketKind::voice) ++seen.voices;
+        }
+    }
+    Seen look() {
+        read_sent();
+        return std::exchange(seen, {});
+    }
+    // The latest roster the server sent this player (and forgets what else it sent).
+    std::optional<Packet> roster() { return look().roster; }
     void pose(std::uint64_t now) {
-        for (const auto &bytes : std::exchange(wire().sent[id], {}))
-            if (const auto read = pose_batch::Ack::read(bytes)) upload.ack(*read);
+        read_sent();
         auto p = header(PacketKind::pose, now);
         p.pose.root.position = at;
         p.pose.root.rotation = {0.f, std::sin(heading * 0.5f), 0.f, std::cos(heading * 0.5f)};
@@ -359,6 +385,20 @@ int run(const std::filesystem::path &fixtures) {
         end)
     )lua");
 
+    // One that hides a player from another, wholly or only their voice and sound, and shows them again.
+    write(root / "Plugins" / "hider" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server", "permissions": ["console", "server"]})");
+    write(root / "Plugins" / "hider" / "plugin" / "main.lua", R"(
+        reskate.console.command("hider", "hiding, for the test", function(args)
+            local verb, target, viewer = args[1], args[2], args[3]
+            local ok, why
+            if verb == "hide" then ok, why = reskate.server.hide(target, viewer)
+            elseif verb == "mute" then ok, why = reskate.server.hide(target, viewer, {skater = false})
+            elseif verb == "unhide" then ok, why = reskate.server.unhide(target, viewer) end
+            reskate.console.print(verb .. " " .. tostring(ok or why))
+        end)
+    )");
+
     std::vector<std::string> log;
     SteamTransport transport;
     Host host(config, transport, [&](const std::string &line) { log.push_back(line); });
@@ -386,7 +426,7 @@ int run(const std::filesystem::path &fixtures) {
     players[1].at = {-4.f, 7.5f, 12.f};
 
     std::uint64_t now = 1000000000ULL, next_ready = now;
-    bool posing{};
+    bool posing{}, speaking{};
     const auto run_for = [&](std::uint64_t microseconds) {
         for (const auto end = now + microseconds; now < end; now += 50000) {
             if (now >= next_ready) {
@@ -395,6 +435,7 @@ int run(const std::filesystem::path &fixtures) {
             }
             if (posing)
                 for (auto &p : players) p.pose(now);
+            if (speaking && (now / 50000) % 4 == 0) players[0].speak(now);
             host.tick(now);
         }
     };
@@ -547,6 +588,97 @@ int run(const std::filesystem::path &fixtures) {
     players[1].chat(now, "/help");
     run_for(200000);
     check(!has(log, "heard 76561198000000002 Player 2: /help"), "One of the server's own commands went to the plugin");
+
+    // Hiding: the first player hidden from the second leaves the second's roster and poses, and
+    // only theirs; the first still sees the second. Each window is longer than the roster's 2 s.
+    const auto in_roster = [](const std::optional<Packet> &roster, std::uint64_t id) {
+        return roster && std::any_of(roster->members.begin(), roster->members.end(), [&](const Member &m) { return m.id == id; });
+    };
+    const auto settle = [&] {
+        run_for(300000); // what was on its way before
+        for (auto &p : players) p.look();
+        run_for(2500000);
+    };
+    posing = speaking = true;
+    settle();
+    {
+        auto viewer = players[1].look();
+        check(viewer.poses > 0 && viewer.voices > 0 && in_roster(viewer.roster, players[0].id),
+              "The test needs the second player to see and hear the first");
+    }
+    plugin_command("hider hide " + first_id + " " + second_id);
+    check(has(log, "hide true"), "The plugin could not hide a player");
+    settle();
+    {
+        auto viewer = players[1].look(), target = players[0].look();
+        check(viewer.poses == 0 && viewer.voices == 0, "The viewer was still sent the hidden player's poses or voice");
+        check(viewer.roster && !in_roster(viewer.roster, players[0].id) && in_roster(viewer.roster, players[1].id),
+              "The hidden player was still in the viewer's roster");
+        check(target.poses > 0 && in_roster(target.roster, players[1].id), "The hidden player stopped seeing the viewer");
+    }
+    // Shown again: back in the roster, and their poses follow.
+    plugin_command("hider unhide " + first_id + " " + second_id);
+    check(has(log, "unhide true"), "The plugin could not show a player again");
+    settle();
+    {
+        auto viewer = players[1].look();
+        check(viewer.poses > 0 && viewer.voices > 0 && in_roster(viewer.roster, players[0].id), "A player shown again did not come back");
+    }
+    // Only their voice and sound: they stay in the roster and their poses go on.
+    plugin_command("hider mute " + first_id + " " + second_id);
+    check(has(log, "mute true"), "The plugin could not mute a player");
+    settle();
+    {
+        auto viewer = players[1].look();
+        check(viewer.poses > 0 && in_roster(viewer.roster, players[0].id), "A muted player was hidden");
+        check(viewer.voices == 0, "A muted player's voice was still sent");
+    }
+    // A plugin that stops shows everyone it hid.
+    plugin_command("hider hide " + first_id + " " + second_id);
+    check(host.command("plugin off hider").find("hider") != std::string::npos, "The plugin could not be switched off");
+    settle();
+    {
+        auto viewer = players[1].look();
+        check(viewer.poses > 0 && viewer.voices > 0 && in_roster(viewer.roster, players[0].id), "A plugin that stopped left a player hidden");
+    }
+    host.command("plugin on hider");
+    run_for(2500000); // it loads again on the next scan
+    // Not while they share a party, nor a throwdown.
+    players[0].chat(now, "/party invite Player 2");
+    run_for(200000);
+    players[1].chat(now, "/party accept Player 1");
+    run_for(200000);
+    plugin_command("hider hide " + first_id + " " + second_id);
+    check(has(log, "hide they share a party"), "A player was hidden from someone in their party");
+    players[1].chat(now, "/party leave");
+    run_for(200000);
+    ThrowdownMessage offer;
+    offer.kind = ThrowdownMessage::Kind::offer;
+    offer.leader = players[0].id;
+    offer.id = 1;
+    offer.series = "skate";
+    offer.placement = {1, 2, 3, 4}; // opaque to the server
+    players[0].throwdown(now, offer);
+    auto join = offer;
+    join.kind = ThrowdownMessage::Kind::join;
+    players[1].throwdown(now, join);
+    run_for(200000);
+    plugin_command("hider hide " + first_id + " " + second_id);
+    check(has(log, "hide they are in a throwdown together"), "A player was hidden from someone in their throwdown");
+    auto close = offer;
+    close.kind = ThrowdownMessage::Kind::close;
+    players[0].throwdown(now, close);
+    run_for(200000);
+    plugin_command("hider hide " + first_id + " " + second_id);
+    check(has(log, "hide true"), "A player could not be hidden once the party and the throwdown were over");
+    // Hidden, they cannot join the viewer's party either.
+    log.clear();
+    players[0].chat(now, "/party invite Player 2");
+    run_for(200000);
+    check(!has(log, "[party] Player 1 invited Player 2"), "A hidden player invited the viewer to their party");
+    plugin_command("hider unhide " + first_id);
+    check(has(log, "unhide true"), "The plugin could not show a player to everyone");
+    posing = speaking = false;
 
     // The map and the world as the session's, and the maps the server knows.
     plugin_command("talker world");

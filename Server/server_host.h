@@ -58,6 +58,10 @@ class Host {
     // nothing; and whether "maps update" was typed since this was last asked.
     std::string map_folder_in_play() const;
     bool take_map_update_request() { return std::exchange(map_update_requested_, false); }
+    // The plugins players are told to have ("plugins.required"): the config's, less those a
+    // check on Thunderstore found are not plugins (refuse_plugins).
+    std::vector<std::string> required_plugins() const;
+    void refuse_plugins(std::set<std::string> refused) { refused_plugins_ = std::move(refused); }
     unsigned players() const;
     std::uint64_t secret() const { return secret_; }
     // The UDP port players may connect straight to, or 0 (config connection).
@@ -148,6 +152,17 @@ class Host {
         std::string text, why;
     };
     std::vector<PollNews> take_poll_news() { return std::exchange(poll_news_, {}); }
+    // One player hidden from others for the server's plugins (server_host.cpp). Wholly (`skater`):
+    // they leave those players' rosters, and nothing of them (poses, sound, voice, outfit, effects,
+    // objects) is sent to them, so their games take the skater away as for a player who left.
+    // Otherwise only their voice and/or sound is held back. `viewers` empty is everyone on now but
+    // the target. Refused while the target shares a party or a throwdown with one of them. Shown
+    // again (`viewers` empty: everyone this plugin hid them from), they are introduced anew.
+    // "" when done, else why not.
+    std::string plugin_hide(std::string_view plugin, std::uint64_t target, const std::vector<std::uint64_t> &viewers, bool skater, bool voice,
+                            bool sound);
+    std::string plugin_unhide(std::string_view plugin, std::uint64_t target, const std::vector<std::uint64_t> &viewers);
+    void plugin_hides_release(std::string_view plugin); // a plugin that stopped: everyone it hid is shown again
 
     enum class VoteKind { map, kick, time, custom, poll, extend };
 
@@ -304,6 +319,7 @@ class Host {
     SteamTransport &transport_;
     Log log_;
     bool map_update_requested_{};
+    std::set<std::string> refused_plugins_;
     ActivityLog activity_; // what players do, for the console (config_.activity_log)
     // The running player vote (server_votes.cpp), and when each player may start another.
     // A poll is one too: it has answers instead of yes and no, and runs nothing (but the console's poll-run).
@@ -348,6 +364,13 @@ class Host {
     std::map<std::uint64_t, PluginCard> plugin_cards_;
     std::map<std::uint64_t, PluginPoll> plugin_polls_;
     std::vector<PollNews> poll_news_;
+    // The players the server's plugins hide (plugin_hide), by who they are hidden from: each
+    // target's plugin, and what of them is held back.
+    struct Hidden {
+        std::string plugin;
+        bool skater{}, voice{}, sound{};
+    };
+    std::map<std::uint64_t, std::map<std::uint64_t, Hidden>> hidden_;
     std::uint64_t announced_at_{}; // the last timed announcement, or while nobody is on
     std::size_t next_announcement_{};
     void active(Guest &guest) {
@@ -590,6 +613,11 @@ class Host {
     void tick_plugin_screens();
     void plugin_screens_left(std::uint64_t player);
     void plugin_screens_roster(std::uint64_t id, multiplayer::ServerAnnouncement &card, multiplayer::ServerVote &vote) const;
+    // What of `target` a plugin holds back from `viewer`, or null; whether either of two players is
+    // wholly hidden from the other; and a player who left, taken out of every list.
+    const Hidden *hidden_from(std::uint64_t viewer, std::uint64_t target) const;
+    bool hidden_between(std::uint64_t a, std::uint64_t b) const;
+    void hidden_left(std::uint64_t player);
     void reply(Guest &, std::string_view text, unsigned max_lines = 12);
     Guest *match_player(std::string_view text);
     // Sends each mover to a ring of `radius` around `at`, 1 m up, so nobody lands inside anyone; how many were sent.

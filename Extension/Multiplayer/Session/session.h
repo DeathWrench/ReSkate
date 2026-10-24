@@ -41,7 +41,7 @@ std::string take_removed_notice();
 // cannot be had. Should the session end meanwhile for another reason,
 // queue_command("rejoin", "", "") goes back to it, with the password it was joined with.
 struct MapNeed {
-    std::string package; // protocol.h: valid_map_package, never empty
+    std::string package; // protocol.h: valid_map_package; empty when only plugins are needed
     std::string map;     // its name for people
     bool server{};       // a dedicated server's map, not a player's lobby
     bool moved{};        // the session changed to this map with the player in it (else: joining)
@@ -50,6 +50,9 @@ struct MapNeed {
     std::string have;
     // Local steady-clock deadline, shared with the downloader, never transmitted.
     std::uint64_t deadline_us{};
+    // The plugins a dedicated server needs that this PC does not have ready (protocol.h:
+    // valid_required_plugins), asked for on the same card as the map; empty when only the map is.
+    std::vector<std::string> plugins;
 };
 std::optional<MapNeed> take_map_need();
 // Whether a session is waiting on a map being fetched right now. Thread-safe.
@@ -73,6 +76,14 @@ struct NextMapWanted {
 std::vector<NextMapWanted> next_maps();
 unsigned next_maps_serial() noexcept;
 void set_map_package_lookup(MapPackageLookup lookup) noexcept;
+// A dedicated server's required plugins (Packet::required_plugins) are checked before its map
+// loads. PluginCheck answers which of them this PC does not have ready: not installed, switched
+// off, or older than the version named. LevelCheck answers whether an enabled mod here has a
+// level (its asset), from a package or not, so a missing map goes on the same card. Both are
+// called on the client thread every half second while joining; they should be quick.
+using PluginCheck = std::vector<std::string> (*)(const std::vector<std::string> &required);
+using LevelCheck = bool (*)(std::string_view asset);
+void set_plugin_check(PluginCheck plugins, LevelCheck levels) noexcept;
 // The session's chat lines for the overlay. Thread-safe and cheap: callable every frame.
 MultiplayerChat chat();
 // A chat line only this player sees, from a plugin: shown under the plugin's name with a

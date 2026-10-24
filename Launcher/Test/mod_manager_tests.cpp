@@ -261,6 +261,24 @@ int main() {
     for (const auto& entry : mods::scan_mods(game).entries)
         if (entry.mod.name == "Deep_Mod")
             check(entry.mod.park_maps == std::vector<std::string>{"bam", "grom"}, "Park maps are listed");
+
+    // What a mod holds, for the Type column: a plugin is one only when its manifest names code.
+    write(mods / L"Deep_Mod" / L"reskate-plugin.json", R"({"variants":{"folder":"decks"}})");
+    for (const auto& entry : mods::scan_mods(game).entries)
+        if (entry.mod.name == "Deep_Mod")
+            check(!entry.mod.provides_plugin && mods::mod_contents(entry.mod) == std::vector<std::string>{"Parks", "Game data"},
+                  "A reskate-plugin.json without an entry is no plugin");
+    write(mods / L"Deep_Mod" / L"reskate-plugin.json", R"({"entry":"plugin/main.lua","permissions":[]})");
+    write(mods / L"Deep_Mod" / L"reskate-music.json", "{}");
+    write(mods / L"Deep_Mod" / L"reskate-objects.json", "{}");
+    for (const auto& entry : mods::scan_mods(game).entries)
+        if (entry.mod.name == "Deep_Mod")
+            check(entry.mod.provides_plugin &&
+                      mods::mod_contents(entry.mod) == std::vector<std::string>{"Parks", "Plugin", "Game data", "Objects", "Music"},
+                  "Plugins, objects and music are listed with what else the mod holds");
+    std::filesystem::remove(mods / L"Deep_Mod" / L"reskate-plugin.json");
+    std::filesystem::remove(mods / L"Deep_Mod" / L"reskate-music.json");
+    std::filesystem::remove(mods / L"Deep_Mod" / L"reskate-objects.json");
     make_zip(sources / L"parkmod.zip", {{"My Park/manifest.json", R"({"name":"My Park"})"},
                                         {"My Park/parks/bam.park.json", "{}"}});
     check(install(mods, sources / L"parkmod.zip") == "My Park", "A park mod (manifest.json only) installs");

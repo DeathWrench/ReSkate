@@ -111,7 +111,17 @@ class ServerGame final : public Game {
         for (auto &n : host_.take_poll_news()) news.push_back({std::move(n.plugin), n.id, n.player, n.answer, std::move(n.text), std::move(n.why)});
         return news;
     }
-    void release(std::string_view plugin) override { host_.plugin_screens_release(plugin); }
+    // A player hidden from others, wholly or only their voice and sound (the roster and relay).
+    std::string server_hide(std::string_view plugin, std::uint64_t target, const std::vector<std::uint64_t> &viewers, const Hiding &what) override {
+        return host_.plugin_hide(plugin, target, viewers, what.skater, what.voice, what.sound);
+    }
+    std::string server_unhide(std::string_view plugin, std::uint64_t target, const std::vector<std::uint64_t> &viewers) override {
+        return host_.plugin_unhide(plugin, target, viewers);
+    }
+    void release(std::string_view plugin) override {
+        host_.plugin_screens_release(plugin);
+        host_.plugin_hides_release(plugin);
+    }
     // The skaters of the players in the world, as their latest poses put them. The server has
     // no skater of its own, so this is every player's.
     std::vector<PeerSkater> peer_skaters() override {

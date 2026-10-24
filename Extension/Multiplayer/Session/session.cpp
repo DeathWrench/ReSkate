@@ -164,6 +164,8 @@ void stop(Session &s, std::string reason) {
     s.join_destination.clear();
     s.map_label.clear();
     s.map_package.clear();
+    s.required_plugins.clear();
+    s.plugins_ready = s.fetching_with_map = false;
     s.fetching_since = 0;
     s.map_fetch_deadline = 0;
     map_fetch_deadline_flag.store(0);
@@ -837,6 +839,10 @@ std::string take_leave_notice() { return std::exchange(session().leave_notice, {
 std::string take_removed_notice() { return std::exchange(session().removed_notice, {}); }
 std::optional<MapNeed> take_map_need() { return std::exchange(session().map_need, std::nullopt); }
 void set_map_package_lookup(MapPackageLookup lookup) noexcept { map_package_lookup.store(lookup, std::memory_order_relaxed); }
+void set_plugin_check(PluginCheck plugins, LevelCheck levels) noexcept {
+    plugin_check.store(plugins, std::memory_order_relaxed);
+    level_check.store(levels, std::memory_order_relaxed);
+}
 bool fetching_map() noexcept { return fetching_map_flag.load(std::memory_order_relaxed); }
 std::uint64_t map_fetch_deadline() noexcept { return map_fetch_deadline_flag.load(); }
 void hold_map_load(bool hold, std::string_view package) noexcept {
@@ -957,6 +963,45 @@ bool prepare_join_map(Session &s, bool ready, std::string_view current, MapLoade
         // fetched at the host's version as a missing one is (the downloader puts it in the
         // installed one's place), and loads when the two agree.
         const auto have = std::string(other_map_version(s.map_package, host_map_package(s.join_destination)));
+        // A dedicated server's required plugins come before its map, which does not load until
+        // they are here. The ones missing are fetched as a missing map is, on one card with the
+        // map when that is missing too, so the player is asked once.
+        if (!s.plugins_ready && !s.required_plugins.empty()) {
+            std::vector<std::string> missing = s.required_plugins;
+            try {
+                if (const auto check = plugin_check.load(std::memory_order_relaxed)) missing = check(s.required_plugins);
+            } catch (...) {}
+            if (missing.empty()) {
+                s.plugins_ready = true;
+                // (A fetch of plugins alone is over: the map, which is here, loads as usual.)
+                if (s.fetching_since && !s.fetching_with_map) {
+                    s.fetching_since = 0;
+                    fetching_map_flag.store(false, std::memory_order_relaxed);
+                }
+            } else {
+                if (!s.fetching_since) {
+                    // The map goes on the card too when it is a package that no enabled mod here has.
+                    const auto levels = level_check.load(std::memory_order_relaxed);
+                    bool map_here = s.map_package.empty();
+                    try {
+                        map_here = map_here || (have.empty() && levels && levels(world_destination_asset(s.join_destination)));
+                    } catch (...) {}
+                    const auto name = s.map_label.empty() ? world_level_name(world_destination_asset(s.join_destination)) : s.map_label;
+                    s.fetching_since = now;
+                    s.fetching_with_map = !map_here;
+                    if (!s.map_fetch_deadline) s.map_fetch_deadline = now + map_fetch_limit_us;
+                    map_fetch_deadline_flag.store(s.map_fetch_deadline);
+                    fetching_map_flag.store(true, std::memory_order_relaxed);
+                    s.map_need = MapNeed{map_here ? std::string() : s.map_package, name, dedicated_host(s), s.travelling,
+                                         map_here ? std::string() : have, s.map_fetch_deadline, std::move(missing)};
+                    s.rejoin = Session::Rejoin{{s.host_id, s.secret}, s.password, s.map_fetch_deadline};
+                    s.last_map_request = s.last_world_ready = 0; // say so at once
+                }
+                s.join_started = now;
+                s.status = "Waiting for the server's plugins to download...";
+                return false;
+            }
+        }
         // (Nor while its files are being put in place and applied: hold_map_load.)
         const bool held = !s.map_package.empty() && map_load_held.load() == map_hash(s.map_package);
         const auto result = have.empty() && !held ? loader(s.join_destination, s.map_load_submitted, detail) : MapLoadResult::missing;

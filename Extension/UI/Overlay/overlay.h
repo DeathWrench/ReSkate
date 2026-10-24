@@ -398,7 +398,7 @@ struct CallbacksV2 {
 using MultiplayerQueue = bool (*)(const char *action, const char *argument, const char *password,
                                  char *result, std::size_t size);
 void set_multiplayer_queue(MultiplayerQueue) noexcept;
-// A map the session needs being fetched (Extension/Assets/map_download.h), for its card.
+// What the session needs being fetched, a map and plugins (Extension/Assets/map_download.h), for its card.
 struct MapDownloadCard {
     int stage{};                // 0 none, 1 asking, 2 downloading, 3 installing, 4 applying, 5 joining
     std::string map, package, author, version, description;
@@ -409,6 +409,15 @@ struct MapDownloadCard {
     std::uint64_t bytes{};       // asking: the package's size; 0 when it is not known
     std::uint64_t received{}, total{};
     std::uint32_t yes_bind{}, no_bind{};
+    // Everything asked for, the map first when it is needed, then a dedicated server's plugins.
+    // One map alone has the map's own card; anything more is listed.
+    struct Item {
+        std::string name, author, version, have;
+        bool plugin{}, installed{};
+        std::uint64_t bytes{};
+    };
+    std::vector<Item> items;
+    std::size_t current{}; // downloading, installing: the one in hand
 };
 using MapDownloadFeed = MapDownloadCard (*)();
 void set_map_download_feed(MapDownloadFeed) noexcept;

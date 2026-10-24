@@ -249,6 +249,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         // A map a session needs: hosts say which Thunderstore package theirs is from, and a
         // guest without it is offered it on a card (Extension/Assets/map_download.h).
         dingosdk::multiplayer::set_map_package_lookup(dingosdk::map_download::package_of);
+        // And a dedicated server's required plugins, offered on the same card.
+        dingosdk::multiplayer::set_plugin_check(dingosdk::map_download::missing_plugins, dingosdk::map_download::has_level);
         dingosdk::overlay::set_map_download_feed([]() {
             const auto view = dingosdk::map_download::view();
             using Stage = dingosdk::map_download::Stage;
@@ -273,6 +275,9 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
             card.total = view.total;
             card.yes_bind = view.yes_bind;
             card.no_bind = view.no_bind;
+            for (const auto& item : view.items)
+                card.items.push_back({item.name, item.author, item.version, item.have, item.plugin, item.installed, item.bytes});
+            card.current = view.current;
             return card;
         });
         dingosdk::overlay::set_map_download_answer(dingosdk::map_download::answer);

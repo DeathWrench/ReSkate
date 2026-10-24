@@ -262,6 +262,10 @@ struct Session {
     unsigned server_map_rotation{};           // minutes per map (0: off)
     std::string map_label;                    // the host's name for join_destination (may be empty)
     std::string map_package;                  // the Thunderstore package it is from (may be empty)
+    // A dedicated server's required plugins (map offer), and whether this PC has them all ready.
+    std::vector<std::string> required_plugins;
+    bool plugins_ready{};
+    bool fetching_with_map{};                 // the fetch under way brings the map too
     // The map is not installed and is being fetched (take_map_need): since when, 0 for not.
     // The host is told with what is sent while waiting (Packet::map_fetching).
     std::uint64_t fetching_since{};
@@ -481,6 +485,8 @@ std::string answer_server_poll(Session &s, std::size_t answer);
 // Whether a vote the local player may answer is running: read by the game thread for the binds.
 inline std::atomic<bool> server_vote_open_flag{};
 inline std::atomic<MapPackageLookup> map_package_lookup{};
+inline std::atomic<PluginCheck> plugin_check{};
+inline std::atomic<LevelCheck> level_check{};
 inline std::atomic<bool> fetching_map_flag{};
 inline std::atomic<std::uint64_t> map_fetch_deadline_flag{}, map_load_held{};
 // A guest without the map is downloading it: the clock they are loading against starts over
