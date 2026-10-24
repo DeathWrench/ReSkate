@@ -228,6 +228,9 @@ void Host::chat_command(Guest &guest, std::string_view line) {
             return run_custom_command(guest, custom_command, trim(rest));
     // Admins run any server command from chat, as they do with "mp server". The caller
     // has already logged the line with any password hidden, so it is not logged again here.
+    // A word that is not one of the server's commands is the plugins' while one hears chat: a game
+    // mode's "/race join". They answer the player themselves (server.tell).
+    if (custom_command_name_free(verb) && chat_to_plugins(guest, line)) return;
     if (is_staff(guest.member.id)) {
         const auto id = guest.member.id;
         const auto answer_text = command(line, id);

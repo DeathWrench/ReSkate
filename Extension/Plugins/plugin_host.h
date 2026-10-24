@@ -95,6 +95,9 @@ public:
     void trick(const TrickNews& news);
     // Whether a running plugin has events.tricks: the score HUD is read only then.
     bool wants_tricks() const;
+    // Whether a running plugin has chat.read: a dedicated server then hands it the /commands it
+    // does not know itself.
+    bool wants_chat() const;
     // Runs a plugin's console command when the text starts with one; false when none matched.
     bool run_console(std::string_view text);
     std::vector<Status> status() const;

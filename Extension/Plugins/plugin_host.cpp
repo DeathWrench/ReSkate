@@ -515,6 +515,11 @@ bool Host::wants_tricks() const {
         [](const auto& item) { return item.second.plugin && item.second.plugin->has("events.tricks"); });
 }
 
+bool Host::wants_chat() const {
+    return std::any_of(entries_.begin(), entries_.end(),
+        [](const auto& item) { return item.second.plugin && item.second.plugin->has("chat.read"); });
+}
+
 bool Host::run_console(std::string_view text) {
     if (commands_.empty()) return false;
     const auto parsed = parse_console_command(text);

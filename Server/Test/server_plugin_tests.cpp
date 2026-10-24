@@ -329,6 +329,36 @@ int run(const std::filesystem::path &fixtures) {
         end)
     )");
 
+    // One that hears chat and the /commands the server does not know, reads the map, and changes
+    // the map and the time of day for everyone.
+    write(root / "Plugins" / "talker" / "reskate-plugin.json",
+          R"({"api": 1, "entry": "plugin/main.lua", "side": "server",
+              "permissions": ["console", "chat.read", "session.read", "travel", "world.environment"]})");
+    write(root / "Plugins" / "talker" / "plugin" / "main.lua", R"lua(
+        reskate.on("chat", function(line)
+            reskate.console.print(string.format("heard %s %s: %s%s", line.sender, line.name, line.text, line.server and " (server)" or ""))
+        end)
+        reskate.console.command("talker", "chat, the map and the time, for the test", function(args)
+            if args[1] == "world" then
+                local w = reskate.session.world()
+                reskate.console.print("world " .. w.world .. " map " .. w.map)
+            elseif args[1] == "levels" then
+                local n, named = 0, false
+                for _, level in reskate.travel.levels() do
+                    n += 1
+                    if level.name == "Isle of Grom" and level.can_load then named = true end
+                end
+                reskate.console.print("levels " .. n .. " " .. tostring(named))
+            elseif args[1] == "load" then
+                local ok, why = reskate.travel.load(table.concat(args, " ", 2))
+                reskate.console.print("load " .. tostring(ok or why))
+            elseif args[1] == "tod" then
+                local ok, why = reskate.world.set_time(args[2])
+                reskate.console.print("tod " .. tostring(ok or why))
+            end
+        end)
+    )lua");
+
     std::vector<std::string> log;
     SteamTransport transport;
     Host host(config, transport, [&](const std::string &line) { log.push_back(line); });
@@ -494,6 +524,40 @@ int run(const std::filesystem::path &fixtures) {
     plugin_command("asker poll 76561198000000099");
     check(has(log, "poll that player is not on the server"), "A poll for nobody here was asked");
 
+    // Chat: a player's line as it is passed on, the server's own, and a /command the server does
+    // not know (no "Unknown command" for it: the plugin answers); the server's own commands stay its.
+    log.clear();
+    players[1].chat(now, "hello everyone");
+    run_for(200000);
+    check(has(log, "heard 76561198000000002 Player 2: hello everyone"), "The plugin did not hear a player's chat line");
+    log.clear();
+    host.command("say the server speaks");
+    run_for(200000);
+    check(has(log, "heard 0 Server: the server speaks (server)"), "The plugin did not hear the server's own line");
+    log.clear();
+    wire().sent[players[1].id].clear();
+    players[1].chat(now, "/race join");
+    run_for(200000);
+    check(has(log, "heard 76561198000000002 Player 2: /race join"), "A /command the server does not know did not reach the plugin");
+    bool unknown{};
+    for (const auto &bytes : std::exchange(wire().sent[players[1].id], {}))
+        if (auto p = decode_wire(bytes); p && p->kind == PacketKind::chat && p->text.find("Unknown command") != std::string::npos) unknown = true;
+    check(!unknown, "The player was told the plugin's /command is unknown");
+    log.clear();
+    players[1].chat(now, "/help");
+    run_for(200000);
+    check(!has(log, "heard 76561198000000002 Player 2: /help"), "One of the server's own commands went to the plugin");
+
+    // The map and the world as the session's, and the maps the server knows.
+    plugin_command("talker world");
+    check(has(log, "world 1 map " + host.map_name()), "session.world() is not the server's map and world");
+    plugin_command("talker levels");
+    check(has(log, "levels " + std::to_string(levels().size()) + " true"), "travel.levels() is not the server's maps");
+    // The time of day for everyone needs the server's world layers and layer-sync.
+    plugin_command("talker tod night");
+    check(has(log, "tod the server has no world layers") || has(log, "tod the server lets players keep their own world layers"),
+          "A time of day was set without the server's world layers");
+
     // The level, as players' games name it, and its change heard when the server changes it.
     const auto *first = find_level(config.map);
     const auto other = std::find_if(levels().begin(), levels().end(), [&](const auto &l) { return l.asset != first->asset; });
@@ -507,6 +571,21 @@ int run(const std::filesystem::path &fixtures) {
     check(has(log, "unloading " + first->asset) && has(log, "loaded " + other->asset), "The plugin did not hear the map change");
     check(has(log, "level " + other->asset) && !has(log, "level " + first->asset), "level.current() did not follow the map change");
     check(!has(log, "skaters 2"), "Skaters stayed on the old map's places after the map changed");
+    // A plugin changes the map back, as the console's map does, with its checks.
+    plugin_command("talker load " + first->name);
+    {
+        std::string said;
+        for (const auto &line : log) said += "\n  " + line;
+        check(has(log, "load true") && has(log, "[map] A plugin changed the map to "), "The plugin could not change the map:" + said);
+    }
+    run_for(1100000);
+    check(host.map_level() == first->asset, "The plugin's map change did not happen");
+    check(host.plugin_map(first->name) == "the server is already on that map", "A change to the map in play was not refused");
+    const auto nowhere = host.plugin_map("Nowhere At All");
+    check(nowhere.starts_with("no single map is called") || nowhere == "this server does not have that map",
+          "A map the server does not have was loaded: " + nowhere);
+    plugin_command("talker load " + other->name);
+    check(has(log, "load one trip every 5 s"), "travel.load was not held to one trip every 5 s");
     // A player who leaves with a poll open: the plugin hears it closed.
     log.clear();
     host.drop(players[1].id, "testing");

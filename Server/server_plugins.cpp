@@ -140,6 +140,30 @@ class ServerGame final : public Game {
         log_("[Plugins] " + answer); // the console's ban leaves logging to the console
         return {};
     }
+    // Chat as the server passes it on: players' lines, the server's own to everyone, and the
+    // /commands it does not know itself (Host::chat_since).
+    std::vector<ChatLine> chat_since(std::uint64_t sequence) override {
+        std::vector<ChatLine> out;
+        for (auto &line : host_.chat_since(sequence)) out.push_back({line.sequence, line.sender, std::move(line.name), std::move(line.text), false, line.server});
+        return out;
+    }
+    std::string world_map() override { return host_.map_name(); }
+    std::uint64_t world_id() override { return host_.world_id(); }
+    // The maps the server knows, which travel.load switches to (as the console's map does).
+    std::vector<LevelInfo> levels() override {
+        std::vector<LevelInfo> out;
+        for (const auto &level : server::levels()) out.push_back({level.asset, level.name, true});
+        return out;
+    }
+    std::string travel(std::string_view kind, std::string_view target) override {
+        if (kind != "level") return "a dedicated server has no fast travel: load one of its maps (travel.load)";
+        return host_.plugin_map(target);
+    }
+    // The time of day for everyone, as the console's tod sets it; the server has no other world.
+    std::string set_environment(std::string_view kind, std::string_view key, std::string_view) override {
+        if (kind != "tod") return unavailable;
+        return host_.plugin_time_of_day(key);
+    }
     std::string unban(std::uint64_t player) override {
         const auto answer = host_.command("unban " + std::to_string(player));
         if (host_.is_banned(player)) return answer;
@@ -271,6 +295,8 @@ void ServerPlugins::tick(std::uint64_t now_us) {
         s.log(std::string("[Plugins] error: the plugin tick failed: ") + error.what());
     }
 }
+
+bool ServerPlugins::hears_chat() const { return state_->plugins.wants_chat(); }
 
 void ServerPlugins::receive(std::uint64_t from, const std::vector<std::uint8_t> &bytes) {
     auto &inbox = state_->environment.inbox;

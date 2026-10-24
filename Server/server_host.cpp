@@ -891,7 +891,46 @@ void Host::send_chat(std::string_view text, Guest *only) {
     message.text = clean_chat_text(text);
     if (message.text.empty()) return;
     if (only) send_packet(*only, message, true, false);
-    else broadcast(message, true, false);
+    else {
+        broadcast(message, true, false);
+        record_chat(0, "Server", message.text, true);
+    }
+}
+void Host::record_chat(std::uint64_t sender, std::string name, std::string text, bool server) {
+    chat_log_.push_back({++chat_sequence_, sender, std::move(name), std::move(text), server});
+    while (chat_log_.size() > 64) chat_log_.pop_front();
+}
+std::vector<Host::ChatRecord> Host::chat_since(std::uint64_t sequence) const {
+    std::vector<ChatRecord> out;
+    for (const auto &line : chat_log_)
+        if (line.sequence > sequence) out.push_back(line);
+    return out;
+}
+bool Host::chat_to_plugins(Guest &guest, std::string_view line) {
+    if (!plugins_ || !plugins_->hears_chat()) return false;
+    record_chat(guest.member.id, guest_name(guest), "/" + std::string(line), false);
+    return true;
+}
+std::string Host::plugin_map(std::string_view map) {
+    // As the console's map: a destination the server has, saved so it starts on it again.
+    if (map.empty() || !valid_map_destination(map_destination(map)) || !valid_map_destination(map_destination(map_setting(map))))
+        return "no single map is called \"" + std::string(map) + "\" (travel.levels lists them)";
+    if (!installed_map(map)) return "this server does not have that map";
+    if (map_hash(map_destination(map)) == map_) return "the server is already on that map";
+    change_map(map);
+    save();
+    roster_dirty_ = true;
+    log_("[map] A plugin changed the map to " + map_name() + ".");
+    return {};
+}
+std::string Host::plugin_time_of_day(std::string_view time) {
+    if (world_layers().empty()) return "the server has no world layers (world-layers.json beside it)";
+    if (!config_.world_layer_sync) return "the server lets players keep their own world layers (layer-sync is off)";
+    if (auto why = set_time_of_day(time); !why.empty()) return why;
+    save();
+    roster_dirty_ = true;
+    log_("[world] A plugin set the time of day to " + std::string(time) + ".");
+    return {};
 }
 bool Host::allowed_words(Guest &guest, std::string_view text) {
     if (!text::contains_forbidden_words(text)) return true;
@@ -1359,6 +1398,7 @@ void Host::receive(std::uint64_t peer, std::span<const std::uint8_t> bytes, std:
         }
         log_("[chat] " + guest_name(*link) + ": " + p.text);
         broadcast(p, true, false, p.source);
+        record_chat(peer, guest_name(*link), p.text, false);
         return;
     }
     // Grey dots above the sender. Not a chat line, and not logged. A player who may not

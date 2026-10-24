@@ -14,6 +14,7 @@
 #include "Extension/Multiplayer/Session/room.h"
 #include "Extension/Multiplayer/Steam/steam_transport.h"
 #include "Engine/Game/World/world_layers.h"
+#include <deque>
 #include <mutex>
 #include <unordered_map>
 #include <functional>
@@ -98,6 +99,20 @@ class Host {
     std::vector<SkaterPose> skater_poses() const;
     void drop(std::uint64_t id, const std::string &reason, const std::string &detail = {});
     void change_map(std::string_view map); // a level name, level path or destination
+    std::uint64_t world_id() const { return world_; }
+    // A server plugin changes the map, or the time of day for everyone, with the checks of the
+    // console's map and tod (and saved as they save): "" when done, else why not.
+    std::string plugin_map(std::string_view map);
+    std::string plugin_time_of_day(std::string_view time);
+    // The last chat lines, for the server's plugins (chat.read): each player's line as it is passed
+    // on, the server's own lines to everyone (sender 0), and a player's /command the server does
+    // not know itself, while a plugin hears chat. Sequences count from 1.
+    struct ChatRecord {
+        std::uint64_t sequence{}, sender{};
+        std::string name, text;
+        bool server{};
+    };
+    std::vector<ChatRecord> chat_since(std::uint64_t sequence) const;
     // The park mods set up (maps.park_mods), for the server's plugins: which fit the map running
     // now, and which are spawned, with how many objects and minutes left (0: until removed).
     struct ParkStatus {
@@ -515,6 +530,13 @@ class Host {
     void send_roster();
     void send_world_state();
     void send_chat(std::string_view text, Guest *only = nullptr);
+    std::deque<ChatRecord> chat_log_;
+    std::uint64_t chat_sequence_{};
+    void record_chat(std::uint64_t sender, std::string name, std::string text, bool server);
+    // A /command the server does not know, for the plugins when one hears chat: true when taken.
+    bool chat_to_plugins(Guest &guest, std::string_view line);
+    // The time of day on every map (tod): "" when set, else why not.
+    std::string set_time_of_day(std::string_view time);
     void send_bans(Guest &admin);
     void send_maps(Guest &admin);
     std::string wire_map_label() const;
