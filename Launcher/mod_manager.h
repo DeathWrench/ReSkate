@@ -54,6 +54,25 @@ std::string install(const std::filesystem::path& mods_root, const std::filesyste
 // Moves Mods/<name> to the Recycle Bin. Throws a user-facing message.
 void remove(const std::filesystem::path& mods_root, const std::string& name);
 
+// Which mods a mod pack brought in: the dependencies a Thunderstore install of it downloaded that
+// were not installed before (theirs too), kept by the launcher in Mods/brought-in.json, pack folder
+// to dependency folders. A mod the player had already is never in it.
+inline constexpr char brought_in_file[] = "brought-in.json";
+std::vector<std::string> brought_in(const std::filesystem::path& mods_root, const std::string& pack);
+// Adds to `pack`'s list. Throws a user-facing message when the file cannot be written.
+void record_brought_in(const std::filesystem::path& mods_root, const std::string& pack,
+    const std::vector<std::string>& dependencies);
+// Drops the lists of mods that are gone; nothing when there were none.
+void forget_brought_in(const std::filesystem::path& mods_root, const std::vector<std::string>& removed);
+
+// The installed mods a pack brought in that nothing else needs, to offer with its uninstall: what
+// the mods in `removing` brought in (brought_in), without the ones `removing` already has and without
+// any that a mod staying installed (the rest of `installed`) lists as a dependency in its
+// manifest.json ("Namespace-Name-1.2.3" is the folder Namespace-Name), or that one's dependencies in
+// turn. In `installed`'s order. A pack installed before this was kept brought nothing in.
+std::vector<std::string> orphaned_dependencies(const std::filesystem::path& mods_root,
+    const std::vector<std::string>& removing, const std::vector<std::string>& installed);
+
 // Changes the game cannot make while it runs, because it holds the mod's files open (an update or
 // uninstall of a mod it has loaded), wait in Mods/.reskate-pending until the next start: the new
 // copy of a mod as a folder there, and the mods to uninstall in its remove.txt, a folder name a

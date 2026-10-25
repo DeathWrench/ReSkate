@@ -10,7 +10,9 @@
 #include "Engine/Core/Debug/trace.h"
 
 #include <cstdio>
+#include <cctype>
 #include <format>
+#include <set>
 
 // The Mods panel's BROWSE page: packages from Thunderstore, their icons, and
 // downloading and installing them on the panel's worker.
@@ -412,15 +414,44 @@ std::vector<const thunderstore::Package*> updates(const Store& store, const thun
 
 void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> packages) {
     if (panel.installing || packages.empty()) return;
+    // Each package asked for, with the mods its install brings in (launcher_mods::record_brought_in).
+    std::vector<std::pair<std::string, std::vector<std::string>>> brought;
     {
         // A package brings what it needs with it (a mod pack is nothing else), needed mods first.
         const auto have = installed_versions(panel.list);
+        // The installed folders as Windows tells them apart, ignoring case: one installed by hand or by another
+        // manager may be spelt differently from Thunderstore's name, and is still a mod the player had.
+        const auto folded = [](std::string text) {
+            std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            return text;
+        };
+        std::set<std::string> had;
+        std::map<std::string, std::string> version_of;   // folded folder -> its installed version
+        for (const auto& [folder, version] : have) {
+            had.insert(folded(folder));
+            version_of.emplace(folded(folder), version);
+        }
+        // So a dependency installed under another spelling counts as installed (at its version) and is not
+        // downloaded again: each package whose folder is one of those, under Thunderstore's own spelling.
+        auto installed = have;
+        for (const auto& known : panel.store.packages) {
+            const auto folder = ts::folder_for(known.full_name);
+            if (installed.contains(folder)) continue;
+            if (const auto found = version_of.find(folded(folder)); found != version_of.end()) installed.emplace(folder, found->second);
+        }
         std::vector<thunderstore::Package> expanded;
-        for (const auto& package : packages)
-            for (auto& needed : thunderstore::with_dependencies(package, panel.store.packages, have))
+        for (const auto& package : packages) {
+            std::vector<std::string> brings;
+            for (auto& needed : thunderstore::with_dependencies(package, panel.store.packages, installed)) {
+                // What it brings in: a dependency that is not installed at all now (one only updated was there before).
+                const auto folder = ts::folder_for(needed.full_name);
+                if (needed.full_name != package.full_name && !had.contains(folded(folder))) brings.push_back(folder);
                 if (std::none_of(expanded.begin(), expanded.end(),
                         [&](const auto& queued) { return queued.full_name == needed.full_name; }))
                     expanded.push_back(std::move(needed));
+            }
+            if (!brings.empty()) brought.emplace_back(ts::folder_for(package.full_name), std::move(brings));
+        }
         packages = std::move(expanded);
     }
     if (panel.worker.joinable()) panel.worker.join();
@@ -430,7 +461,7 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
     panel.message.clear();
     set_activity(panel, "Starting download...");
     const auto root = panel.root;
-    panel.worker = std::thread([&panel, root, packages = std::move(packages)] {
+    panel.worker = std::thread([&panel, root, packages = std::move(packages), brought = std::move(brought)] {
         std::string name, error, note;
         wait_for_conflict_check(panel);   // (it may be reading the mods these replace)
         std::size_t done = 0;
@@ -456,6 +487,19 @@ void start_store_install(ModsPanel& panel, std::vector<thunderstore::Package> pa
                     break;
                 }
                 failed.push_back(package.title() + ": " + failure.what());
+            }
+        }
+        // A pack that installed remembers what it brought in, so its uninstall can offer exactly those.
+        for (const auto& [pack, brings] : brought) {
+            std::error_code missing;
+            if (!fs::is_directory(root / wide(pack), missing)) continue;
+            std::vector<std::string> present;
+            for (const auto& folder : brings)
+                if (fs::is_directory(root / wide(folder), missing)) present.push_back(folder);
+            try {
+                launcher_mods::record_brought_in(root, pack, present);
+            } catch (const std::exception& failure) {
+                log(logging::Level::warning, "Could not note what " + pack + " brought in: " + failure.what());
             }
         }
         if (error.empty() && !failed.empty()) {

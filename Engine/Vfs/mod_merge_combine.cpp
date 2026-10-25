@@ -336,15 +336,33 @@ std::vector<std::byte> merge_chunk_metadata(std::span<const std::vector<std::byt
     for (std::size_t copy = 0; !shape && copy < read.size(); ++copy)
         if (read[copy]) shape = &*read[copy];
     if (!shape) return {};   // no copy has a list at all
-    // A chunk no list describes still takes up its place, with a record that says nothing.
+    // A chunk no list describes still takes up its place, with a record that says nothing: an owner
+    // hash no resource has, and no meta. The game's reader (0x41af080) takes a record without "h64"
+    // as a "g" record and, with no "g" either, reads its guid through null (Skate.exe+0x15b2c34: a
+    // mod's grip texture added to a game deck bundle whose list has no record for it; 2026-10-25).
     native_db::Node blank;
     blank.type = 2;
+    blank.terminated = true;
     for (std::size_t index = 0; index < records.size(); ++index)
         if (described[index]) {
             blank = records[index];
             blank.children.clear();
             break;
         }
+    {
+        native_db::Node owner;
+        owner.type = 9;
+        owner.named = true;
+        owner.name = "h64";
+        owner.owned.assign(8, 0);
+        native_db::Node meta;
+        meta.type = 2;
+        meta.named = true;
+        meta.name = "meta";
+        meta.terminated = true;
+        blank.children.push_back(std::move(owner));
+        blank.children.push_back(std::move(meta));
+    }
     for (std::size_t index = 0; index < records.size(); ++index)
         if (!described[index]) records[index] = blank;
 
