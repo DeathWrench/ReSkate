@@ -41,6 +41,10 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/park_editor_panels.cpp
     Extension/UI/Overlay/park_editor_viewport.cpp
     Extension/UI/Overlay/park_previews.cpp
+    Extension/UI/Overlay/replay_editor.cpp
+    Extension/UI/Overlay/replay_editor_panels.cpp
+    Extension/UI/Overlay/replay_editor_timeline.cpp
+    Extension/UI/Overlay/replay_filmstrip.cpp
     Extension/UI/Overlay/gpu_diagnostics.cpp
     Extension/UI/Overlay/input_capture.cpp
     Extension/UI/Overlay/plugin_dialog.cpp
@@ -56,7 +60,7 @@ add_library(dingosdk_overlay STATIC
     Extension/Trainer/trainer_view.cpp
     Extension/UI/Overlay/screen_look.cpp
 )
-target_link_libraries(dingosdk_overlay PUBLIC dingosdk_logging dingosdk_profiler dingosdk_imgui dingosdk_hooks dingosdk_console_core dxguid PRIVATE dingosdk_playstation_input shell32 dingosdk_initfs dingosdk_custom_scripts dingosdk_game_archives dingosdk_mods dingosdk_json windowscodecs ole32)
+target_link_libraries(dingosdk_overlay PUBLIC dingosdk_logging dingosdk_profiler dingosdk_imgui dingosdk_hooks dingosdk_console_core dxguid PRIVATE dingosdk_replay_editor dingosdk_playstation_input shell32 dingosdk_initfs dingosdk_custom_scripts dingosdk_game_archives dingosdk_mods dingosdk_json windowscodecs ole32)
 
 # The screen look's shader (reskate.screen.look) is built into the DLL as text and compiled when it is
 # first drawn. The build checks it with the Windows SDK's fxc when there is one, so a shader that would

@@ -1105,6 +1105,11 @@ template<class OwnsPointer> void note_packet(const RAWMOUSE& mouse, OwnsPointer&
         s.raw_mouse_y.fetch_add(mouse.lLastY);
         s.look_mouse_x.fetch_add(mouse.lLastX);
         s.look_mouse_y.fetch_add(mouse.lLastY);
+        s.replay_mouse_x.fetch_add(mouse.lLastX);
+        s.replay_mouse_y.fetch_add(mouse.lLastY);
+        s.replay_tick_mouse_x.fetch_add(mouse.lLastX);
+        s.replay_tick_mouse_y.fetch_add(mouse.lLastY);
+        s.raw_mouse_at.store(GetTickCount64());
     }
     if (mouse.usButtonFlags & RI_MOUSE_WHEEL) s.look_wheel_raw.fetch_add(static_cast<SHORT>(mouse.usButtonData));
     auto buttons = s.raw_mouse_buttons.load();
@@ -1248,6 +1253,10 @@ void pause_game_input(bool paused) noexcept {
 }
 bool key_down(int virtual_key) noexcept { detail::OverlayInputAccess access; return (GetAsyncKeyState(virtual_key) & 0x8000) != 0; }
 int take_mouse_wheel() noexcept { return detail::mode_mouse_wheel.exchange(0, std::memory_order_relaxed); }
+MouseCounts take_replay_turn() noexcept {
+    auto& s = detail::state();
+    return {s.replay_tick_mouse_x.exchange(0), s.replay_tick_mouse_y.exchange(0)};
+}
 }
 
 // Dark Pop: the local skater is in the air with the D-pad hide on; renewed every physics step (see DarkPopHide).

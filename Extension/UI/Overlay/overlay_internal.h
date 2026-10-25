@@ -29,6 +29,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <map>
 #include <string>
@@ -117,6 +118,11 @@ struct State {
     // The same movement for read_mouse_look, kept apart so the editor's and the flight look's reads
     // do not take it; and the wheel, from raw packets and from WM_MOUSEWHEEL (in its 120 a notch).
     std::atomic<long> look_mouse_x{0}, look_mouse_y{0}, look_wheel_raw{0}, look_wheel_message{0};
+    // The same movement again for the replay editor's flown camera (replay_editor.cpp fly), and when a
+    // relative raw packet last came: the game can take its raw mouse registration away, and the editor
+    // then turns by the cursor instead. Shared with the park editor's reads, its turning went dead.
+    std::atomic<long> replay_mouse_x{0}, replay_mouse_y{0}, replay_tick_mouse_x{0}, replay_tick_mouse_y{0};
+    std::atomic<ULONGLONG> raw_mouse_at{0};
     std::atomic<unsigned> raw_mouse_buttons{0}; // physical: 1 left, 2 right, 4 middle
     std::atomic<ULONGLONG> raw_mouse_time{0};
     // The mouse registration in effect has RIDEV_NOLEGACY: Windows does not
@@ -144,6 +150,8 @@ struct State {
     std::atomic<bool> item_search_character_pending{false}, item_search_escape_pending{false};
     // A plugin's full-screen screen is open (plugin_overlay.cpp): it has the input, as the menu.
     std::atomic<bool> plugin_screen_visible{false};
+    // ReSkate's replay editor has the game's replay (replay_editor.cpp): it has the input.
+    std::atomic<bool> replay_editor_visible{false};
     std::atomic<bool> input_attached{false};
     std::atomic<bool> stop{false};
     std::atomic<HWND> window{nullptr};
@@ -194,6 +202,16 @@ struct State {
     std::array<ComPtr<ID3D12Resource>, 16> plugin_textures, plugin_uploads;
     // Thunderstore icons for the Mod Manager page (store_icons.cpp), after the screen look's slots.
     std::array<ComPtr<ID3D12Resource>, 64> store_textures, store_uploads; // store_icon_slots
+    // The replay editor's filmstrip (replay_filmstrip.cpp): two textures uploaded in turn, in
+    // replay_filmstrip_slot and replay_filmstrip_second_slot.
+    std::array<ComPtr<ID3D12Resource>, 2> filmstrip_textures, filmstrip_uploads;
+    // The replay editor's monitor (copy_replay_preview), in replay_preview_slot: the copy, its size
+    // and format, and whether the editor shows it this frame (set while it draws).
+    ComPtr<ID3D12Resource> preview_texture;
+    UINT preview_width{}, preview_height{};
+    DXGI_FORMAT preview_format{DXGI_FORMAT_UNKNOWN};
+    std::atomic<std::uint64_t> preview_id{0};
+    std::atomic<bool> replay_preview_wanted{false};
     ComPtr<ID3D12GraphicsCommandList> commands;
     ComPtr<ID3D12Fence> fence;
     HANDLE fence_event = nullptr;
@@ -288,6 +306,21 @@ void destroy_graphics();
 // presented frame's pixels handed over before the overlay draws on it; its GPU objects let go.
 bool frame_grab_pending();
 void grab_presented_frame(State& s, ID3D12Resource* buffer);
+// The presented frame read back (render thread, before ReSkate draws on it) and handed to `take`; an
+// empty frame when it could not be. `with_depth`: the game's depth for it too (captures).
+void read_presented_frame(State& s, ID3D12Resource* buffer, const std::function<void(const GrabbedFrame&)>& take, bool with_depth);
+// A presented frame copied on the game's queue and read later, not waited for (frame_grab.cpp): no
+// hitch, for pictures taken while the game moves. copy_presented_frame queues one (false when it
+// cannot: both copies busy, a format it does not read); take_frame_copies, each frame, hands the
+// copies the GPU has finished to `take` with their tag. Render thread.
+struct FrameSampler {
+    const std::uint8_t* data{};
+    std::uint32_t width{}, height{}, pitch{};
+    DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
+    std::array<std::uint8_t, 3> rgb(std::uint32_t x, std::uint32_t y) const noexcept; // one pixel as 8-bit sRGB
+};
+bool copy_presented_frame(State& s, ID3D12Resource* buffer, int tag);
+void take_frame_copies(State& s, const std::function<void(int, const FrameSampler&)>& take);
 void release_frame_grab();
 // The depth probe (depth_probe.cpp, `capture depth`): its hook, installed with the overlay's command
 // list; whether it needs this present; and its turn at it.
@@ -363,6 +396,24 @@ void plugin_images_lost();
 // Thunderstore packages' icons for the pause menu's Mod Manager page (store_icons.cpp), the same way,
 // by their URL, in the SRV heap's slots from store_icon_first_slot on.
 inline constexpr UINT store_icon_first_slot = screen_look_slot + screen_look_slots, store_icon_slots = 64;
+// The replay editor's filmstrip (replay_filmstrip.cpp): one picture of all its frames, after the icons.
+inline constexpr UINT replay_filmstrip_slot = store_icon_first_slot + store_icon_slots;
+// The replay editor's monitor: the game's frame copied into a texture before ReSkate draws, shown
+// fitted into the editor's preview box (copy_replay_preview, overlay_render.cpp).
+inline constexpr UINT replay_preview_slot = replay_filmstrip_slot + 1;
+inline constexpr UINT replay_filmstrip_second_slot = replay_preview_slot + 1;
+void copy_replay_preview(State& s, ID3D12Resource* buffer);
+// The filmstrip slot the presented frame is wanted for (-1 none), taken by the call; its copy is then
+// handed back with replay_filmstrip_take (an empty one when it could not be made).
+int replay_filmstrip_wanted() noexcept;
+// A picture of the game wanted or on its way while ReSkate draws nothing (the filmstrip's pictures of
+// the game as it records): the overlay's frame runs for it.
+bool replay_filmstrip_pending() noexcept;
+void replay_filmstrip_take(int slot, const FrameSampler& frame) noexcept;
+void upload_replay_filmstrip(State& s);
+// Pixels made into a texture in the SRV heap's slot `slot` (overlay_render.cpp); its id for ImGui, or 0.
+ImTextureID upload_image(State& s, const CardPixels& pixels, UINT slot, ComPtr<ID3D12Resource>& texture_out,
+                         ComPtr<ID3D12Resource>& upload_out);
 ImTextureID store_icon(const std::string& url);
 struct StoreIconUpload {
     std::string url;

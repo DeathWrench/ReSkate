@@ -74,6 +74,24 @@ inline constexpr std::uintptr_t view_fov_offset = 0x104;    // float, radians
 inline constexpr std::uintptr_t view_kind_back = 0x38;      // uint32, before the view
 inline constexpr std::uint32_t main_view_kind = 0;
 
-inline constexpr std::array<Fingerprint, 4> contracts{draw_packet_contract, first_lookup_contract,
-    second_lookup_contract, render_view_contract};
+// The world renderer's frame setup, 0x4e9cba0(renderer, const FrameViews*, state, ...; eight
+// arguments): copies the frame's views into its state (0x4da2990, each view through 0x3e5d430) and
+// culls from that copy, before render_view_contract ever sees a view. Found with a hardware write
+// watch on the main view's camera in a replay (2026-10-25). FrameViews holds five views 0x5c0 apart
+// from + 0x50: the current main view at + 0x50 and the previous one at + 0xbd0 (as the renderer
+// hands them to render_view_contract). A view caches what it derives from its camera (view and
+// projection matrices, frustum) behind the uint32 at view + 0x140: a set bit (1, 2, 4, 8) marks that
+// part out of date, so it is derived again.
+inline constexpr Fingerprint frame_setup_contract{0x4e9cba0, {
+    0x48,0x8b,0xc4,0x4c,0x89,0x40,0x18,0x48,0x89,0x50,0x10,0x48,0x89,0x48,0x08,0x55,
+    0x53,0x56,0x57,0x41,0x54,0x41,0x55,0x41,0x56,0x41,0x57,0x48,0x8d,0x68,0x98,0x48}};
+inline constexpr std::uintptr_t frame_main_view = 0x50;
+inline constexpr std::uintptr_t frame_previous_view = 0xbd0;
+inline constexpr std::size_t frame_views = 5;
+inline constexpr std::uintptr_t frame_view_stride = 0x5c0;
+inline constexpr std::uintptr_t view_stale_offset = 0x140;
+inline constexpr std::uint32_t view_all_stale = 0xf;
+
+inline constexpr std::array<Fingerprint, 5> contracts{draw_packet_contract, first_lookup_contract,
+    second_lookup_contract, render_view_contract, frame_setup_contract};
 }

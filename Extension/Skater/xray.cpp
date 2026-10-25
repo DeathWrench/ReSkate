@@ -16,6 +16,7 @@ struct State {
     std::set<std::string, std::less<>> owners; // client thread
     std::set<std::string, std::less<>> hiders; // client thread: plugins hiding the local skater
     bool hooked{};                             // client thread
+    bool view_camera{};                        // client thread: keep_view_camera
     std::atomic<std::uint64_t> drawn_at{};     // render thread -> client tick
 };
 State& state() {
@@ -68,10 +69,19 @@ void tick() noexcept {
         const bool drawn = GetTickCount64() - s.drawn_at.load(std::memory_order_acquire) < follow_ms;
         follow_render((xray && drawn) || hiding);
         hide_skater(hiding);
-        const bool wanted = xray || hiding;
+        const bool wanted = xray || hiding || s.view_camera;
         if (wanted != s.hooked && hook_render(wanted)) s.hooked = wanted;
     } catch (...) {
     }
+}
+
+bool keep_view_camera(bool on) noexcept {
+    auto& s = state();
+    if (!s.ready.load(std::memory_order_acquire)) return false;
+    s.view_camera = on;
+    if (on && !s.hooked && hook_render(true)) s.hooked = true;
+    if (!on && s.hooked) tick(); // off again unless a plugin keeps them
+    return !on || s.hooked;
 }
 
 bool latest(Pose& pose) {

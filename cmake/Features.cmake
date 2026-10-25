@@ -51,3 +51,15 @@ target_include_directories(dingosdk_capture PUBLIC "${PROJECT_SOURCE_DIR}")
 # stb_truetype, as shipped with Dear ImGui.
 target_include_directories(dingosdk_capture SYSTEM PRIVATE "${PROJECT_SOURCE_DIR}/External/imgui")
 target_link_libraries(dingosdk_capture PUBLIC dingosdk_miniz)
+
+# ReSkate's replay editor, the parts with no game code (Extension/ReplayEditor): the edit, its curves and
+# camera maths, the edit made playable, project files and what the screen and the game's side share. The
+# overlay draws the editor with it; the game's side (replay_session.cpp) is in the DLL.
+add_library(dingosdk_replay_editor STATIC
+    Extension/ReplayEditor/replay_edit.cpp
+    Extension/ReplayEditor/replay_motion.cpp
+    Extension/ReplayEditor/replay_program.cpp
+    Extension/ReplayEditor/replay_project_file.cpp
+    Extension/ReplayEditor/replay_bridge.cpp)
+target_include_directories(dingosdk_replay_editor PUBLIC "${PROJECT_SOURCE_DIR}")
+target_link_libraries(dingosdk_replay_editor PUBLIC dingosdk_json PRIVATE shell32 ole32)

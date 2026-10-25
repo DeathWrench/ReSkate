@@ -5,6 +5,7 @@
 #include <array>
 #include <cfloat>
 #include <cstring>
+#include <functional>
 
 // Reads a presented frame back from the GPU for a screen capture (overlay.h, FrameGrabHost;
 // reskate.capture), from Fit Check (pull request 326). The copy is made on the game's own queue right
@@ -53,7 +54,147 @@ bool frame_grab_pending() {
     try { return h->active(); } catch (...) { return false; }
 }
 
+namespace {
+// A presented frame copied for reading later, not waited for (copy_presented_frame).
+struct Copy {
+    ComPtr<ID3D12CommandAllocator> allocator;
+    ComPtr<ID3D12GraphicsCommandList> commands;
+    ComPtr<ID3D12Resource> readback;
+    UINT64 size{};
+    UINT64 fence{}; // the copy's fence value; 0 while free
+    int tag{};
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};
+    std::uint32_t width{}, height{};
+    DXGI_FORMAT format{DXGI_FORMAT_UNKNOWN};
+};
+std::array<Copy, 2>& copies() { static auto* value = new std::array<Copy, 2>; return *value; } // process lifetime
+bool readable(DXGI_FORMAT format) {
+    return format == DXGI_FORMAT_R8G8B8A8_UNORM || format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB || format == DXGI_FORMAT_B8G8R8A8_UNORM ||
+           format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || format == DXGI_FORMAT_R10G10B10A2_UNORM || format == DXGI_FORMAT_R16G16B16A16_FLOAT;
+}
+} // namespace
+
+std::array<std::uint8_t, 3> FrameSampler::rgb(std::uint32_t x, std::uint32_t y) const noexcept {
+    x = std::min(x, width - 1);
+    y = std::min(y, height - 1);
+    const auto* row = data + std::size_t{y} * pitch;
+    switch (format) {
+    case DXGI_FORMAT_B8G8R8A8_UNORM:
+    case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: {
+        const auto* p = row + std::size_t{x} * 4;
+        return {p[2], p[1], p[0]};
+    }
+    case DXGI_FORMAT_R10G10B10A2_UNORM: {
+        std::uint32_t packed;
+        std::memcpy(&packed, row + std::size_t{x} * 4, 4);
+        return {static_cast<std::uint8_t>((packed & 0x3ff) * 255 / 1023), static_cast<std::uint8_t>(((packed >> 10) & 0x3ff) * 255 / 1023),
+                static_cast<std::uint8_t>(((packed >> 20) & 0x3ff) * 255 / 1023)};
+    }
+    case DXGI_FORMAT_R16G16B16A16_FLOAT: {
+        std::uint16_t channel[4];
+        std::memcpy(channel, row + std::size_t{x} * 8, 8);
+        return {linear_to_srgb8(half_to_float(channel[0])), linear_to_srgb8(half_to_float(channel[1])), linear_to_srgb8(half_to_float(channel[2]))};
+    }
+    default: {
+        const auto* p = row + std::size_t{x} * 4;
+        return {p[0], p[1], p[2]};
+    }
+    }
+}
+
+bool copy_presented_frame(State& s, ID3D12Resource* buffer, int tag) {
+    if (!buffer || !s.device || !s.queue || !s.fence) return false;
+    Copy* free_copy = nullptr;
+    for (auto& c : copies())
+        if (!c.fence) {
+            free_copy = &c;
+            break;
+        }
+    if (!free_copy) return false;
+    auto& c = *free_copy;
+    const auto description = buffer->GetDesc();
+    if (!readable(description.Format)) return false;
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout{};
+    UINT rows{};
+    UINT64 row_bytes{}, total{};
+    s.device->GetCopyableFootprints(&description, 0, 1, 0, &layout, &rows, &row_bytes, &total);
+    if (!total || rows != description.Height) return false;
+    if (!c.allocator && FAILED(s.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&c.allocator)))) return false;
+    if (!c.commands) {
+        if (FAILED(s.device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, c.allocator.Get(), nullptr, IID_PPV_ARGS(&c.commands))))
+            return false;
+        c.commands->Close();
+    }
+    if (c.size < total) {
+        c.readback.Reset();
+        c.size = 0;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_READBACK;
+        D3D12_RESOURCE_DESC bytes{};
+        bytes.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER;
+        bytes.Width = total;
+        bytes.Height = 1;
+        bytes.DepthOrArraySize = 1;
+        bytes.MipLevels = 1;
+        bytes.SampleDesc.Count = 1;
+        bytes.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
+        if (FAILED(s.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &bytes, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                     IID_PPV_ARGS(&c.readback))))
+            return false;
+        c.size = total;
+    }
+    if (FAILED(c.allocator->Reset()) || FAILED(c.commands->Reset(c.allocator.Get(), nullptr))) return false;
+    D3D12_RESOURCE_BARRIER barrier{};
+    barrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+    barrier.Transition.pResource = buffer;
+    barrier.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    barrier.Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barrier.Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    c.commands->ResourceBarrier(1, &barrier);
+    D3D12_TEXTURE_COPY_LOCATION to{}, from{};
+    to.pResource = c.readback.Get();
+    to.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    to.PlacedFootprint = layout;
+    from.pResource = buffer;
+    from.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    c.commands->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+    std::swap(barrier.Transition.StateBefore, barrier.Transition.StateAfter);
+    c.commands->ResourceBarrier(1, &barrier);
+    if (FAILED(c.commands->Close())) return false;
+    ID3D12CommandList* lists[] = {c.commands.Get()};
+    s.queue->ExecuteCommandLists(1, lists);
+    const UINT64 signal = ++s.next_fence;
+    if (FAILED(s.queue->Signal(s.fence.Get(), signal))) return false;
+    c.fence = signal;
+    c.tag = tag;
+    c.layout = layout;
+    c.width = static_cast<std::uint32_t>(description.Width);
+    c.height = description.Height;
+    c.format = description.Format;
+    return true;
+}
+
+void take_frame_copies(State& s, const std::function<void(int, const FrameSampler&)>& take) {
+    if (!s.fence) return;
+    const UINT64 done = s.fence->GetCompletedValue();
+    for (auto& c : copies()) {
+        if (!c.fence || done < c.fence) continue;
+        void* mapped{};
+        const D3D12_RANGE range{0, static_cast<SIZE_T>(c.size)};
+        FrameSampler frame;
+        if (SUCCEEDED(c.readback->Map(0, &range, &mapped)) && mapped)
+            frame = {static_cast<const std::uint8_t*>(mapped) + c.layout.Offset, c.width, c.height, c.layout.Footprint.RowPitch, c.format};
+        try { take(c.tag, frame); } catch (...) {}
+        if (mapped) {
+            const D3D12_RANGE nothing{};
+            c.readback->Unmap(0, &nothing);
+        }
+        c.fence = 0;
+    }
+}
+
 void release_frame_grab() {
+    for (auto& c : copies()) c = {};
     auto& g = grab();
     g.commands.Reset();
     g.allocator.Reset();
@@ -68,6 +209,11 @@ void grab_presented_frame(State& s, ID3D12Resource* buffer) {
     bool wanted = false;
     try { wanted = h->wants_frame(); } catch (...) {}
     if (!wanted) return;
+    read_presented_frame(s, buffer, [h](const GrabbedFrame& frame) { h->take_frame(frame); }, true);
+}
+
+void read_presented_frame(State& s, ID3D12Resource* buffer, const std::function<void(const GrabbedFrame&)>& take, bool with_depth) {
+    if (!buffer || !s.device || !s.queue || !s.fence) return;
     auto& g = grab();
     const auto description = buffer->GetDesc();
     const auto format = description.Format;
@@ -80,7 +226,7 @@ void grab_presented_frame(State& s, ID3D12Resource* buffer) {
             logging::printf(logging::Level::warning, logging::Channel::graphics,
                             "Capture: the backbuffer format %u cannot be read back.", static_cast<unsigned>(format));
         g.warned = format;
-        h->take_frame({});
+        take({});
         return;
     }
     if ((ten_bit || half) && g.warned != format) {
@@ -96,7 +242,7 @@ void grab_presented_frame(State& s, ID3D12Resource* buffer) {
     s.device->GetCopyableFootprints(&description, 0, 1, 0, &layout, &rows, &row_bytes, &total);
     const auto fail = [&](const char* what) {
         logging::printf(logging::Level::warning, logging::Channel::graphics, "Capture: frame read-back failed at %s.", what);
-        try { h->take_frame({}); } catch (...) {}
+        try { take({}); } catch (...) {}
     };
     if (!total || rows != description.Height) return fail("its layout");
     if (!g.allocator &&
@@ -174,11 +320,13 @@ void grab_presented_frame(State& s, ID3D12Resource* buffer) {
         frame = {g.converted.data(), width, height, width * 4, false};
     }
     // The depth of this frame (a capture cuts what it shows out by it), when there is one.
-    std::uint32_t depth_width{}, depth_height{};
-    frame.depth = depth_tap_latest(depth_width, depth_height, frame.depth_pitch);
-    if (frame.depth && (depth_width != width || depth_height != height)) frame.depth = nullptr;
-    try { h->take_frame(frame); } catch (...) {}
-    depth_tap_done();
+    if (with_depth) {
+        std::uint32_t depth_width{}, depth_height{};
+        frame.depth = depth_tap_latest(depth_width, depth_height, frame.depth_pitch);
+        if (frame.depth && (depth_width != width || depth_height != height)) frame.depth = nullptr;
+    }
+    try { take(frame); } catch (...) {}
+    if (with_depth) depth_tap_done();
     const D3D12_RANGE nothing{};
     g.readback->Unmap(0, &nothing);
 }
