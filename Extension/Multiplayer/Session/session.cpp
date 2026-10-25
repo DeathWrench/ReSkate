@@ -172,6 +172,7 @@ void stop(Session &s, std::string reason) {
     fetching_map_flag.store(false, std::memory_order_relaxed);
     s.world = 1;
     s.travelling = false;
+    s.local_reload = s.local_reload_started = s.reload_ready_due = false;
     s.host_world_ready = true;
     s.travel_started = s.last_world_state = s.last_world_ready = 0;
     s.world_state_sequence = 0;
@@ -864,7 +865,8 @@ std::string plugin_chat(std::string_view plugin, std::string_view text, std::uin
 }
 void host_map_change(std::string_view destination) {
     auto &s = session();
-    if (s.mode != Mode::host || (!s.started_map && !s.travelling)) return;
+    // (Not the host's own reload of the same map: its players stay where they are.)
+    if (s.mode != Mode::host || s.local_reload || (!s.started_map && !s.travelling)) return;
     try {
         begin_host_world(s, destination, now_us());
         publish(s);
@@ -873,8 +875,84 @@ void host_map_change(std::string_view destination) {
         publish(s);
     }
 }
+bool begin_local_reload() {
+    auto &s = session();
+    if (s.mode != Mode::host && s.mode != Mode::join) return true;
+    if (!s.started_map || s.travelling || s.awaiting_map || !s.host_world_ready) return false;
+    const auto now = now_us();
+    s.local_reload = true;
+    s.local_reload_started = s.reload_ready_due = false;
+    s.travelling = true;
+    s.travel_started = now;
+    if (s.mode == Mode::host) {
+        // The players wait for the host, who says it is not in the world for now.
+        s.host_world_ready = false;
+        send_world_state(s, now);
+        s.status = "Reloading the map for your mods. Your players stay connected.";
+    } else {
+        s.status = "Reloading the map for your mods. You stay in the session.";
+    }
+    publish(s);
+    return true;
+}
+namespace {
+// The end of a local reload: back in the same world, as it was.
+void end_local_reload(Session &s, const NativeFrame &local, std::uint64_t now) {
+    s.local_reload = s.local_reload_started = false;
+    s.travelling = false;
+    s.context = local.context;
+    s.parent = local.parent;
+    for (auto &peer : active_peers(s)) peer.last_packet = now;
+    if (s.mode == Mode::host) {
+        s.host_world_ready = true;
+        s.last_world_state = 0;
+        send_world_state(s, now);
+        s.status = "Map reloaded. Your players are still here.";
+    } else {
+        s.reload_ready_due = true;
+        s.status = "Map reloaded. Still in the same session.";
+    }
+}
+}
+void cancel_local_reload() {
+    auto &s = session();
+    if (!s.local_reload || s.local_reload_started) return;
+    s.local_reload = false;
+    s.travelling = false;
+    if (s.mode == Mode::host) {
+        s.host_world_ready = true;
+        send_world_state(s, now_us());
+    }
+    s.status.clear();
+    publish(s);
+}
 bool observe_local_world(Session &s, const NativeFrame &local, std::string_view current, std::uint64_t now) {
     const auto map = current.empty() ? 0 : map_hash(current);
+    if (s.local_reload) {
+        // The map is unloaded and loaded again for the player's own reasons (begin_local_reload): no
+        // map change, so nothing of the session changes while it loads.
+        if (!s.local_reload_started) {
+            if (!local.ready || local.context != s.context) s.local_reload_started = true;
+            else if (now - s.travel_started > 20000000) {
+                // The load never began (it was refused): the session carries on as it was.
+                end_local_reload(s, local, now);
+                return true;
+            } else
+                return true;
+        }
+        if (!local.ready) {
+            if (now - s.travel_started > 180000000) {
+                stop(s, "The map took too long to reload.");
+                return false;
+            }
+            return true;
+        }
+        if (map != s.map) {
+            stop(s, "Session ended because your local map changed. Join again to return to the host.");
+            return false;
+        }
+        end_local_reload(s, local, now);
+    }
     const bool changed = s.started_map &&
         (!local.ready || s.map != map || s.context != local.context || s.parent != local.parent);
     if (s.mode == Mode::host) {

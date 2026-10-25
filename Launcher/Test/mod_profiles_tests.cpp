@@ -1,6 +1,7 @@
 // Mod profiles: storage, applying one to the installed mods, and r2modman's export formats.
 #include "Launcher/mod_profiles.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -92,6 +93,15 @@ void keeping_others() {
     after.entries = applied.entries;
     check(profiles::in_use(pack, after, true) && !profiles::in_use(pack, after), "In use with kept mods does not follow the profile's own mods");
     check(!profiles::in_use(pack, list, true), "A profile whose mod is off counts as in use");
+    // The player's own mod moved above the profile's: its mods are still all on, in its order.
+    auto mine_first = after;
+    std::rotate(mine_first.entries.begin(), mine_first.entries.begin() + 1, mine_first.entries.end());
+    check(profiles::in_use(pack, mine_first, true), "In use with kept mods depends on where the player's own mods are");
+    const profiles::Profile two{"Two", {{"Team-B", "2.1.0", true}, {"Team-A", "1.0.0", true}}};
+    auto swapped = list;
+    swapped.entries = profiles::apply(two, list, true).entries;
+    std::swap(swapped.entries[0], swapped.entries[1]);
+    check(!profiles::in_use(two, swapped, true), "In use with kept mods ignores the order of the profile's own mods");
 }
 
 void storage(const std::filesystem::path& root) {

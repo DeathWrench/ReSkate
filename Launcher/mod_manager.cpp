@@ -485,4 +485,112 @@ void remove(const fs::path& mods, const std::string& name) {
     recycle(target);
 }
 
+namespace {
+constexpr wchar_t removals_file[] = L"remove.txt";
+fs::path pending_root(const fs::path& mods) { return mods / from_utf8(pending_folder); }
+std::vector<std::string> read_removals(const fs::path& mods) {
+    std::vector<std::string> names;
+    std::ifstream in(pending_root(mods) / removals_file);
+    for (std::string line; std::getline(in, line);) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (mods::valid_mod_name(line) && std::find(names.begin(), names.end(), line) == names.end()) names.push_back(line);
+    }
+    return names;
+}
+// Replaces remove.txt (or removes it when there is nothing in it).
+void write_removals(const fs::path& mods, const std::vector<std::string>& names) {
+    const auto file = pending_root(mods) / removals_file;
+    std::error_code error;
+    if (names.empty()) {
+        fs::remove(file, error);
+        return;
+    }
+    fs::create_directories(file.parent_path());
+    const auto temporary = fs::path(file).concat(L".tmp");
+    {
+        std::ofstream out(temporary, std::ios::binary | std::ios::trunc);
+        for (const auto& name : names) out << name << '\n';
+        if (!out) fail("Could not note the mod to uninstall (is the disk full?).");
+    }
+    if (!MoveFileExW(temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        fail("Could not note the mod to uninstall.");
+}
+} // namespace
+
+std::string install_later(const fs::path& mods, const fs::path& source, const Progress& progress,
+                          const std::atomic<bool>& cancel, const InstallOptions& options) {
+    const auto name = install(pending_root(mods), source, true, progress, cancel, options);
+    auto removals = read_removals(mods);
+    if (std::erase(removals, name)) write_removals(mods, removals);
+    return name;
+}
+
+void remove_later(const fs::path& mods, const std::string& name) {
+    if (!mods::valid_mod_name(name)) fail("\"" + name + "\" is not a mod folder.");
+    std::error_code error;
+    fs::remove_all(pending_root(mods) / from_utf8(name), error);
+    auto removals = read_removals(mods);
+    if (std::find(removals.begin(), removals.end(), name) == removals.end()) removals.push_back(name);
+    write_removals(mods, removals);
+}
+
+Pending pending(const fs::path& mods) noexcept {
+    Pending result;
+    try {
+        std::error_code error;
+        for (fs::directory_iterator it(pending_root(mods), error), end; !error && it != end; it.increment(error)) {
+            const auto name = utf8(it->path().filename().wstring());
+            // (install()'s own staging folder is a dot folder too.)
+            if (it->is_directory(error) && mods::valid_mod_name(name) && !name.ends_with(".replaced")) result.updates.push_back(name);
+        }
+        result.removals = read_removals(mods);
+    } catch (...) {}
+    return result;
+}
+
+std::vector<std::string> apply_pending(const fs::path& mods) noexcept {
+    std::vector<std::string> lines;
+    try {
+        const auto waiting = pending(mods);
+        if (waiting.updates.empty() && waiting.removals.empty()) return lines;
+        const auto root = pending_root(mods);
+        for (const auto& name : waiting.updates) {
+            const auto target = mods / from_utf8(name), copy = root / from_utf8(name);
+            const auto aside = root / (from_utf8(name).wstring() + L".replaced");
+            std::error_code error;
+            fs::remove_all(aside, error);
+            if (fs::exists(target, error) && !MoveFileExW(target.c_str(), aside.c_str(), MOVEFILE_WRITE_THROUGH)) {
+                lines.push_back("The update of " + name + " waits: its folder is in use (Windows error " + std::to_string(GetLastError()) + ").");
+                continue;
+            }
+            if (!MoveFileExW(copy.c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH)) {
+                const auto code = GetLastError();
+                MoveFileExW(aside.c_str(), target.c_str(), MOVEFILE_WRITE_THROUGH);
+                lines.push_back("The update of " + name + " waits: it could not be moved in (Windows error " + std::to_string(code) + ").");
+                continue;
+            }
+            fs::remove_all(aside, error);
+            lines.push_back("Updated " + name + " (installed in game, waiting for this start).");
+        }
+        std::vector<std::string> kept;
+        for (const auto& name : waiting.removals) {
+            std::error_code error;
+            if (!fs::is_directory(mods / from_utf8(name), error)) continue;
+            try {
+                recycle(mods / from_utf8(name));
+                lines.push_back("Uninstalled " + name + " (asked for in game).");
+            } catch (const std::exception& failure) {
+                kept.push_back(name);
+                lines.push_back("Uninstalling " + name + " waits: " + failure.what());
+            }
+        }
+        try { write_removals(mods, kept); } catch (const std::exception& failure) { lines.push_back(failure.what()); }
+        std::error_code error;
+        if (fs::is_empty(root, error)) fs::remove(root, error);
+    } catch (const std::exception& failure) {
+        lines.push_back(std::string("Mod changes waiting from the game could not be made: ") + failure.what());
+    } catch (...) {}
+    return lines;
+}
+
 } // namespace dingosdk::launcher_mods

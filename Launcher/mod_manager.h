@@ -54,6 +54,28 @@ std::string install(const std::filesystem::path& mods_root, const std::filesyste
 // Moves Mods/<name> to the Recycle Bin. Throws a user-facing message.
 void remove(const std::filesystem::path& mods_root, const std::string& name);
 
+// Changes the game cannot make while it runs, because it holds the mod's files open (an update or
+// uninstall of a mod it has loaded), wait in Mods/.reskate-pending until the next start: the new
+// copy of a mod as a folder there, and the mods to uninstall in its remove.txt, a folder name a
+// line. apply_pending makes them; the launcher calls it before each launch's merge.
+inline constexpr char pending_folder[] = ".reskate-pending";
+// Installs `source` as install() does, into the pending folder, and returns the mod's name. A
+// removal waiting for the same mod is dropped: the update is what was asked for last.
+std::string install_later(const std::filesystem::path& mods_root, const std::filesystem::path& source,
+                          const Progress& progress, const std::atomic<bool>& cancel, const InstallOptions& options = {});
+// Marks Mods/<name> to be uninstalled at the next start, dropping an update waiting for it.
+// Throws a user-facing message.
+void remove_later(const std::filesystem::path& mods_root, const std::string& name);
+struct Pending {
+    std::vector<std::string> updates, removals;
+};
+// What waits. A missing or unreadable folder is nothing; never throws.
+Pending pending(const std::filesystem::path& mods_root) noexcept;
+// Moves each waiting copy into place (the old copy deleted for good, as an update's is) and moves
+// each mod to remove to the Recycle Bin. What could not be done stays for the next try. Never
+// throws; returns what happened, a line each, for the log.
+std::vector<std::string> apply_pending(const std::filesystem::path& mods_root) noexcept;
+
 // What the mods give the game's data, as one line: each mod that ships a layout, in load order, with
 // its folder name and its files' fingerprint (Engine/Vfs/mod_list.h mod_fingerprint), then the
 // variants in play. A mod that only holds a plugin, or loose files the game does not draw with, is not

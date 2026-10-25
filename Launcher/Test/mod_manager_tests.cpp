@@ -548,6 +548,49 @@ int main() {
               "The game's shader cache is ReSkate's own, under Game/Skate");
     }
 
+    // Changes the game cannot make while it holds a mod's files: they wait for the next start.
+    {
+        const auto waiting_mods = root / L"waiting" / L"Mods";
+        make_zip(sources / L"held-v1.zip", {{"Held Mod/layout.toc", "v1"}});
+        make_zip(sources / L"held-v2.zip", {{"Held Mod/layout.toc", "v2"}});
+        check(install(waiting_mods, sources / L"held-v1.zip") == "Held Mod", "pending: the first copy installs");
+        auto held = CreateFileW((waiting_mods / L"Held Mod" / L"layout.toc").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        check(!error_of([&] { install(waiting_mods, sources / L"held-v2.zip", true); }).empty(), "pending: a copy in use cannot be replaced now");
+        std::atomic<bool> cancel{};
+        check(launcher_mods::install_later(waiting_mods, sources / L"held-v2.zip", {}, cancel) == "Held Mod", "pending: the update is kept for later");
+        auto waiting = launcher_mods::pending(waiting_mods);
+        check(waiting.updates == std::vector<std::string>{"Held Mod"} && waiting.removals.empty(), "pending: the update is what waits");
+        check(read(waiting_mods / L"Held Mod" / L"layout.toc") == "v1", "pending: the copy in use is untouched");
+        check(dingosdk::mods::scan_mods(waiting_mods.parent_path()).entries.size() == 1, "pending: the waiting copy is not a mod of its own");
+        const auto still_held = launcher_mods::apply_pending(waiting_mods);
+        check(still_held.size() == 1 && still_held.front().find("waits") != std::string::npos &&
+                  read(waiting_mods / L"Held Mod" / L"layout.toc") == "v1" && launcher_mods::pending(waiting_mods).updates.size() == 1,
+              "pending: while the game still holds it, the update keeps waiting and the old copy stays");
+        CloseHandle(held);
+        const auto applied = launcher_mods::apply_pending(waiting_mods);
+        check(applied.size() == 1 && read(waiting_mods / L"Held Mod" / L"layout.toc") == "v2", "pending: at the next start the update goes in");
+        check(!fs::exists(waiting_mods / launcher_mods::pending_folder), "pending: nothing is left behind once it is all done");
+        check(launcher_mods::apply_pending(waiting_mods).empty(), "pending: nothing waiting is nothing to do");
+
+        launcher_mods::remove_later(waiting_mods, "Held Mod");
+        launcher_mods::remove_later(waiting_mods, "Held Mod");
+        waiting = launcher_mods::pending(waiting_mods);
+        check(waiting.removals == std::vector<std::string>{"Held Mod"} && waiting.updates.empty(), "pending: an uninstall waits, once");
+        check(launcher_mods::install_later(waiting_mods, sources / L"held-v1.zip", {}, cancel) == "Held Mod" &&
+                  launcher_mods::pending(waiting_mods).removals.empty(),
+              "pending: installing it again takes back the uninstall");
+        launcher_mods::remove_later(waiting_mods, "Held Mod");
+        waiting = launcher_mods::pending(waiting_mods);
+        check(waiting.updates.empty() && waiting.removals.size() == 1, "pending: uninstalling it takes back the update");
+        check(!error_of([&] { launcher_mods::remove_later(waiting_mods, "..\\elsewhere"); }).empty(), "pending: only mod folder names are uninstalled");
+        // (A mod to uninstall that is gone already is simply dropped; the Recycle Bin is not tried here.)
+        launcher_mods::remove_later(waiting_mods, "Never Installed");
+        fs::remove_all(waiting_mods / L"Held Mod");
+        launcher_mods::apply_pending(waiting_mods);
+        check(!fs::exists(waiting_mods / launcher_mods::pending_folder), "pending: uninstalls of mods already gone are dropped");
+    }
+
     std::error_code ignored;
     fs::remove_all(root, ignored);
     if (failures) {

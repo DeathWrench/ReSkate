@@ -32,6 +32,7 @@ add_library(dingosdk_overlay STATIC
     Extension/UI/Overlay/game_images.cpp
     Extension/UI/Overlay/xray_overlay.cpp
     Extension/UI/Overlay/plugin_images.cpp
+    Extension/UI/Overlay/store_icons.cpp
     Extension/UI/Overlay/menu_map_pictures.cpp
     Extension/UI/Overlay/skate_menu_skater.cpp
     Extension/UI/Overlay/skate_menu_settings.cpp

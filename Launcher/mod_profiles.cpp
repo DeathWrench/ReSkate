@@ -309,10 +309,15 @@ Applied apply(const Profile& profile, const mods::ModList& list, bool keep_other
 bool in_use(const Profile& profile, const mods::ModList& list, bool keep_others) {
     const auto applied = apply(profile, list, keep_others);
     if (!applied.missing.empty()) return false;
-    const auto enabled = [](const std::vector<mods::ModEntry>& entries) {
+    // With keep_others the player's own mods are left out: where they sit, and whether they are on,
+    // does not change what loading the profile would do to its mods.
+    std::set<std::string> own;
+    if (keep_others)
+        for (const auto& mod : profile.mods) own.insert(folded(mod.name));
+    const auto enabled = [&](const std::vector<mods::ModEntry>& entries) {
         std::vector<std::string> names;
         for (const auto& entry : entries)
-            if (entry.enabled) names.push_back(folded(entry.mod.name));
+            if (entry.enabled && (!keep_others || own.contains(folded(entry.mod.name)))) names.push_back(folded(entry.mod.name));
         return names;
     };
     return enabled(applied.entries) == enabled(list.entries);
