@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // The in-game Mod Manager (the pause menu's Mod Manager tab, Extension/UI/Overlay/mod_manager_page.inl):
@@ -68,9 +69,10 @@ void set_enabled(const std::string& folder, bool on);
 // the change to show. Returns what happened, for the page.
 std::string apply();
 
-// The queue: one job at a time.
+// The queue: jobs (an install of some packages, an uninstall) run one at a time, in the order they
+// were asked for; one can be asked for while another runs.
 struct Progress {
-    bool busy{};
+    bool busy{};                 // a job is in hand, or waits its turn
     enum class Step { starting, downloading, installing, uninstalling } step{};
     std::string activity;      // "Downloading Vancouver Plaza (2 of 3)"
     float fraction{-1};        // of the one in hand; below 0 when not known
@@ -80,18 +82,23 @@ struct Progress {
     std::string package, title, version, icon;
     std::size_t at{}, of{};
     std::uint64_t received{}, total{};
-    std::vector<std::string> queued;
+    std::vector<std::string> queued;   // and every package of the jobs waiting their turn (an uninstall's folder)
+    std::size_t waiting{};             // jobs waiting their turn after the one in hand
     std::string result;        // what the last job did, for the page; empty while busy
     bool failed{};             // the last job did not do all it was asked to
     unsigned serial{};         // changes when a job ends
 };
 Progress progress();
-// Installs the packages (Namespace-Name each, as in the listing) at their newest version, with the
-// packages they need. An installed one is updated. Empty, or why it cannot start now.
+// Queues an install of the packages (Namespace-Name each, as in the listing) at their newest version,
+// with the packages they need (worked out when the job starts). An installed one is updated. Empty,
+// or why it was not queued (a package not listed, or already queued or in hand).
 std::string install(const std::vector<std::string>& packages);
-// Uninstalls Mods/<folder>: to the Recycle Bin, or at the next start when the game holds its files.
+// Queues an uninstall of Mods/<folder>: to the Recycle Bin, or at the next start when the game holds
+// its files.
 std::string uninstall(const std::string& folder);
-// Stops the download under way; what is installed stays.
+// Whether a package (Namespace-Name) is being installed now, or waits in the queue.
+bool queued(std::string_view package);
+// Stops the job in hand and empties the queue; what is installed stays.
 void cancel();
 
 // A package's README, fetched on a thread of its own the first time it is asked for; null until

@@ -128,16 +128,13 @@ Front front(std::span<const ts::Package> packages, const ts::Installed& installe
     shelf("MOST POPULAR", sorted(Sort::popular, any));
     shelf("RECENTLY UPDATED", sorted(Sort::updated, any));
     shelf("NEW", sorted(Sort::newest, any));
-    // Then the biggest categories, each its own row.
-    std::size_t rows{};
-    for (const auto& [category, count] : categories(packages)) {
-        if (rows >= 4) break;
-        const auto key = lower(category);
-        if (key == "modpacks" || key == "libraries" || key == "misc") continue;
-        shelf([&] { std::string title = category; for (auto& c : title) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32); return title; }(),
+    // Then every category, its own row, the biggest first: not those that hold what players rarely
+    // browse for (packs of other mods, what mods need, tools, AI-made), which are still a search away.
+    constexpr std::array<std::string_view, 4> unshelved{"modpacks", "libraries", "ai generated", "tools"};
+    for (const auto& [category, count] : categories(packages))
+        if (std::find(unshelved.begin(), unshelved.end(), lower(category)) == unshelved.end())
+            shelf([&] { std::string title = category; for (auto& c : title) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 32); return title; }(),
               sorted(Sort::popular, [&](const ts::Package& p) { return p.in_category(category); }));
-        ++rows;
-    }
     return result;
 }
 

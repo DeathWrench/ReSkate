@@ -54,9 +54,10 @@ int main() {
         package("Old", "Deprecated_Map", "1.0.0", R"("Maps")", "2025-01-01T10:00:00Z", 80000, {}, false, true) + "," +
         package("Bad", "Not_Safe", "1.0.0", R"("Cosmetics")", "2026-10-23T10:00:00Z", 90000, {}, false, false, true) + "," +
         package("Bad", "Also_Not_Safe", "1.0.0", R"("NSFW")", "2026-10-23T10:00:00Z", 90000) + "," +
-        package("Zee", "Hoodie", "1.0.0", R"("Cosmetics")", "2026-10-10T10:00:00Z", 700, {}, false, false, false, "A warm desert hoodie") + "]";
+        package("Zee", "Hoodie", "1.0.0", R"("Cosmetics")", "2026-10-10T10:00:00Z", 700, {}, false, false, false, "A warm desert hoodie") + "," +
+        package("Zee", "Map_Tool", "1.0.0", R"("Tools", "AI Generated", "Misc")", "2026-10-11T10:00:00Z", 50) + "]";
     const auto packages = ts::parse_listing(text);
-    check(packages.size() == 9, "the fixture listing parses");
+    check(packages.size() == 10, "the fixture listing parses");
     ts::Installed none;
 
     // ---- search
@@ -118,8 +119,16 @@ int main() {
         check(popular && !popular->packages.empty() && popular->packages.front()->full_name == "Sandos-Vancouver_Plaza", "MOST POPULAR is by downloads");
         const auto* fresh = shelf("NEW");
         check(fresh && !fresh->packages.empty() && fresh->packages.front()->full_name == "Fourth-Board_Pack", "NEW is by when it was made");
-        check(shelf("MAPS") && shelf("COSMETICS"), "the biggest categories get rows of their own");
-        check(!shelf("LIBRARIES") && !shelf("MODPACKS"), "libraries and mod packs get no row");
+        check(shelf("MAPS") && shelf("COSMETICS") && shelf("SKATEBOARDS") && shelf("MISC"), "every category gets a row of its own");
+        check(!shelf("LIBRARIES") && !shelf("MODPACKS") && !shelf("TOOLS") && !shelf("AI GENERATED"),
+              "but mod packs, libraries, tools and AI generated");
+        check(!shelf("NSFW"), "a category only NSFW packages have gets no row");
+        std::size_t maps_at{}, misc_at{};
+        for (std::size_t i = 0; i < front.shelves.size(); ++i) {
+            if (front.shelves[i].title == "MAPS") maps_at = i;
+            if (front.shelves[i].title == "MISC") misc_at = i;
+        }
+        check(maps_at < misc_at, "the biggest categories come first");
         check(ms::front(packages, none, "2026-10-24", 8, 2).shelves.front().packages.size() == 2, "a row holds at most what was asked for");
     }
 

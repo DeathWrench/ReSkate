@@ -46,8 +46,9 @@ struct Front {
     std::vector<Shelf> shelves;
 };
 // `today`: "YYYY-MM-DD", for what counts as recent. Featured: the pinned packages, then the most
-// downloaded of those updated in the last 60 days, at most `featured_count`. Each shelf holds at
-// most `per_shelf`.
+// downloaded of those updated in the last 60 days, at most `featured_count`. The shelves: most
+// popular, recently updated and new, then one for every category, the biggest first, but mod packs,
+// libraries, tools and AI generated. Each holds at most `per_shelf`.
 Front front(std::span<const ts::Package> packages, const ts::Installed& installed, std::string_view today,
             std::size_t featured_count = 8, std::size_t per_shelf = 24);
 

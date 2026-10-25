@@ -14,6 +14,7 @@
 #include <atomic>
 #include <cctype>
 #include <chrono>
+#include <deque>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -339,40 +340,36 @@ void set_bytes(std::uint64_t received, std::uint64_t total) {
     current_progress.received = received;
     current_progress.total = total;
 }
-void finish(std::string result, bool failed) {
+// A job ended: what it did, for the page. The queue may go on with the next.
+void job_done(std::string result, bool failed) {
     log(failed ? logging::Level::warning : logging::Level::info, result);
     {
         std::lock_guard lock(progress_mutex);
-        current_progress.busy = false;
         current_progress.activity.clear();
         current_progress.fraction = -1;
         current_progress.step = Progress::Step::starting;
         current_progress.package.clear();
+        current_progress.title.clear();
+        current_progress.version.clear();
+        current_progress.icon.clear();
         current_progress.queued.clear();
+        current_progress.received = current_progress.total = 0;
         current_progress.result = std::move(result);
         current_progress.failed = failed;
         ++current_progress.serial;
     }
-    busy.store(false);
     rescan();
 }
-std::string begin(const char* what) {
-    if (map_download::view().stage != map_download::Stage::idle) return "A map for a session is being downloaded. Wait for it to finish.";
-    if (live_mods::busy()) return "The mods are being applied. Wait for it to finish.";
-    if (busy.exchange(true)) return std::string("Wait for the ") + what + " under way to finish.";
-    stop.store(false);
-    watch.cancel.store(false);
-    std::lock_guard lock(progress_mutex);
-    current_progress.busy = true;
-    current_progress.result.clear();
-    current_progress.failed = false;
-    current_progress.activity = "Starting...";
-    current_progress.fraction = -1;
-    current_progress.step = Progress::Step::starting;
-    current_progress.package.clear();
-    current_progress.queued.clear();
-    return {};
-}
+
+// The jobs waiting their turn, and whether the worker runs. A job is an install of some packages or an
+// uninstall of a folder.
+struct Job {
+    std::vector<std::string> install;
+    std::string uninstall;
+};
+std::mutex jobs_mutex;
+std::deque<Job> jobs;   // under jobs_mutex
+bool working{};         // under jobs_mutex: the worker thread runs
 
 // Downloads and installs one package (its newest version). Returns what happened ("" when it went
 // in now, "later" when it waits for the next start) or throws why not.
@@ -523,110 +520,206 @@ std::string apply() {
 }
 
 Progress progress() {
-    std::lock_guard lock(progress_mutex);
-    return current_progress;
+    Progress result;
+    {
+        std::lock_guard lock(progress_mutex);
+        result = current_progress;
+    }
+    // And what waits after the job in hand.
+    std::lock_guard lock(jobs_mutex);
+    result.waiting = jobs.size();
+    for (const auto& job : jobs) {
+        result.queued.insert(result.queued.end(), job.install.begin(), job.install.end());
+        if (!job.uninstall.empty()) result.queued.push_back(job.uninstall);
+    }
+    return result;
 }
 
-std::string install(const std::vector<std::string>& wanted) {
+namespace {
+// An install job: the packages asked for at their newest, and what they need that is not here at the
+// version asked for (read from the Mods folder now: a job before this one may have installed it).
+std::pair<std::string, bool> install_job(const std::vector<std::string>& wanted) {
     const auto shown = listing();
     std::vector<ts::Package> packages;
     for (const auto& name : wanted)
         if (const auto* found = ts::find_package(shown->packages, name)) packages.push_back(*found);
-    if (packages.empty()) return "That mod is not in Thunderstore's listing.";
-    std::shared_ptr<const Mods> mods_now;
-    {
-        std::lock_guard lock(mods_mutex);
-        mods_now = current_mods;
-    }
-    // The ones asked for are taken at their newest, installed or not; what they need only when it
-    // is not here at the version they ask for.
-    ts::Installed have = mods_now ? mods_now->versions : ts::Installed{};
+    if (packages.empty()) return {"That mod is not in Thunderstore's listing any more.", true};
+    ts::Installed have;
+    for (const auto& entry : mods::scan_mods(mods::engine_data_root()).entries) have[entry.mod.name] = entry.mod.version;
     for (const auto& package : packages) have.erase(ts::folder_for(package.full_name));
-    auto plan = mod_store::plan(packages, shown->packages, have);
-    if (plan.packages.empty()) return "Nothing to install.";
-    if (auto refused = begin("install"); !refused.empty()) return refused;
+    const auto plan = mod_store::plan(packages, shown->packages, have);
+    if (plan.packages.empty()) return {"Nothing to install.", false};
+    std::size_t now_in{}, later{};
+    std::vector<std::string> failed;
+    for (std::size_t i = 0; i < plan.packages.size(); ++i) {
+        if (stop.load()) break;
+        const auto& package = plan.packages[i];
+        try {
+            std::vector<std::string> rest;
+            for (std::size_t j = i + 1; j < plan.packages.size(); ++j) rest.push_back(plan.packages[j].full_name);
+            const auto how = install_one(package, i, plan.packages.size(), std::move(rest));
+            (how.empty() ? now_in : later) += 1;
+            log(logging::Level::info, package.full_name + " v" + package.latest().number + (how.empty() ? " installed." : " waits for the next start."));
+        } catch (const std::exception& failure) {
+            if (stop.load()) break;
+            failed.push_back(package.title() + ": " + failure.what());
+        }
+    }
+    std::string result;
+    const auto title = plan.packages.back().title();
+    if (stop.load()) result = "Cancelled. " + std::to_string(now_in) + " of " + std::to_string(plan.packages.size()) + " installed.";
+    else if (failed.empty() && later == 0)
+        result = plan.packages.size() == 1 ? title + " is installed." : std::to_string(now_in) + " mods installed (" + title + " and what it needs).";
+    else if (failed.empty())
+        result = later == plan.packages.size() ? "The game has the old files open: the update goes in the next time it starts."
+                 : std::to_string(now_in) + " installed; " + std::to_string(later) + " go in the next time the game starts.";
+    else {
+        result = failed.size() == 1 ? failed.front() : std::to_string(failed.size()) + " could not be installed: " + failed.front();
+        if (now_in) result += " (" + std::to_string(now_in) + " installed)";
+    }
+    if (!plan.unknown.empty()) result += " Not on Thunderstore: " + plan.unknown.front() + (plan.unknown.size() > 1 ? " and more." : ".");
+    return {result, stop.load() || !failed.empty() || !plan.unknown.empty()};
+}
+std::pair<std::string, bool> uninstall_job(const std::string& folder) {
+    set_package(Progress::Step::uninstalling, nullptr, 0, 1);
+    {
+        std::lock_guard lock(progress_mutex);
+        current_progress.package = current_progress.title = folder;
+    }
+    set_activity("Uninstalling " + folder);
+    const auto root = mods_root();
     try {
-        std::thread([plan = std::move(plan)] {
-            std::size_t now_in{}, later{};
-            std::vector<std::string> failed;
-            for (std::size_t i = 0; i < plan.packages.size(); ++i) {
-                if (stop.load()) break;
-                const auto& package = plan.packages[i];
-                try {
-                    std::vector<std::string> queued;
-                    for (std::size_t j = i + 1; j < plan.packages.size(); ++j) queued.push_back(plan.packages[j].full_name);
-                    const auto how = install_one(package, i, plan.packages.size(), std::move(queued));
-                    (how.empty() ? now_in : later) += 1;
-                    log(logging::Level::info, package.full_name + " v" + package.latest().number + (how.empty() ? " installed." : " waits for the next start."));
-                } catch (const std::exception& failure) {
-                    if (stop.load()) break;
-                    failed.push_back(package.title() + ": " + failure.what());
-                }
+        launcher_mods::remove(root, folder);
+        return {folder + " is uninstalled (it is in the Recycle Bin).", false};
+    } catch (const std::exception& failure) {
+        log(logging::Level::info, folder + " could not be removed now (" + failure.what() + "); it goes at the next start.");
+    }
+    try {
+        {
+            // Off now, so the next apply takes it out of the game; gone at the next start.
+            std::lock_guard lock(write_mutex);
+            auto list = mods::scan_mods(mods::engine_data_root());
+            if (list.issue.empty()) {
+                for (auto& entry : list.entries)
+                    if (same(entry.mod.name, folder)) entry.enabled = false;
+                mods::save_mod_order(list.root, list.entries);
             }
-            std::string result;
-            const auto title = plan.packages.back().title();
-            if (stop.load()) result = "Cancelled. " + std::to_string(now_in) + " of " + std::to_string(plan.packages.size()) + " installed.";
-            else if (failed.empty() && later == 0)
-                result = plan.packages.size() == 1 ? title + " is installed." : std::to_string(now_in) + " mods installed.";
-            else if (failed.empty())
-                result = later == plan.packages.size() ? "The game has the old files open: the update goes in the next time it starts."
-                         : std::to_string(now_in) + " installed; " + std::to_string(later) + " go in the next time the game starts.";
-            else {
-                result = failed.size() == 1 ? failed.front() : std::to_string(failed.size()) + " could not be installed: " + failed.front();
-                if (now_in) result += " (" + std::to_string(now_in) + " installed)";
+        }
+        launcher_mods::remove_later(root, folder);
+        return {folder + " is switched off, and uninstalled the next time the game starts.", false};
+    } catch (const std::exception& failure) {
+        return {std::string("Could not uninstall it: ") + failure.what(), true};
+    }
+}
+// The worker: the jobs one after another, each once nothing else is changing the Mods folder (a merge,
+// a session's map download); then it ends, until a job is queued again.
+void work() {
+    for (;;) {
+        Job job;
+        {
+            std::lock_guard lock(jobs_mutex);
+            if (jobs.empty()) {
+                working = false;
+                busy.store(false);
+                std::lock_guard progress_lock(progress_mutex);
+                current_progress.busy = false;
+                return;
             }
-            if (!plan.unknown.empty()) result += " Not on Thunderstore: " + plan.unknown.front() + (plan.unknown.size() > 1 ? " and more." : ".");
-            finish(std::move(result), stop.load() || !failed.empty() || !plan.unknown.empty());
-        }).detach();
-    } catch (...) {
-        finish("The install could not start.", true);
+            job = std::move(jobs.front());
+            jobs.pop_front();
+        }
+        stop.store(false);
+        watch.cancel.store(false);
+        set_package(Progress::Step::starting, nullptr, 0, 0);
+        while (!stop.load() && (live_mods::busy() || map_download::view().stage != map_download::Stage::idle)) {
+            set_activity(live_mods::busy() ? "Waiting for the mods being applied..." : "Waiting for the session's map download...");
+            Sleep(250);
+        }
+        set_activity("Starting...");
+        std::pair<std::string, bool> outcome;
+        try {
+            outcome = stop.load() ? std::pair<std::string, bool>{"Cancelled.", true}
+                      : job.uninstall.empty() ? install_job(job.install) : uninstall_job(job.uninstall);
+        } catch (const std::exception& failure) {
+            outcome = {std::string("It could not be done: ") + failure.what(), true};
+        } catch (...) {
+            outcome = {"It could not be done.", true};
+        }
+        job_done(std::move(outcome.first), outcome.second);
+    }
+}
+// Adds a job, starting the worker when it is not running.
+std::string enqueue(Job job) {
+    std::lock_guard lock(jobs_mutex);
+    jobs.push_back(std::move(job));
+    {
+        std::lock_guard progress_lock(progress_mutex);
+        if (!current_progress.busy) {
+            current_progress.busy = true;
+            current_progress.result.clear();
+            current_progress.failed = false;
+            current_progress.activity = "Starting...";
+            current_progress.fraction = -1;
+        }
+    }
+    if (!working) {
+        try {
+            std::thread(work).detach();
+            working = true;
+            busy.store(true);
+        } catch (...) {
+            jobs.pop_back();
+            std::lock_guard progress_lock(progress_mutex);
+            current_progress.busy = false;
+            return "The install could not start.";
+        }
     }
     return {};
+}
+} // namespace
+
+bool queued(std::string_view package) {
+    {
+        std::lock_guard lock(progress_mutex);
+        if (current_progress.package == package ||
+            std::find(current_progress.queued.begin(), current_progress.queued.end(), package) != current_progress.queued.end())
+            return true;
+    }
+    std::lock_guard lock(jobs_mutex);
+    return std::any_of(jobs.begin(), jobs.end(), [&](const Job& job) {
+        return std::find(job.install.begin(), job.install.end(), package) != job.install.end();
+    });
+}
+
+std::string install(const std::vector<std::string>& wanted) {
+    const auto shown = listing();
+    std::vector<std::string> names;
+    for (const auto& name : wanted)
+        if (ts::find_package(shown->packages, name) && !queued(name) &&
+            std::find(names.begin(), names.end(), name) == names.end())
+            names.push_back(name);
+    if (names.empty()) {
+        const bool listed = std::any_of(wanted.begin(), wanted.end(), [&](const std::string& name) { return ts::find_package(shown->packages, name); });
+        return listed ? "Already in the download queue." : "That mod is not in Thunderstore's listing.";
+    }
+    return enqueue({std::move(names), {}});
 }
 
 std::string uninstall(const std::string& folder) {
     if (!mods::valid_mod_name(folder)) return "That is not a mod folder.";
-    if (auto refused = begin("install"); !refused.empty()) return refused;
-    try {
-        std::thread([folder] {
-            set_package(Progress::Step::uninstalling, nullptr, 0, 1);
-            {
-                std::lock_guard lock(progress_mutex);
-                current_progress.package = current_progress.title = folder;
-            }
-            set_activity("Uninstalling " + folder);
-            const auto root = mods_root();
-            try {
-                launcher_mods::remove(root, folder);
-                finish(folder + " is uninstalled (it is in the Recycle Bin).", false);
-                return;
-            } catch (const std::exception& failure) {
-                log(logging::Level::info, folder + " could not be removed now (" + failure.what() + "); it goes at the next start.");
-            }
-            try {
-                {
-                    // Off now, so the next apply takes it out of the game; gone at the next start.
-                    std::lock_guard lock(write_mutex);
-                    auto list = mods::scan_mods(mods::engine_data_root());
-                    if (list.issue.empty()) {
-                        for (auto& entry : list.entries)
-                            if (same(entry.mod.name, folder)) entry.enabled = false;
-                        mods::save_mod_order(list.root, list.entries);
-                    }
-                }
-                launcher_mods::remove_later(root, folder);
-                finish(folder + " is switched off, and uninstalled the next time the game starts.", false);
-            } catch (const std::exception& failure) {
-                finish(std::string("Could not uninstall it: ") + failure.what(), true);
-            }
-        }).detach();
-    } catch (...) {
-        finish("The uninstall could not start.", true);
+    {
+        std::lock_guard lock(jobs_mutex);
+        if (std::any_of(jobs.begin(), jobs.end(), [&](const Job& job) { return same(job.uninstall, folder); }))
+            return "Already in the queue.";
     }
-    return {};
+    return enqueue({{}, folder});
 }
 
 void cancel() {
+    {
+        std::lock_guard lock(jobs_mutex);
+        jobs.clear();
+    }
     stop.store(true);
     watch.cancel.store(true);
 }

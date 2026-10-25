@@ -181,8 +181,30 @@ std::string action_label(ms::Action action) {
 ms::Action action_of(const ModPage &m, const ts::Package &package) {
     return m.mods ? ms::action_for(package, m.mods->versions) : ms::Action::install;
 }
+// Installs (or queues, while another job runs) the packages, saying which.
 void start_install(ModPage &m, const std::vector<std::string> &packages) {
+    const bool behind = m.progress.busy;
     if (const auto refused = ms::install(packages); !refused.empty()) mod_say(m, refused, true);
+    else if (behind) {
+        const auto *first = m.listing ? ts::find_package(m.listing->packages, packages.front()) : nullptr;
+        mod_say(m, packages.size() == 1 && first ? first->title() + " is in the download queue." : "Added to the download queue.");
+    }
+}
+// What a package's button says and whether it can be pressed, the queue considered: QUEUED while it
+// is in it, ADD TO QUEUE while another job runs.
+struct QueueButton {
+    std::string text;
+    bool enabled{};
+};
+QueueButton queue_button(const ModPage &m, const ts::Package &package, ms::Action action, std::string_view idle) {
+    const auto &progress = m.progress;
+    if (progress.busy && progress.package == package.full_name)
+        return {progress.step == ms::Progress::Step::downloading ? "DOWNLOADING..." : "INSTALLING...", false};
+    if (progress.busy && std::find(progress.queued.begin(), progress.queued.end(), package.full_name) != progress.queued.end())
+        return {"QUEUED", false};
+    if (action == ms::Action::installed && idle != "REINSTALL") return {"INSTALLED", false};
+    if (progress.busy) return {"ADD TO QUEUE", true};
+    return {std::string(idle), true};
 }
 void open_details(Ui &ui, ModPage &m, const ts::Package &package) {
     m.return_tab = m.tab;
@@ -444,53 +466,98 @@ float featured(Ui &ui, ModPage &m, ImVec2 a, float right, float top, const Item 
         label(draw, ui.body, 30 * u, ImVec2(p.x + icon + 70 * u, p.y + 104 * u), q.x - 30 * u, theme::muted, "by " + package->owner);
         if (hit.press) turn(side);
     }
-    // The card in the middle.
+    // The card in the middle: the mod's picture big, as a sticker on a backdrop of itself (darkened,
+    // and darker still where the text is), what it is beside it, and its buttons under that.
     const auto *package = list[index(0)];
     const ImVec2 p(centre - card_w * .5f, top), q(centre + card_w * .5f, top + card_h);
-    const float inset = 36 * u, icon = card_h - inset * 2;
+    const float inset = 36 * u;
     const auto action = action_of(m, *package);
-    const bool busy = ms::progress().busy;
-    const float bh = 92 * u, bw = 380 * u;
-    const ImVec2 b1(q.x - inset - bw * 2 - 20 * u, q.y - inset - bh), b2(q.x - inset - bw, q.y - inset - bh);
-    // Its buttons are the mouse's; the D-pad has the card, with its ring and its prompts.
-    const bool on_button = ui.input && (inside(ui.mouse, b1, ImVec2(b1.x + bw, b1.y + bh)) || inside(ui.mouse, b2, ImVec2(b2.x + bw, b2.y + bh)));
     // To the D-pad the card is as wide as the page, so up from any tile of the row under it lands
     // here, not on the bar above it; to the mouse it is the card itself.
     const Hit card = item(ui, featured_card, ImVec2(clip.a.x, p.y), ImVec2(clip.b.x, q.y), &clip);
     const bool ringed = card.focus && ui.h.ring;
     held |= card.focus;
     skate_theme::rough_rect(draw, p, q, skate_theme::tile, hash(package->full_name) & 0xfff, u * 2);
+    const ImVec2 bp(p.x + 6 * u, p.y + 6 * u), bq(q.x - 6 * u, q.y - 6 * u);
+    if (const auto backdrop = store_icon(package->latest().icon)) {
+        // A band across the middle of the square picture, as wide as the card.
+        const float band = (bq.y - bp.y) / (bq.x - bp.x), from = .5f - band * .5f;
+        draw->AddImage(backdrop, bp, bq, ImVec2(0, from), ImVec2(1, from + band), IM_COL32(150, 150, 150, 255));
+    }
+    draw->AddRectFilledMultiColor(bp, bq, IM_COL32(16, 16, 18, 250), IM_COL32(16, 16, 18, 175), IM_COL32(16, 16, 18, 175), IM_COL32(16, 16, 18, 250));
     draw->AddRect(p, q, ringed ? theme::blue : IM_COL32(245, 245, 245, 60), 0, 0, (ringed ? 8.f : 3.f) * u);
-    package_icon(ui, ImVec2(p.x + inset, p.y + inset), ImVec2(p.x + inset + icon, p.y + inset + icon), package, package->title());
-    const float tx = p.x + inset * 2 + icon, tw = q.x - inset - tx;
+
+    // The picture, tipped a little, in a white border with a shadow under it.
+    const float picture = card_h - inset * 2 - 16 * u;
+    const ImVec2 middle(p.x + inset + 8 * u + picture * .5f, p.y + card_h * .5f);
+    const auto corners = [&](float half, ImVec2 shift, std::array<ImVec2, 4> &out) {
+        constexpr float turn = -0.035f; // about 2 degrees
+        const float c = std::cos(turn), s = std::sin(turn);
+        const std::array<ImVec2, 4> square{ImVec2(-half, -half), ImVec2(half, -half), ImVec2(half, half), ImVec2(-half, half)};
+        for (std::size_t i = 0; i < 4; ++i)
+            out[i] = ImVec2(middle.x + shift.x + square[i].x * c - square[i].y * s, middle.y + shift.y + square[i].x * s + square[i].y * c);
+    };
+    std::array<ImVec2, 4> shadow{}, border{}, image{};
+    corners(picture * .5f + 10 * u, ImVec2(12 * u, 14 * u), shadow);
+    corners(picture * .5f + 10 * u, ImVec2(0, 0), border);
+    corners(picture * .5f, ImVec2(0, 0), image);
+    draw->AddQuadFilled(shadow[0], shadow[1], shadow[2], shadow[3], IM_COL32(0, 0, 0, 130));
+    draw->AddQuadFilled(border[0], border[1], border[2], border[3], theme::paper);
+    if (const auto texture = store_icon(package->latest().icon))
+        draw->AddImageQuad(texture, image[0], image[1], image[2], image[3]);
+    else
+        draw->AddQuadFilled(image[0], image[1], image[2], image[3], skate_theme::tile_light);
+
+    // What it is.
+    const float tx = middle.x + picture * .5f + 64 * u, edge = q.x - inset;
     float y = p.y + inset;
-    draw->AddText(ui.bold, 26 * u, ImVec2(tx, y), theme::blue, package->pinned ? "PINNED ON THUNDERSTORE" : "FEATURED");
-    y += 40 * u;
-    label(draw, ui.heading, 64 * u, ImVec2(tx, y), q.x - inset, theme::paper, package->title());
-    y += 80 * u;
-    label(draw, ui.body, 32 * u, ImVec2(tx, y), q.x - inset, theme::muted,
-          "by " + package->owner + "   " + ms::count_text(package->downloads) + " downloads   updated " + ms::date_text(package->date_updated));
-    y += 56 * u;
-    float cx = tx;
-    for (std::size_t i = 0; i < package->categories.size() && i < 4; ++i) {
+    float x = tx;
+    x += plate(ui, ImVec2(x, y), 42 * u, package->pinned ? "PINNED" : "FEATURED", theme::blue, theme::paper) + 12 * u;
+    if (action == ms::Action::installed) plate(ui, ImVec2(x, y), 42 * u, "INSTALLED", skate_theme::good, skate_theme::black);
+    else if (action == ms::Action::update) plate(ui, ImVec2(x, y), 42 * u, "UPDATE AVAILABLE", skate_theme::warning, skate_theme::black);
+    y += 58 * u;
+    label(draw, ui.heading, 76 * u, ImVec2(tx, y), edge, theme::paper, package->title());
+    y += 92 * u;
+    x = tx;
+    const auto fact = [&](const std::string &text, ImU32 fill, ImU32 ink) {
+        const float w = width_of(ui.bold, 38 * u * .62f, text) + 24 * u;
+        if (x + w > edge) return;
+        x += plate(ui, ImVec2(x, y), 38 * u, text, fill, ink) + 10 * u;
+    };
+    fact("BY " + package->owner, IM_COL32(245, 245, 245, 235), skate_theme::black);
+    fact(ms::count_text(package->downloads) + " DOWNLOADS", skate_theme::tile_light, theme::paper);
+    fact("V" + package->latest().number, skate_theme::tile_light, theme::paper);
+    if (package->latest().file_size) fact(ms::size_text(package->latest().file_size), skate_theme::tile_light, theme::paper);
+    for (std::size_t i = 0; i < package->categories.size() && i < 3; ++i) {
         std::string upper = package->categories[i];
         for (auto &c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-        cx += plate(ui, ImVec2(cx, y), 40 * u, upper, skate_theme::tile_light, theme::paper) + 10 * u;
+        fact(upper, IM_COL32(1, 131, 255, 70), theme::paper);
     }
-    y += 64 * u;
-    paragraph(draw, ui.body, 32 * u, ImVec2(tx, y), tw, soft, package->latest().description, 3);
-    const bool can_install = action != ms::Action::installed && !busy;
-    if (ringed && ui.pad.available) {
-        // The controller's buttons for them, over them.
-        const auto prompt = [&](ImVec2 at, std::uint32_t pad_button, const char *what) {
-            theme::keycap(draw, ui.bold, u * 2, at, controller_combo_label(pad_button, ui.pad.style).c_str(), what);
-        };
-        if (can_install) prompt(ImVec2(b1.x, b1.y - 56 * u), 0x4000, action == ms::Action::update ? "Update" : "Install");
-        prompt(ImVec2(b2.x, b2.y - 56 * u), 0x1000, "Details");
-    }
-    bool install = pointer_button(ui, b1, ImVec2(b1.x + bw, b1.y + bh), busy && action != ms::Action::installed ? "BUSY..." : action_label(action),
-                                  action == ms::Action::installed ? Look::plain : Look::sticky, can_install, &clip);
+    y += 54 * u;
+    label(draw, ui.body, 28 * u, ImVec2(tx, y), edge, theme::muted, "Updated " + ms::date_text(package->date_updated));
+    y += 48 * u;
+
+    // Its buttons, at the foot of the text, and as much of its description as fits above them.
+    const float bh = 84 * u, bw = 340 * u, between = 20 * u;
+    const ImVec2 b1(tx, q.y - inset - bh), b2(tx + bw + between, q.y - inset - bh);
+    const float line = 30 * u * 1.3f;
+    const auto lines = static_cast<std::size_t>(std::clamp((b1.y - 22 * u - y) / line, 0.f, 4.f));
+    if (lines) paragraph(draw, ui.body, 30 * u, ImVec2(tx, y), edge - tx, soft, package->latest().description, lines);
+    // Its buttons are the mouse's; the D-pad has the card, with its ring and its prompts beside them.
+    const bool on_button = ui.input && (inside(ui.mouse, b1, ImVec2(b1.x + bw, b1.y + bh)) || inside(ui.mouse, b2, ImVec2(b2.x + bw, b2.y + bh)));
+    const auto does = queue_button(m, *package, action, action_label(action));
+    const bool can_install = does.enabled;
+    bool install = pointer_button(ui, b1, ImVec2(b1.x + bw, b1.y + bh), does.text, can_install ? Look::sticky : Look::plain, can_install, &clip);
     bool details = pointer_button(ui, b2, ImVec2(b2.x + bw, b2.y + bh), "DETAILS", Look::plain, true, &clip);
+    if (ringed && ui.pad.available) {
+        float px = b2.x + bw + 36 * u;
+        const auto prompt = [&](std::uint32_t pad_button, const char *what) {
+            if (px > edge - 120 * u) return;
+            px += theme::keycap(draw, ui.bold, u * 2, ImVec2(px, b1.y + (bh - 40 * u) * .5f), controller_combo_label(pad_button, ui.pad.style).c_str(), what) + 30 * u;
+        };
+        if (can_install) prompt(0x4000, action == ms::Action::update ? "Update" : "Install");
+        prompt(0x1000, "Details");
+    }
     const std::uint32_t pressed = ui.input && !ui.h.typing ? ui.pad.buttons & ~ui.h.pad_before : 0;
     install |= card.focus && can_install && (pressed & 0x4000);
     details |= card.press && !on_button && (!ui.clicked || inside(ui.mouse, p, q));
@@ -596,12 +663,8 @@ void package_details(Ui &ui, ModPage &m, const ts::Package &package, ImVec2 a, I
         // INSTALL, UPDATE or REINSTALL; while the queue is busy, what it is doing with this mod (how far
         // is at the foot of the page).
         const auto [p, q] = place();
-        const auto &progress = m.progress;
-        const bool queued = progress.busy && std::find(progress.queued.begin(), progress.queued.end(), package.full_name) != progress.queued.end();
-        const bool in_hand = progress.busy && progress.package == package.full_name;
-        const char *does = queued ? "WAITING ITS TURN" : in_hand ? (progress.step == ms::Progress::Step::downloading ? "DOWNLOADING..." : "INSTALLING...")
-                           : progress.busy ? "BUSY..." : action == ms::Action::install ? "INSTALL" : action == ms::Action::update ? "UPDATE" : "REINSTALL";
-        if (button(ui, hash("mods-detail-action"), p, q, does, action == ms::Action::installed || progress.busy ? Look::plain : Look::sticky, !progress.busy))
+        const auto does = queue_button(m, package, action, action == ms::Action::install ? "INSTALL" : action == ms::Action::update ? "UPDATE" : "REINSTALL");
+        if (button(ui, hash("mods-detail-action"), p, q, does.text, does.enabled && action != ms::Action::installed ? Look::sticky : Look::plain, does.enabled))
             start_install(m, {package.full_name});
     }
     if (changes) {
@@ -616,7 +679,7 @@ void package_details(Ui &ui, ModPage &m, const ts::Package &package, ImVec2 a, I
         const auto [p, q] = place();
         const bool confirming = m.confirm == mine->folder && GetTickCount64() < m.confirm_until;
         if (button(ui, hash("mods-detail-remove"), p, q, confirming ? "PRESS AGAIN" : "UNINSTALL", Look::plain,
-                   !m.progress.busy && mine->state != ms::State::removal_waiting)) {
+                   mine->state != ms::State::removal_waiting)) {
             if (confirming) {
                 m.confirm.clear();
                 if (const auto refused = ms::uninstall(mine->folder); !refused.empty()) mod_say(m, refused, true);
@@ -936,7 +999,7 @@ void installed_page(Ui &ui, ModPage &m, ImVec2 a, ImVec2 z) {
     if (!mod->gone) {
         const bool confirming = m.confirm == mod->folder && GetTickCount64() < m.confirm_until;
         if (button(ui, hash("mods-installed-remove"), ImVec2(left, by), ImVec2(edge, by + bh), confirming ? "PRESS AGAIN TO UNINSTALL" : "UNINSTALL",
-                   Look::plain, !progress.busy && mod->state != ms::State::removal_waiting)) {
+                   Look::plain, mod->state != ms::State::removal_waiting)) {
             if (confirming) {
                 m.confirm.clear();
                 if (const auto refused = ms::uninstall(mod->folder); !refused.empty()) mod_say(m, refused, true);
@@ -948,9 +1011,11 @@ void installed_page(Ui &ui, ModPage &m, ImVec2 a, ImVec2 z) {
         if (button(ui, hash("mods-installed-page"), ImVec2(left, by), ImVec2(edge, by + bh), "ITS PAGE", Look::plain))
             open_details(ui, m, *package);
         by -= bh + 16 * u;
-        if (ts::update_available(*package, mods.versions) &&
-            button(ui, hash("mods-installed-update"), ImVec2(left, by), ImVec2(edge, by + bh), "UPDATE TO v" + package->latest().number, Look::sticky, !progress.busy))
-            start_install(m, {package->full_name});
+        if (ts::update_available(*package, mods.versions)) {
+            const auto does = queue_button(m, *package, ms::Action::update, "UPDATE TO v" + package->latest().number);
+            if (button(ui, hash("mods-installed-update"), ImVec2(left, by), ImVec2(edge, by + bh), does.text, does.enabled ? Look::sticky : Look::plain, does.enabled))
+                start_install(m, {package->full_name});
+        }
         by -= bh + 16 * u;
     }
     if (!mod->gone && button(ui, hash("mods-installed-toggle"), ImVec2(left, by), ImVec2(edge, by + bh), mod->enabled ? "SWITCH OFF" : "SWITCH ON",
@@ -971,8 +1036,11 @@ void updates_page(Ui &ui, ModPage &m, ImVec2 a, ImVec2 z) {
         std::vector<std::string> all;
         std::uint64_t bytes{};
         for (const auto *package : m.updates) all.push_back(package->full_name), bytes += package->latest().file_size;
-        if (button(ui, hash("mods-update-all"), ImVec2(z.x - 640 * u, a.y), ImVec2(z.x, a.y + bar), progress.busy ? "BUSY..." : "UPDATE ALL  (" + ms::size_text(bytes) + ")",
-                   Look::sticky, !progress.busy))
+        std::erase_if(all, [&](const std::string &name) { return std::find(progress.queued.begin(), progress.queued.end(), name) != progress.queued.end() ||
+                                                                (progress.busy && progress.package == name); });
+        if (button(ui, hash("mods-update-all"), ImVec2(z.x - 640 * u, a.y), ImVec2(z.x, a.y + bar),
+                   all.empty() ? std::string("ALL QUEUED") : (progress.busy ? "QUEUE ALL  (" : "UPDATE ALL  (") + ms::size_text(bytes) + ")",
+                   all.empty() ? Look::plain : Look::sticky, !all.empty()))
             start_install(m, all);
     }
     const ImVec2 la(a.x, a.y + bar + gap), lz(z.x, z.y);
@@ -990,18 +1058,19 @@ void updates_page(Ui &ui, ModPage &m, ImVec2 a, ImVec2 z) {
         const ImVec2 p(la.x, top), q(lz.x - 20 * u, top + row_height);
         const Hit hit = item(ui, id, p, q, &list.box);
         list.reveal(id, top, row_height);
-        if (hit.press && !progress.busy) start_install(m, {package->full_name});
+        const auto does_now = queue_button(m, *package, ms::Action::update, "UPDATE");
+        if (hit.press && does_now.enabled) start_install(m, {package->full_name});
         if (!drawn) continue;
         const bool lit = hit.focus || hit.hover;
         skate_theme::rough_rect(draw, p, q, lit ? theme::blue : skate_theme::tile, 0xb00 + (id & 0xff), u * 2);
         const float icon = row_height - 20 * u;
         package_icon(ui, ImVec2(p.x + pad, p.y + 10 * u), ImVec2(p.x + pad + icon, p.y + 10 * u + icon), package, package->title());
         const float tx = p.x + pad * 2 + icon;
-        const char *does = progress.busy ? "BUSY..." : "UPDATE";
+        const auto &does = does_now.text;
         const float dw = width_of(ui.bold, 32 * u, does) + 60 * u;
         const ImVec2 c(q.x - pad - dw, p.y + 24 * u), d(q.x - pad, q.y - 24 * u);
-        skate_theme::rough_rect(draw, c, d, progress.busy ? sticky_off : sticky, 0x52, u * 2);
-        draw->AddText(ui.bold, 32 * u, ImVec2(c.x + 30 * u, c.y + (d.y - c.y - 32 * u) * .5f), skate_theme::black, does);
+        skate_theme::rough_rect(draw, c, d, does_now.enabled ? sticky : sticky_off, 0x52, u * 2);
+        draw->AddText(ui.bold, 32 * u, ImVec2(c.x + 30 * u, c.y + (d.y - c.y - 32 * u) * .5f), skate_theme::black, does.c_str());
         label(draw, ui.bold, 40 * u, ImVec2(tx, p.y + 16 * u), c.x - 30 * u, theme::paper, package->title());
         const auto have = installed_version(*package);
         label(draw, ui.body, 30 * u, ImVec2(tx, p.y + 70 * u), c.x - 30 * u, lit ? theme::paper : theme::muted,
@@ -1117,7 +1186,7 @@ void mod_manager_page(Ui &ui, ImVec2 a, ImVec2 z) {
         const ImVec2 sa(a.x, fy), sz(right - 20 * u, z.y);
         skate_theme::rough_rect(draw, sa, sz, skate_theme::tile, 0x3b7, u * 2);
         const ImVec2 cancel_a(sz.x - 300 * u, fy + 10 * u), cancel_z(sz.x - 10 * u, z.y - 10 * u);
-        if (button(ui, hash("mods-cancel"), cancel_a, cancel_z, "CANCEL", Look::plain, progress.step == ms::Progress::Step::downloading)) ms::cancel();
+        if (button(ui, hash("mods-cancel"), cancel_a, cancel_z, progress.waiting ? "CANCEL ALL" : "CANCEL", Look::plain)) ms::cancel();
         float x = sa.x + 10 * u;
         const ts::Package *in_hand = package_named(m, progress.package);
         if (!in_hand)
@@ -1132,7 +1201,8 @@ void mod_manager_page(Ui &ui, ImVec2 a, ImVec2 z) {
                            : progress.step == Step::uninstalling ? "UNINSTALLING" : "STARTING";
         const float bar_w = std::min(900 * u, (cancel_a.x - x) * .42f), bar_x = cancel_a.x - 30 * u - bar_w;
         const std::string name = progress.title + (progress.version.empty() || progress.step == Step::uninstalling ? std::string() : "  v" + progress.version);
-        const std::string where = std::string(step) + (progress.of > 1 ? "  " + std::to_string(progress.at + 1) + " OF " + std::to_string(progress.of) : std::string());
+        const std::string where = std::string(step) + (progress.of > 1 ? "  " + std::to_string(progress.at + 1) + " OF " + std::to_string(progress.of) : std::string()) +
+                                  (progress.waiting ? "   +" + std::to_string(progress.waiting) + " MORE IN THE QUEUE" : std::string());
         draw->AddText(ui.bold, 26 * u, ImVec2(x, fy + 8 * u), theme::blue, where.c_str());
         label(draw, ui.bold, 36 * u, ImVec2(x, fy + 38 * u), bar_x - 20 * u, theme::paper, name);
         std::string amount = progress.step == Step::downloading
