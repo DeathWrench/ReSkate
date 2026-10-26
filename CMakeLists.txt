@@ -193,7 +193,8 @@ if(DINGOSDK_BUILD_MULTIPLAYER_TESTS)
     add_test(NAME server_map_update COMMAND dingosdk_server_map_update_tests)
     if(WIN32)
         # By hand: what the music player outside the game is playing (Extension/Music/external_player.h).
-        add_executable(dingosdk_external_player_probe Extension/Music/Test/external_player_probe.cpp Extension/Music/external_player.cpp)
+        add_executable(dingosdk_external_player_probe Extension/Music/Test/external_player_probe.cpp Extension/Music/external_player.cpp
+            Extension/Music/Test/external_player_probe_stubs.cpp)
         target_include_directories(dingosdk_external_player_probe PRIVATE "${PROJECT_SOURCE_DIR}")
         add_executable(dingosdk_app_audio_probe Extension/Music/Test/app_audio_probe.cpp Extension/Music/app_audio_capture.cpp)
         target_include_directories(dingosdk_app_audio_probe PRIVATE "${PROJECT_SOURCE_DIR}")
@@ -465,6 +466,16 @@ if(DINGOSDK_BUILD_PLUGIN_TESTS)
     add_test(NAME plugins COMMAND dingosdk_plugin_tests)
 endif()
 if(DINGOSDK_BUILD_PLUGIN_TESTS AND WIN32)
+    add_executable(dingosdk_effect_geometry_tests Extension/Rendering/Test/effect_geometry_tests.cpp
+        Extension/Skater/skater_physics.cpp Extension/Plugins/plugin_effects.cpp)
+    target_include_directories(dingosdk_effect_geometry_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_effect_geometry_tests PRIVATE dingosdk_logging)
+    add_test(NAME effect_geometry COMMAND dingosdk_effect_geometry_tests)
+    add_executable(dingosdk_effect_lifetime_tests Extension/Rendering/Test/effect_lifetime_tests.cpp
+        Extension/Plugins/plugin_effects.cpp)
+    target_include_directories(dingosdk_effect_lifetime_tests PRIVATE "${PROJECT_SOURCE_DIR}")
+    target_link_libraries(dingosdk_effect_lifetime_tests PRIVATE dingosdk_logging)
+    add_test(NAME effect_lifetime COMMAND dingosdk_effect_lifetime_tests)
     # Tricks read from the score HUD's values (Extension/Skater/trick_watch.h), what plugins hear.
     add_executable(dingosdk_trick_watch_tests Extension/Skater/Test/trick_watch_tests.cpp Extension/Skater/trick_watch.cpp)
     target_include_directories(dingosdk_trick_watch_tests PRIVATE "${PROJECT_SOURCE_DIR}")

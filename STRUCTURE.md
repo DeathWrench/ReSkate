@@ -144,7 +144,7 @@ commands and a `Test/` folder.
 | `Plugins/` | the Luau plugin host and its `reskate.*` API (see below) |
 | `Profile/` | offline profile storage: skater, progress, missions, objects, preferences |
 | `Progression/` | challenges, entitlements, neighborhood unlocks, fast travel unlock, rip score, board wear |
-| `Rendering/` | graphics controls and labels, display startup, replay export |
+| `Rendering/` | graphics controls and labels, display startup, replay export, plugin particles and surface decals |
 | `ReplayKeyframes/` | replay keyframe curves and settings |
 | `Scripting/` | Lua startup, custom script loader, native blocking |
 | `Settings/` | gameplay/native/user settings, input bindings, engine tweaks, replay drafts |
@@ -180,6 +180,9 @@ The Luau plugin host. A plugin is a folder in `Mods/` with a `reskate-plugin.jso
 - `plugin_api*.cpp` — the `reskate.*` API (game, world, UI, more); `plugin_game*`, `plugin_camera`, `plugin_joystick`.
 - `plugin_ui`, `plugin_sound`, `plugin_wave`, `plugin_http`, `plugin_session_feed`, `plugin_wire` — pages, audio, HTTP, multiplayer messages.
 - `plugin_commands` — the `plugin` console command.
+- `plugin_effects`, `plugin_api_effects` — the permission, asset declarations and Lua calls for
+  [plugin particles and decals](contrib/plugin-effects.md). `Extension/Rendering/plugin_effects`
+  owns their native references, surface attachments and world lifetime.
 
 ## `Runtime/`
 
