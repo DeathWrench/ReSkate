@@ -70,6 +70,7 @@
 #include "Extension/Customization/preset_lookup_guard.h"
 #include "Extension/Rendering/replay_export.h"
 #include "Extension/ReplayKeyframes/replay_keyframes.h"
+#include "Extension/ReplayEditor/replay_session.h"
 #include "Engine/Vfs/content_catalogs.h"
 #include "Engine/Vfs/world_layer_scan.h"
 #include "Engine/Game/World/world_layer_catalog.h"
@@ -528,6 +529,8 @@ extern "C" __declspec(dllexport) BOOL WINAPI DingoSDKDebugInitialize() {
         record("{\"event\":\"replay_export_initialized\",\"active\":" + std::string(replay_export ? "true" : "false") + "}");
         const bool replay_keyframes = dingosdk::replay_keyframes::start(r.base);
         record("{\"event\":\"replay_keyframes_initialized\",\"active\":" + std::string(replay_keyframes ? "true" : "false") + "}");
+        const bool replay_editor = dingosdk::replay_editor::session::start(r.base);
+        record("{\"event\":\"replay_editor_initialized\",\"active\":" + std::string(replay_editor ? "true" : "false") + "}");
         void* original{};
         auto* address = reinterpret_cast<void*>(r.base + rt::client_tick);
         auto hook_status = dingosdk::hook_prepare(address, reinterpret_cast<void*>(&tick), &original);

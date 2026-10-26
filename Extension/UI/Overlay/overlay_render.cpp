@@ -5,6 +5,8 @@
 #include "Extension/Trainer/trainer_page.h"
 #include "Extension/UI/Overlay/game_images.h"
 #include "plugin_overlay.h"
+#include "replay_editor.h"
+#include "replay_editor_internal.h"
 #include "screen_look.h"
 #include "park_previews.h"
 #include "chat_emotes.h"
@@ -303,8 +305,9 @@ bool setup_graphics() {
     }
     heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
     // ImGui's atlas, the map download card's icon, the menu's map pictures, an item's mod icon,
-    // plugins' pictures (upload_image), the screen look's, and the Mod Manager's icons
-    heap.NumDescriptors = store_icon_first_slot + store_icon_slots;
+    // plugins' pictures (upload_image), the screen look's, the Mod Manager's icons and the replay
+    // editor's filmstrip and monitor
+    heap.NumDescriptors = replay_filmstrip_second_slot + 1;
     heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     graphics_result = s.device->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&s.srvs));
     if (FAILED(graphics_result)) {
@@ -693,6 +696,71 @@ void upload_card_image(State& s) {
     if (const auto id = upload_image(s, pixels, 1, s.card_texture, s.card_upload)) card_image_uploaded(id, pixels.serial);
 }
 
+// The replay editor's monitor: the frame the game presented, copied into a texture of its own on this
+// frame's command list ahead of ImGui's draws, so the editor shows this frame's picture fitted into
+// its preview box, with its panels around it instead of over the picture.
+void copy_replay_preview(State& s, ID3D12Resource* buffer) {
+    if (!s.replay_preview_wanted.load() || !s.device || !s.srvs || !buffer) return;
+    const auto from = buffer->GetDesc();
+    if (from.SampleDesc.Count != 1) return;
+    if (!s.preview_texture || s.preview_width != from.Width || s.preview_height != from.Height || s.preview_format != from.Format) {
+        // Frames still on the GPU may sample the texture this one replaces.
+        if (s.preview_texture && s.next_fence && !completed(s.next_fence, render_fence_timeout_ms)) return;
+        s.preview_texture.Reset();
+        s.preview_id.store(0);
+        D3D12_RESOURCE_DESC texture{};
+        texture.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        texture.Width = from.Width;
+        texture.Height = from.Height;
+        texture.DepthOrArraySize = 1;
+        texture.MipLevels = 1;
+        texture.Format = from.Format;
+        texture.SampleDesc.Count = 1;
+        D3D12_HEAP_PROPERTIES heap{};
+        heap.Type = D3D12_HEAP_TYPE_DEFAULT;
+        if (FAILED(s.device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &texture, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                                     nullptr, IID_PPV_ARGS(&s.preview_texture))))
+            return;
+        D3D12_SHADER_RESOURCE_VIEW_DESC view{};
+        // A typeless swapchain format is read as its plain one.
+        switch (from.Format) {
+        case DXGI_FORMAT_R8G8B8A8_TYPELESS: view.Format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+        case DXGI_FORMAT_B8G8R8A8_TYPELESS: view.Format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+        case DXGI_FORMAT_R10G10B10A2_TYPELESS: view.Format = DXGI_FORMAT_R10G10B10A2_UNORM; break;
+        case DXGI_FORMAT_R16G16B16A16_TYPELESS: view.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+        default: view.Format = from.Format; break;
+        }
+        view.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+        view.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        view.Texture2D.MipLevels = 1;
+        const auto step = s.device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto cpu = s.srvs->GetCPUDescriptorHandleForHeapStart();
+        auto gpu = s.srvs->GetGPUDescriptorHandleForHeapStart();
+        cpu.ptr += std::size_t{step} * replay_preview_slot;
+        gpu.ptr += std::uint64_t{step} * replay_preview_slot;
+        s.device->CreateShaderResourceView(s.preview_texture.Get(), &view, cpu);
+        s.preview_width = static_cast<UINT>(from.Width);
+        s.preview_height = from.Height;
+        s.preview_format = from.Format;
+        s.preview_id.store(gpu.ptr);
+    }
+    D3D12_RESOURCE_BARRIER barriers[2]{};
+    for (auto& b : barriers) {
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+    }
+    barriers[0].Transition.pResource = buffer;
+    barriers[0].Transition.StateBefore = D3D12_RESOURCE_STATE_PRESENT;
+    barriers[0].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_SOURCE;
+    barriers[1].Transition.pResource = s.preview_texture.Get();
+    barriers[1].Transition.StateBefore = D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    barriers[1].Transition.StateAfter = D3D12_RESOURCE_STATE_COPY_DEST;
+    s.commands->ResourceBarrier(2, barriers);
+    s.commands->CopyResource(s.preview_texture.Get(), buffer);
+    for (auto& b : barriers) std::swap(b.Transition.StateBefore, b.Transition.StateAfter);
+    s.commands->ResourceBarrier(2, barriers);
+}
+
 // The menu's map pictures (menu_map_pictures.cpp), when a new set is waiting.
 void upload_menu_map_image(State& s) {
     if (!s.device || !s.srvs) return;
@@ -792,8 +860,10 @@ void render(IDXGISwapChain* presented, UINT flags) {
     const bool perf_frame = perf_hud_pending() || trainer_hud_pending();
     const bool hub_frame = hub_page_pending();
     const bool grab_frame = frame_grab_pending() || depth_probe_pending();
+    const bool film_frame = replay_filmstrip_pending();
     // A plugin's screen look is drawn under every frame it asks for (reskate.screen.look).
     const bool look_frame = screen_look::pending();
+    (void)replay_editor_pending(); // ReSkate's replay editor takes the input while it has the game's replay
     if (trainer_open_requested()) s.visible.store(true);
     if (dingosdk::overlay::menu_open_flag().exchange(false)) s.visible.store(true); // `menu`, or its controller bind
     const bool menu_frame = interactive_visible(s);
@@ -813,7 +883,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
         // Hidden, the overlay still draws while a notice or chat line is on screen.
         if (s.loaded_notice_posted && !notices_pending() && !chat_frame && !game_text_frame && !skate_hud_frame &&
             !nametag_frame && !plugins_frame && !item_browser_frame && !perf_frame && !hub_frame && !map_download_frame && !mod_apply_frame && !look_frame &&
-            !grab_frame) return;
+            !grab_frame && !film_frame) return;
     } else if (!s.ui_was_interactive) {
         s.ui_was_interactive = true;
         s.last_model = {}; // Reopening immediately reads fresh state.
@@ -840,6 +910,10 @@ void render(IDXGISwapChain* presented, UINT flags) {
         const auto size = frame.buffer->GetDesc();
         const bool grabbing = frame_grab_pending();
         depth_tap_present(s, static_cast<std::uint32_t>(size.Width), size.Height, grabbing);
+        // The replay editor's filmstrip, a picture now and then, read a frame or two later.
+        take_frame_copies(s, [](int slot, const FrameSampler& copied) { replay_filmstrip_take(slot, copied); });
+        if (const int slot = replay_filmstrip_wanted(); slot >= 0 && !copy_presented_frame(s, frame.buffer.Get(), slot))
+            replay_filmstrip_take(slot, {});
         if (grab_frame) {
             if (grabbing) grab_presented_frame(s, frame.buffer.Get());
             depth_probe_present(s, static_cast<std::uint32_t>(size.Width), size.Height);
@@ -870,6 +944,7 @@ void render(IDXGISwapChain* presented, UINT flags) {
     ImGui::NewFrame();
     if (menu_frame) {
         draw_menu();
+        dingosdk::overlay::draw_replay_editor({s.menu.title, s.menu.heading, s.menu.bold, s.menu.body, 1.0f});
         draw_plugin_screen();
         draw_console();
         draw_perf_window();
@@ -910,6 +985,8 @@ void render(IDXGISwapChain* presented, UINT flags) {
     upload_mod_icon(s);
     upload_plugin_image(s);
     upload_store_icon(s);
+    upload_replay_filmstrip(s);
+    copy_replay_preview(s, frame.buffer.Get());
     if (look_frame) {
         // Drawn first, so ImGui draws over it. It leaves the back buffer in PRESENT, as it found it.
         ID3D12DescriptorHeap* look_heaps[] = {s.srvs.Get()};
@@ -951,6 +1028,18 @@ void render(IDXGISwapChain* presented, UINT flags) {
     ++s.rendered_frames;
 }
 
+} // namespace dingosdk::overlay::detail
+
+namespace dingosdk::overlay {
+ReplayPreview replay_preview() noexcept {
+    const auto& s = detail::state();
+    const auto id = s.preview_id.load();
+    if (!id) return {};
+    return {static_cast<ImTextureID>(id), static_cast<float>(s.preview_width), static_cast<float>(s.preview_height)};
+}
+} // namespace dingosdk::overlay
+
+namespace dingosdk::overlay::detail {
 void guarded_render(IDXGISwapChain* chain, UINT flags) noexcept {
     try { render(chain, flags); }
     catch (...) { state().failed = true; restore_input(true); dingosdk::logging::write(dingosdk::logging::Level::error, dingosdk::logging::Channel::graphics, "Overlay exception; disabled."); }

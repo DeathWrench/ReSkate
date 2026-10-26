@@ -36,4 +36,7 @@ bool latest(Pose& pose);
 // Client thread: the local skater not drawn on this screen while any plugin asks (reskate.skater.hide),
 // through the same renderer hook. False when the renderer's hooks are unavailable.
 bool hide(std::string_view owner, bool on);
+// Client thread: the renderer's hooks on while true, for a camera given to the main picture
+// (xray_render.h set_view_camera). False when the renderer's hooks are unavailable.
+bool keep_view_camera(bool on) noexcept;
 }

@@ -1,4 +1,5 @@
 #include "skate_menu_internal.h"
+#include "Extension/ReplayEditor/replay_bridge.h"
 
 #include <algorithm>
 #include <array>
@@ -63,8 +64,20 @@ void camera_controls(SkateMenu& menu, const Model& model, const CallbacksV3& cal
     if (!debug.camera_available) warn(debug.camera_unavailable.c_str());
     end_card();
 
-    // Keyframe smoothing (Extension/ReplayKeyframes/replay_keyframes.h).
+    // ReSkate's replay editor (Extension/ReplayEditor/replay_session.h) and keyframe smoothing for the
+    // game's own (Extension/ReplayKeyframes/replay_keyframes.h).
     begin_card(menu, "replay-editor", "REPLAY EDITOR");
+    {
+        const auto status = replay_editor::bridge().status();
+        bool own = replay_editor::bridge().settings().open_with_replay;
+        if (toggle_row(menu, "ReSkate's replay editor",
+                "Opens over the game's replay editor (hold Select, or B): the whole session's footage, many clips cut "
+                "together, keyed cameras on any skater, speed ramps, looks and titles, exported in one go.",
+                own, status.available && callbacks.queue_console_command))
+            send_console(menu, callbacks, own ? "replayeditor auto on" : "replayeditor auto off");
+        if (status.replay_open && !status.active && primary_button(menu, "Open ReSkate's replay editor", status.available))
+            send_console(menu, callbacks, "replayeditor open");
+    }
     bool keysmooth = model.keyframe_smoothing.enabled;
     if (toggle_row(menu, "Keyframe smoothing",
             "The free camera glides through its keys instead of changing speed at each one. Every key is still met, at its time.",

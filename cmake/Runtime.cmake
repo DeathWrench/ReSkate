@@ -168,6 +168,8 @@ add_library(dingosdk_runtime SHARED
     Extension/ReplayKeyframes/replay_keyframes.cpp
     Extension/ReplayKeyframes/replay_keyframes_commands.cpp
     Extension/ReplayKeyframes/replay_settings.cpp
+    Extension/ReplayEditor/replay_session.cpp
+    Extension/ReplayEditor/replay_editor_commands.cpp
     Engine/Game/World/world_model.cpp
     Extension/World/level_loading.cpp
     Extension/World/loading_screen.cpp
@@ -272,7 +274,7 @@ add_library(dingosdk_runtime SHARED
 
 target_link_libraries(dingosdk_runtime PRIVATE dingosdk_logging dingosdk_profiler dingosdk_supported_build dingosdk_overlay dingosdk_console_core dingosdk_steam_restart_guard
     dingosdk_startup_interventions dingosdk_fast_travel_unlock dingosdk_local_profile dingosdk_initfs dingosdk_mods dingosdk_mod_list dingosdk_launcher_support dingosdk_miniz shell32 dingosdk_startup_window dingosdk_custom_scripts dingosdk_world_layer_scan bcrypt
-    dingosdk_https winhttp ws2_32 xaudio2 ole32 dingosdk_game_archives dingosdk_word_filter dingosdk_plugins)
+    dingosdk_https winhttp ws2_32 xaudio2 ole32 dingosdk_game_archives dingosdk_word_filter dingosdk_plugins dingosdk_replay_editor)
 
 add_library(dingosdk_custom_level_manifest STATIC
     Engine/Game/World/custom_level_manifest.cpp)

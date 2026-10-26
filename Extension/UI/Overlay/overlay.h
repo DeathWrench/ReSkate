@@ -51,6 +51,12 @@ struct MouseLook {
     long x = 0, y = 0, wheel = 0;
 };
 bool read_mouse_look(MouseLook& look) noexcept;
+// The raw mouse since the last call (counts right and down), for the replay editor's flown camera on
+// the game's clock: its game side turns the camera by it each game frame. One reader.
+struct MouseCounts {
+    long x = 0, y = 0;
+};
+MouseCounts take_replay_turn() noexcept;
 // The mouse while a plugin's screen is open (plugin_overlay.cpp): where it is in the window's pixels,
 // its buttons, the wheel's notches since the last read, and whether it is over the screen's panel.
 // False while no plugin screen is open.

@@ -19,6 +19,7 @@
 #include "Extension/Plugins/plugin_game_runtime.h"
 #include "Engine/Game/World/load_completion.h"
 #include "Extension/ReplayKeyframes/replay_keyframes.h"
+#include "Extension/ReplayEditor/replay_session.h"
 #include "Extension/Skater/camera_observer.h"
 #include "Extension/UI/NativeMenu/native_menu.h"
 #include "Extension/Multiplayer/Hud/native_party.h"
@@ -1752,6 +1753,12 @@ void tick(std::uintptr_t client, std::uintptr_t update) {
         {
             DINGO_PROFILE_ZONE("tick/world objects");
             dingosdk::world_entities::tick(r.base, client, multiplayer_ready);
+        }
+        {
+            DINGO_PROFILE_ZONE("tick/replay editor");
+            // ReSkate's replay editor: what happens while the game records, and the edit while it has the replay.
+            dingosdk::replay_editor::session::tick(r.base, client, r.catalog_level.empty() ? r.last_level : r.catalog_level,
+                                                   camera_phase);
         }
         {
             DINGO_PROFILE_ZONE("tick/trainer");

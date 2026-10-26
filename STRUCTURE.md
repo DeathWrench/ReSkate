@@ -145,6 +145,7 @@ commands and a `Test/` folder.
 | `Profile/` | offline profile storage: skater, progress, missions, objects, preferences |
 | `Progression/` | challenges, entitlements, neighborhood unlocks, fast travel unlock, rip score, board wear |
 | `Rendering/` | graphics controls and labels, display startup, replay export |
+| `ReplayEditor/` | ReSkate's replay editor over the game's: the edit (clips, keyed cameras, speed, look, titles), its playback and export through the game's replay, moments, project files (the screen is in `UI/Overlay/`) |
 | `ReplayKeyframes/` | replay keyframe curves and settings |
 | `Scripting/` | Lua startup, custom script loader, native blocking |
 | `Settings/` | gameplay/native/user settings, input bindings, engine tweaks, replay drafts |
@@ -169,7 +170,7 @@ commands and a `Test/` folder.
 ### `Extension/UI/`
 | Folder | Contents |
 |---|---|
-| `Overlay/` | the ImGui overlay: the ReSkate menu (Insert) and its pages, console, chat and emotes, Park Editor panels, plugin pages, perf overlay, theme |
+| `Overlay/` | the ImGui overlay: the ReSkate menu (Insert) and its pages, console, chat and emotes, Park Editor panels, the replay editor's screen, plugin pages, perf overlay, theme |
 | `NativeMenu/` | pages built into the game's own menu (hub, multiplayer, throwdowns) |
 | `Startup/` | startup window/splash |
 
