@@ -524,13 +524,16 @@ struct FakeGame final : Game {
     std::optional<FlightInput> flight_input(std::string_view) override { return FlightInput{1, 0, 0.5f, 3, 4, true}; }
     std::optional<PadInput> pad = PadInput{0.25f, 0, 0, 0, 0, 1, 0x1000, false};
     std::optional<PadInput> gamepad() override { return pad; }
-    std::optional<StickInput> joystick() override {
+    std::optional<StickInput> joystick(int device) override {
+        if (device > 1) return std::nullopt;
         StickInput stick;
-        stick.axes = {0, -1, 0.5f, 0, 0, 0};
+        stick.axes = {0, -1, 0.5f, 0, 0, 0, 0.25f, -0.75f};
         stick.buttons = 0x4;
-        stick.name = "Radio";
+        stick.name = device == 1 ? "Pad" : "Radio";
+        stick.device = device == 1 ? 1 : 0;
         return stick;
     }
+    std::vector<StickDevice> joysticks() override { return {{0, "Radio"}, {1, "Pad"}}; }
     std::string capture_input(std::string_view plugin, bool on) override {
         calls.push_back(std::format("capture {} {}", plugin, on ? "on" : "off"));
         return {};
@@ -1347,6 +1350,10 @@ void a_permission_must_be_declared() {
         assert(not ok and err:find("needs the \"board\" permission"), err)
         ok, err = pcall(reskate.board.parameters, "deck")
         assert(not ok and err:find("needs the \"board\" permission"), err)
+        ok, err = pcall(reskate.input.joysticks)
+        assert(not ok and err:find("needs the \"input\" permission"), err)
+        ok, err = pcall(reskate.input.joystick, 1)
+        assert(not ok and err:find("needs the \"input\" permission"), err)
         reskate.console.print("never")
     )")});
     stopped(host, "bare", "raised an error");
@@ -3058,6 +3065,12 @@ void the_wider_set_reaches_the_game() {
             assert(pad.buttons.a and not pad.buttons.b and pad.left_x == 0.25 and pad.right_trigger == 1, "the gamepad")
             local stick = reskate.input.joystick()
             assert(stick.axes[2] == -1 and stick.buttons[3] and not stick.buttons[1] and stick.name == "Radio", "the radio")
+            assert(#stick.axes == 8 and stick.axes[7] == 0.25 and stick.axes[8] == -0.75, "a radio's channels 7 and 8")
+            assert(stick.device == 0, "the radio's number")
+            local list = reskate.input.joysticks()
+            assert(#list == 2 and list[2].device == 1 and list[2].name == "Pad", "every controller")
+            assert(reskate.input.joystick(1).name == "Pad" and reskate.input.joystick(5) == nil, "a chosen controller")
+            assert(not pcall(reskate.input.joystick, -1) and not pcall(reskate.input.joystick, 1.5), "a controller's number")
             assert(reskate.input.capture(true))
             reskate.camera.release()
             assert(reskate.skater.freeze(true))

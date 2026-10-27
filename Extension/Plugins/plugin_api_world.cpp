@@ -2700,17 +2700,26 @@ struct WorldApi {
         lua_setfield(L, -2, "playstation");
         return 1;
     }
+    // joystick(): the first controller (a radio first); joystick(device): that one, a number
+    // joysticks() lists.
     static int input_joystick(lua_State* L) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "input", "reskate.input.joystick");
-        const auto stick = game(plugin).joystick();
+        int device = -1;
+        if (!lua_isnoneornil(L, 1)) {
+            const double wanted = luaL_checknumber(L, 1);
+            if (!(wanted >= 0 && wanted < 16) || wanted != static_cast<double>(static_cast<int>(wanted)))
+                luaL_argerror(L, 1, "a controller's number, as reskate.input.joysticks() lists it");
+            device = static_cast<int>(wanted);
+        }
+        const auto stick = game(plugin).joystick(device);
         if (!stick) {
             lua_pushnil(L);
             return 1;
         }
-        lua_createtable(L, 0, 3);
-        lua_createtable(L, 6, 0);
-        for (int i = 0; i < 6; ++i) {
+        lua_createtable(L, 0, 4);
+        lua_createtable(L, static_cast<int>(stick->axes.size()), 0);
+        for (int i = 0; i < static_cast<int>(stick->axes.size()); ++i) {
             lua_pushnumber(L, stick->axes[static_cast<std::size_t>(i)]);
             lua_rawseti(L, -2, i + 1);
         }
@@ -2723,6 +2732,25 @@ struct WorldApi {
         lua_setfield(L, -2, "buttons");
         lua_pushlstring(L, stick->name.data(), stick->name.size());
         lua_setfield(L, -2, "name");
+        lua_pushinteger(L, stick->device);
+        lua_setfield(L, -2, "device");
+        return 1;
+    }
+    // joysticks(): {{device = n, name = "..."}, ...}, every controller plugged in.
+    static int input_joysticks(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "input", "reskate.input.joysticks");
+        const auto found = game(plugin).joysticks();
+        lua_createtable(L, static_cast<int>(found.size()), 0);
+        int n = 0;
+        for (const auto& stick : found) {
+            lua_createtable(L, 0, 2);
+            lua_pushinteger(L, stick.device);
+            lua_setfield(L, -2, "device");
+            lua_pushlstring(L, stick.name.data(), stick.name.size());
+            lua_setfield(L, -2, "name");
+            lua_rawseti(L, -2, ++n);
+        }
         return 1;
     }
     static int input_capture(lua_State* L) {
@@ -2999,7 +3027,7 @@ void WorldApi::install(Plugin& plugin, lua_State* L) {
                                {"game", game_current}, {"game_next", game_next}});
     add_functions(L, "progression", {{"get", progress}});
     add_functions(L, "settings", {{"game", setting}, {"names", setting_names}, {"set", setting_set}});
-    add_functions(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"capture", input_capture},
+    add_functions(L, "input", {{"bind", bind}, {"flight", input_flight}, {"gamepad", input_gamepad}, {"joystick", input_joystick}, {"joysticks", input_joysticks}, {"capture", input_capture},
                                {"hide", input_hide}, {"cursor", input_cursor}, {"text", input_text}});
     add_functions(L, "room", {{"open", room_open}, {"leave", room_leave}, {"state", room_state}});
     add_functions(L, "ui", {{"screen", screen}, {"open", open}, {"close", close}});
