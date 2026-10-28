@@ -105,4 +105,18 @@ inline bool refresh_playstation_bluetooth_crc(std::uint8_t* report, std::size_t 
     for (std::size_t i = 0; i < 4; ++i) report[covered + i] = static_cast<std::uint8_t>(crc >> (8 * i));
     return true;
 }
+// Change one menu-preview stick in an already identified report. Other input,
+// sensors, sequence counters and Windows padding stay intact.
+inline bool set_playstation_stick(PlayStationPad kind, bool bluetooth, std::uint8_t* report,
+    std::size_t size, int stick, std::int16_t value) noexcept {
+    if (stick < 0 || stick > 3 || !parse_playstation_report(kind, bluetooth, report, size)) return false;
+    const unsigned offset = report[0] == 0x31 ? 2 : report[0] == 0x11 ? 3 : 1;
+    const bool invert = (stick & 1) != 0;
+    const int centred = static_cast<int>(value) / 258;
+    report[offset + static_cast<unsigned>(stick)] = static_cast<std::uint8_t>(
+        std::clamp(invert ? 127 - centred : 128 + centred, 0, 255));
+    refresh_playstation_bluetooth_crc(report, size);
+    return true;
+}
+
 }

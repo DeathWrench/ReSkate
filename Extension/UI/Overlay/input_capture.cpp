@@ -217,7 +217,19 @@ void filter_hid(const InputCaptureHooks::HidRead& read, DWORD size) noexcept {
 // through the gamepad filter.
 void handle_hid(const InputCaptureHooks::HidRead& read, DWORD size) noexcept {
     if (block_polled_input()) neutral_hid(read, size);
-    else filter_hid(read, size);
+    else {
+        filter_hid(read, size);
+        int stick{};
+        SHORT value{};
+        if (!overlay_input_access && read.buffer && size <= read.capacity && held_stick(stick, value)) {
+            auto* bytes = static_cast<std::uint8_t*>(read.buffer);
+            if (set_playstation_stick(read.kind, playstation_bluetooth(size), bytes, size, stick, value)) {
+                static std::atomic<bool> reported{};
+                if (!reported.exchange(true)) logging::write(logging::Level::info, logging::Channel::input,
+                    "Menu preview stick hold reached a native PlayStation HID read.");
+            }
+        }
+    }
 }
 void complete_hid(OVERLAPPED* request, DWORD bytes, bool success, bool finished) {
     auto& h = input_hooks();

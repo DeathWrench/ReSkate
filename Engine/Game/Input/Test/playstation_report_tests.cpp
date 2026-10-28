@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 using namespace dingosdk;
 void check(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
@@ -34,6 +35,35 @@ int main() {
         check(playstation_pad(0x054c, 0x0ce6) == PlayStationPad::dualsense, "DualSense is recognised");
         check(playstation_pad(0x045e, 0x0ce6) == PlayStationPad::none, "Other vendors are ignored");
         check(!playstation_bluetooth(64) && playstation_bluetooth(78) && playstation_bluetooth(547), "Transport follows the input report length");
+
+        // Menu holds reach native reports without changing buttons, sensors or padding.
+        for (const auto kind : {PlayStationPad::dualshock4, PlayStationPad::dualsense}) {
+            for (const std::size_t length : {std::size_t{64}, std::size_t{78}, std::size_t{547}}) {
+                if (kind == PlayStationPad::dualsense && length == 547) continue;
+                std::array<std::uint8_t, 547> report{};
+                report.fill(0x5a);
+                report[0] = length == 64 ? 1 : kind == PlayStationPad::dualshock4 ? 0x11 : 0x31;
+                const unsigned offset = report[0] == 0x31 ? 2 : report[0] == 0x11 ? 3 : 1;
+                for (int axis = 0; axis < 4; ++axis) {
+                    for (const std::int16_t value : {std::int16_t{-32768}, std::int16_t{0}, std::int16_t{32767}}) {
+                        const auto before = report;
+                        check(set_playstation_stick(kind, length > 64, report.data(), length, axis, value), "Native stick hold accepted");
+                        const auto read = parse_playstation_report(kind, length > 64, report.data(), length);
+                        const std::int16_t axes[]{read->left_x, read->left_y, read->right_x, read->right_y};
+                        check(std::abs(int{axes[axis]} - int{value}) <= 258, "All four native axes retain XInput direction and range");
+                        for (std::size_t i = 0; i < report.size(); ++i) {
+                            if (i == offset + static_cast<unsigned>(axis) || (length > 64 && i >= 74 && i < 78)) continue;
+                            check(report[i] == before[i], "Hold preserves unrelated report bytes and padding");
+                        }
+                        if (length > 64) check(stored_crc(report.data()) == bluetooth_crc(report.data(), 74), "Hold updates Bluetooth CRC before game reads");
+                    }
+                }
+                const auto before = report;
+                check(!set_playstation_stick(kind, length > 64, report.data(), length, 4, 100), "Invalid hold axis rejected");
+                check(report == before, "Rejected hold leaves report intact");
+            }
+        }
+        check(!set_playstation_stick(PlayStationPad::none, false, nullptr, 0, 0, 0), "Unknown and absent reports are ignored");
 
         // DS4 USB 0x01: sticks centred, hat NE, Cross, L1 + Options, L2 fully pressed.
         std::array<std::uint8_t, 64> ds4{0x01, 128, 128, 128, 128, 0x21, 0x21, 0x00, 255, 0};

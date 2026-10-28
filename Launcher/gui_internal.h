@@ -447,6 +447,8 @@ struct Ui {
     // The maps Settings offers to start in, read from the Mods folder when GAME is first drawn
     // after Settings opens.
     std::optional<std::vector<launcher_start_maps::StartMap>> start_maps;
+    // Plugin developer mode (initfs.h), read when the settings open and again after a launch.
+    std::optional<bool> plugin_developer;
     int binding{};              // 1 = menu key, 2 = console key, while waiting for a press
     std::string key_error;
     bool mods{};

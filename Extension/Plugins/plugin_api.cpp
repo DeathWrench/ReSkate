@@ -661,7 +661,8 @@ struct ApiFunctions {
         for (const auto& candidate : candidates) {
             const auto path = package_path(L, plugin, candidate, false);
             std::error_code code;
-            if (std::filesystem::is_regular_file(path, code)) {
+            const bool exists = plugin.sources_ ? plugin.sources_->contains(plugin_source_key(candidate)) : std::filesystem::is_regular_file(path, code);
+            if (exists) {
                 key = candidate;
                 file = path;
                 break;
@@ -747,10 +748,12 @@ void Api::install(Plugin& plugin, lua_State* L) {
     install_ui_api(plugin, L);
     install_more_api(plugin, L);
     install_world_api(plugin, L);
+    install_physics_api(plugin, L);
     install_services_api(plugin, L);
     install_kit_api(plugin, L);
     install_capture_api(plugin, L);
     install_effects_api(plugin, L);
+    install_viewmodel_api(plugin, L);
     readonly();
     lua_setglobal(L, "reskate");
     lua_pushcfunction(L, ApiFunctions::print, "print");

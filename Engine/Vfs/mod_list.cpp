@@ -522,6 +522,11 @@ std::vector<std::string> mod_contents(const Mod& mod) {
     return parts;
 }
 
+bool plugin_only(const Mod& mod) {
+    return mod.provides_plugin && !mod.provides_layout && !mod.provides_levels && mod.park_maps.empty() && !mod.provides_objects &&
+           !mod.provides_music && !mod.variants.has_value();
+}
+
 bool has_content(const Mod& mod) {
     return !mod_contents(mod).empty() || mod.variants.has_value();
 }

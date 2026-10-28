@@ -46,6 +46,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Hud/native_party_hooks.cpp
     Extension/Multiplayer/Hud/native_party_requests.cpp
     Extension/Throwdowns/native_throwdowns.cpp
+    Extension/Localization/text_overrides.cpp
     Extension/Throwdowns/native_type_scan.cpp
     Extension/Throwdowns/throwdown_lab.cpp
     Extension/Throwdowns/native_flag_session.cpp
@@ -102,6 +103,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Settings/named_settings.cpp
     Extension/World/console_commands.cpp
     Extension/World/world_entities.cpp
+    Extension/World/owned_bodies.cpp
     Extension/World/character_room.cpp
     Extension/World/guid_table_guard.cpp
     Extension/Skater/bone_cam.cpp

@@ -20,6 +20,8 @@ void install_ui_api(Plugin& plugin, lua_State* L);
 void install_more_api(Plugin& plugin, lua_State* L);
 // The wider set's game parts (plugin_api_world.cpp), into the same table.
 void install_world_api(Plugin& plugin, lua_State* L);
+// Native bodies a plugin owns and their ray batches (plugin_api_physics.cpp), into reskate.world.
+void install_physics_api(Plugin& plugin, lua_State* L);
 // General services for a game layer: the skater's telemetry and Bone Cam, the pad and keys, the
 // free and pad-flown cameras, the session's world, competition physics and the trick feed
 // (plugin_api_services.cpp).
@@ -31,6 +33,8 @@ void install_kit_api(Plugin& plugin, lua_State* L);
 // folder shown (plugin_api_capture.cpp).
 void install_capture_api(Plugin& plugin, lua_State* L);
 void install_effects_api(Plugin& plugin, lua_State* L);
+// A rigged, animated model in front of the camera (plugin_api_viewmodel.cpp).
+void install_viewmodel_api(Plugin& plugin, lua_State* L);
 
 // ---- adding to the reskate table ---------------------------------------------------------------
 // A new part of the API is a file of `static int name(lua_State*)` functions and an install_*_api

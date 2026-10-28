@@ -39,10 +39,16 @@ void Host::load(Entry& entry) {
     }
     Manifest manifest;
     try {
-        std::string error;
-        const auto text = read_package_file(entry.candidate.directory / manifest_file, maximum_manifest_bytes, error);
-        if (!error.empty()) throw std::runtime_error(std::string(manifest_file) + " " + error);
-        manifest = parse_manifest(text);
+        if (entry.candidate.sources) {
+            const auto found = entry.candidate.sources->find(plugin_source_key(manifest_file));
+            if (found == entry.candidate.sources->end()) throw std::runtime_error("reskate-plugin.json is missing from the approved source snapshot");
+            manifest = parse_manifest(found->second);
+        } else {
+            std::string error;
+            const auto text = read_package_file(entry.candidate.directory / manifest_file, maximum_manifest_bytes, error);
+            if (!error.empty()) throw std::runtime_error(std::string(manifest_file) + " " + error);
+            manifest = parse_manifest(text);
+        }
     } catch (const std::exception& error) {
         entry.failure = error.what();
         environment_.log(LogLevel::warn, std::format("Plugin {} was not loaded: {}", id, entry.failure));
@@ -57,7 +63,7 @@ void Host::load(Entry& entry) {
     std::string permissions;
     for (const auto& permission : manifest.permissions) permissions += (permissions.empty() ? "" : ", ") + permission;
     Services& services = *this;
-    entry.plugin = std::make_unique<Plugin>(id + suffix_, entry.candidate.directory, std::move(manifest), services, limits_);
+    entry.plugin = std::make_unique<Plugin>(id + suffix_, entry.candidate.directory, std::move(manifest), services, limits_, entry.candidate.sources);
     // Its messages go under the name its manifest.json gives it, the same on every player's game
     // whatever its folder is called; the folder's name when it has none.
     std::string channel = id;
@@ -118,15 +124,20 @@ void Host::apply(const std::vector<Candidate>& found) {
     for (const auto& [id, candidate] : wanted) {
         auto* entry = find(id);
         if (!entry) {
-            entry = &entries_.emplace(id, Entry{*candidate, {}, {}, false}).first->second;
-            load(*entry);
+            entry = &entries_.emplace(id, Entry{*candidate, {}, {}, environment_.approved(*candidate) == false}).first->second;
+            if (!entry->held) load(*entry);
             continue;
         }
-        if (entry->candidate == *candidate) continue;
+        // The player's answer is read each time, so turning a plugin on or off applies here too.
+        const auto answer = environment_.approved(*candidate);
+        const bool held = answer ? !*answer : entry->held;
+        if (entry->candidate == *candidate && entry->held == held) continue;
+        const bool changed = entry->candidate != *candidate;
         entry->candidate = *candidate;
-        if (entry->held) continue;
-        environment_.log(LogLevel::info, std::format("Plugin {} reloading: its files changed.", id));
+        entry->held = held;
         unload(*entry);
+        if (held) continue;
+        if (changed) environment_.log(LogLevel::info, std::format("Plugin {} reloading: its files changed.", id));
         load(*entry);
     }
 }
@@ -585,7 +596,13 @@ std::vector<Status> Host::status() const {
 std::string Host::reload(std::string_view id) {
     auto* entry = find(id);
     if (!entry) return std::format("error: There is no plugin {}.", id);
-    entry->held = false;
+    if (entry->held) return std::format("error: Plugin {} is switched off: plugin on {} turns it on.", id, id);
+    // (Its files are asked about again: what loads is what the player answered for.)
+    if (environment_.approved(entry->candidate) == false) {
+        entry->held = true;
+        unload(*entry);
+        return std::format("error: Plugin {} is not turned on: plugin on {} turns it on.", id, id);
+    }
     unload(*entry);
     load(*entry);
     return entry->plugin ? std::format("Plugin {} reloaded.", id) : std::format("error: Plugin {} did not start: {}", id, entry->failure);
@@ -594,15 +611,19 @@ std::string Host::reload(std::string_view id) {
 std::string Host::switch_off(std::string_view id) {
     auto* entry = find(id);
     if (!entry) return std::format("error: There is no plugin {}.", id);
+    environment_.approve(entry->candidate, false);
     entry->held = true;
     unload(*entry);
-    return std::format("Plugin {} switched off until plugin on {}, or the next launch.", std::string(id) + suffix_, std::string(id) + suffix_);
+    return std::format("Plugin {} switched off until plugin on {}.", std::string(id) + suffix_, std::string(id) + suffix_);
 }
 
 std::string Host::switch_on(std::string_view id) {
     auto* entry = find(id);
     if (!entry) return std::format("error: There is no plugin {}.", id);
     if (entry->plugin) return std::format("Plugin {} is running.", id);
+    environment_.approve(entry->candidate, true);
+    // Where the files still have to be checked, it starts when they have been (apply loads it then).
+    if (environment_.approved(entry->candidate) == false) return std::format("Plugin {} is turned on and starts once its files are checked.", id);
     entry->held = false;
     load(*entry);
     return entry->plugin ? std::format("Plugin {} started.", id) : std::format("error: Plugin {} did not start: {}", id, entry->failure);
