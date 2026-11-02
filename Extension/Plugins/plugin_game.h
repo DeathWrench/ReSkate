@@ -206,6 +206,15 @@ struct Track {
     std::string app, title, artist, album;
     std::uint64_t revision{};
 };
+// reskate.spatialize_music: the Spotify station's song between the speakers (each side's gain 0 to
+// 4, low-pass 0.04 to 1, the delay between ears -32 to 32 samples, room 0 to 0.65), and short world
+// loops silenced while it is on. Values arrive within those ranges.
+struct MusicSpatial {
+    float left{1}, right{1}, lpf_left{1}, lpf_right{1};
+    int itd{};
+    float env{};
+    bool mute_loops{true};
+};
 struct ThrowdownState {
     bool active{}, host{};
     struct Player {
@@ -481,6 +490,29 @@ public:
     // give it back; and the tiles it marks with the game's check. Empty when taken, else why not.
     virtual std::string grid_show(std::string_view /*plugin*/, std::optional<std::vector<std::string>> /*keys*/) { return unavailable; }
     virtual void grid_mark(std::string_view /*plugin*/, std::vector<std::string> /*keys*/) {}
+    // Where an item key comes from (Customization/item_origins.h). `ready` is false until the merge
+    // file has been read and the content catalogues are available: until then a key is not a game
+    // item. `from_mod` is the winning mod; `game` means the game itself ships the key.
+    struct ItemFact {
+        bool from_mod{};
+        bool game{};
+        std::string folder, title, author, version;
+    };
+    struct ItemFacts {
+        bool ready{};
+        std::vector<ItemFact> facts;
+    };
+    virtual ItemFacts item_facts(const std::vector<std::string>& /*keys*/) { return {}; }
+    // The player's starred items. `ready` false, with `why`, means the set has not been read, which
+    // is not an empty set. `generation` changes when the set does.
+    struct MenuFavorites {
+        bool ready{};
+        std::string why;
+        std::vector<std::string> keys;
+        std::uint64_t generation{};
+    };
+    virtual MenuFavorites menu_favorites() { return {false, "not loaded"}; }
+    virtual std::uint64_t favorites_generation() { return 0; }
     // ---- capture: the screen as the game draws it (Extension/Rendering/Capture) ---------------------
     // One plugin records at a time; frames are numbered from 0 as they are taken.
     struct CaptureStart {
@@ -622,6 +654,9 @@ public:
     // then the outside player's song is the one heard), and "next" for it.
     virtual std::optional<Track> game_track() { return std::nullopt; }
     virtual std::string game_music(std::string_view) { return unavailable; }
+    // The station's song spatialized for about 2 s (a plugin renews it each tick), or off for none;
+    // whether it is on now.
+    virtual bool spatialize_music(std::optional<MusicSpatial>) { return false; }
     virtual Progress progress() { return {}; }
     virtual std::optional<std::string> setting(std::string_view) { return std::nullopt; }
     virtual std::vector<std::string> setting_names() { return {}; }
@@ -872,6 +907,18 @@ public:
         std::string note;
     };
     virtual OnTop outfit_on_top_state(std::string_view /*plugin*/) { return {}; }
+    // What this PC shows in place of other players' items it does not have (their cosmetics mods;
+    // Extension/Multiplayer/Remote/stand_ins.h): `items` the ones that may stand in (empty: every
+    // installed item that fits), the first that fits or one at random, on the skater, the board or
+    // both. nullopt: the game's defaults again. Empty when set, else why not.
+    struct StandIns {
+        bool random{};
+        int parts{}; // 0 both, 1 skater, 2 board
+        std::vector<std::string> items;
+        std::vector<std::string> exclude; // never to stand in: names, or a name's start and "*"
+        std::uint32_t seed{};
+    };
+    virtual std::string outfit_stand_ins(std::string_view /*plugin*/, std::optional<StandIns>) { return unavailable; }
     virtual std::vector<WornItem> board_parts() { return {}; }
     // An item's title as the game shows it (its catalog's, the one an item grid showed, or its key
     // made readable).
@@ -959,6 +1006,8 @@ public:
     // The board's velocity set (or `add`ed to) by the next physics step with the skater on its board,
     // within 500 ms.
     virtual std::string set_velocity(std::string_view /*plugin*/, const Vec3& /*velocity*/, bool /*add*/) { return unavailable; }
+    // Flip tricks in the air turn at `factor` times their speed for the next 300 ms (1 ends it).
+    virtual std::string flip_speed(std::string_view /*plugin*/, float /*factor*/) { return unavailable; }
     // What of the pad the game does not see (reskate.input.hide): the triggers, the left stick's
     // sideways while grinding, the right stick and the stick clicks.
     struct PadHidden {
@@ -990,7 +1039,18 @@ public:
     // focus. Capture keeps the game from the controller too, for 250 ms a call (renewed each tick),
     // and only while the plugin's camera is shown.
     virtual std::optional<FlightInput> flight_input(std::string_view /*plugin*/) { return std::nullopt; }
-    virtual std::optional<PadInput> gamepad() { return std::nullopt; }
+    struct RailTarget { bool available{}, targeting{}; Vec3 direction{}; };
+    virtual std::optional<RailTarget> rail_target() { return std::nullopt; }
+    virtual std::string select_rail_target(std::string_view, std::optional<int>, bool) { return unavailable; }
+    struct SkaterFrame { Vec3 position{}, forward{}; bool backwards{}, mirrored{}, fakie{}, basis{}; std::uint64_t serial{}; };
+    virtual std::optional<SkaterFrame> skater_frame() { return std::nullopt; }
+    struct AnimationValue { std::string name; double value{}; bool boolean{}, output{}; };
+    virtual std::vector<AnimationValue> animation_values() { return {}; }
+    virtual std::string set_animation_value(std::string_view, double) { return unavailable; }
+    virtual std::optional<bool> gameplay_option(std::string_view) { return std::nullopt; }
+    virtual std::string hold_gameplay_option(std::string_view, std::string_view, std::optional<bool>) { return unavailable; }
+    virtual std::optional<PadInput> gamepad(int /*controller*/ = -1) { return std::nullopt; }
+    virtual std::string write_pad(std::string_view /*plugin*/, unsigned /*controller*/, std::optional<PadInput>) { return unavailable; }
     // The first controller (a radio first), or with device >= 0 that one (StickDevice::device).
     // Neither ever waits on Windows: a thread of ReSkate's reads the controllers.
     virtual std::optional<StickInput> joystick(int /*device*/ = -1) { return std::nullopt; }

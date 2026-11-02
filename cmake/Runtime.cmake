@@ -34,6 +34,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Multiplayer/Remote/native_skater_spawn.cpp
     Extension/Multiplayer/Remote/puppet_cost.cpp
     Extension/Multiplayer/Remote/native_cosmetics.cpp
+    Extension/Multiplayer/Remote/stand_ins.cpp
     Extension/Multiplayer/Remote/native_audio.cpp
     Extension/Multiplayer/Remote/native_vfx.cpp
     Extension/Multiplayer/Voice/voice_chat.cpp
@@ -154,6 +155,7 @@ add_library(dingosdk_runtime SHARED
     Extension/Skater/xray_render.cpp
     Extension/Skater/xray_skeleton.cpp
     Extension/Skater/game_speed.cpp
+    Extension/Skater/grind_target.cpp
     Extension/Skater/launches.cpp
     Extension/Skater/pad_hide.cpp
     Extension/Skater/trick_rewrite.cpp

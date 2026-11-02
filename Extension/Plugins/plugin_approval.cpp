@@ -29,6 +29,7 @@ constexpr Capability capabilities[] = {
     {"session.skaters", "PLAYERS", Risk::amber, "Hide, touch and read other players' skaters"},
     {"session.nametags", "PLAYERS", Risk::amber, "Change nametags on your game"},
     {"voice.control", "PLAYERS", Risk::amber, "Set how loud each player is to you"},
+    {"outfit.stand_ins", "PLAYERS", Risk::grey, "Choose what you see in place of other players' items you don't have"},
     {"session.read", "PLAYERS", Risk::grey, "Read the session and its players"},
     {"chat.send", "CHAT", Risk::red, "Send chat lines as you"},
     {"chat.read", "CHAT", Risk::grey, "Read the session's chat"},
@@ -58,6 +59,7 @@ constexpr Capability capabilities[] = {
     {"world.raycast", "WORLD", Risk::grey, "Cast rays and pick objects in the world"},
     {"camera", "CAMERA", Risk::amber, "Control the camera"},
     {"input", "INPUT", Risk::amber, "Bind your keys, pads and mouse, and read text input"},
+    {"input.write", "INPUT", Risk::amber, "Replace your controller input while you play"},
     // Red: it can relabel anything the game shows, its store's buttons and prices included.
     {"strings", "SCREEN", Risk::red, "Change the text the game shows, in its menus and its store"},
     {"capture", "SCREEN", Risk::amber, "Record your screen"},
@@ -245,6 +247,7 @@ std::string approval_prompt(const std::vector<PermissionGroup>& groups) {
             if (has("session.skaters")) session.push_back("hide, touch, or read other players' skaters");
             if (has("session.nametags")) session.push_back("change the nametags you see");
             if (has("voice.control")) session.push_back("set how loud each player sounds to you");
+            if (has("outfit.stand_ins")) session.push_back("choose what you see in place of other players' items you don't have");
             if (!session.empty()) actions.push_back(join(session));
             if (has("net.session")) actions.push_back("send messages to other players using the same plugin");
             if (has("throwdowns")) actions.push_back("host and manage throwdowns");
@@ -280,7 +283,8 @@ std::string approval_prompt(const std::vector<PermissionGroup>& groups) {
         } else if (group.category == "CAMERA") {
             actions.push_back("control the camera");
         } else if (group.category == "INPUT") {
-            actions.push_back("bind keys, pads, and mouse, and read text input");
+            if (has("input")) actions.push_back("bind keys, pads, and mouse, and read text input");
+            if (has("input.write")) actions.push_back("replace your controller input while you play");
         } else if (group.category == "SCREEN") {
             if (has("strings")) actions.push_back("change the text the game shows, in its menus and its store");
             if (has("capture")) actions.push_back("record your screen");
