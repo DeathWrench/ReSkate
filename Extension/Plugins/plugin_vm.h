@@ -30,8 +30,8 @@ struct Limits {
     std::size_t memory = 64u << 20;     // the VM's heap
     double call_ms = 50;                // one call into the plugin (load, a handler, a command)
     double unload_ms = 20;              // its unload handlers, together
-    double tick_ms = 2;                 // the average time a tick, over a window of 1 s...
-    int over_windows = 3;               // ...over it this many windows in a row stops it
+    double tick_ms = 6;                 // the average time a tick, over a window of 1 s...
+    int over_windows = 5;               // ...over it this many windows in a row stops it
     int errors = 5;                     // more errors than this...
     double error_window_ms = 10'000;    // ...in this long stops it
     int log_lines_per_second = 50;
@@ -51,7 +51,9 @@ struct Limits {
     // Different waves a plugin holds at once, each at most 30 s, and their decoded samples together
     // (16 kHz mono 16-bit, so 30 s is about 0.9 MB). Past either, the wave played longest ago that
     // no sound still plays is let go; only when every one is still playing is a new one refused.
-    std::size_t sounds = 256;
+    // A plugin plays at most 8 sounds at once (plugin_sound.cpp), so 32 always leaves one to let go,
+    // and 32 waves of 30 s keep a plugin's samples near 30 MB, well inside sound_bytes.
+    std::size_t sounds = 32;
     std::size_t sound_bytes = 64u << 20;
     int toasts = 3;                     // in 5 s
     int sounds_per_second = 10;
@@ -187,6 +189,7 @@ public:
 enum class State { loading, running, stopped };
 
 class Plugin {
+    friend struct ObjectPhysicsApi;
 public:
     // `directory` is the mod folder; `id` its folder name.
     Plugin(std::string id, std::filesystem::path directory, Manifest manifest, Services& services, Limits limits,

@@ -4,6 +4,7 @@
 #include "Engine/Game/Build/20260929/local_placements.h"
 #include "Extension/Customization/local_customization_runtime.h"
 #include "local_placements_runtime.h"
+#include "placement_physics.h"
 #include "Extension/Objects/ParkEditor/park_editor_runtime.h"
 #include "network_object_runtime.h"
 #include "Extension/Profile/runtime_internal.h"
@@ -97,6 +98,7 @@ void queue_placement_save() {
 }
 
 void placement_reset_session() {
+    placement_physics::reset();
     placement_table_changed();
     reset_network_object_world();
     reset_park_editor();
@@ -488,6 +490,7 @@ void update_placement_poses() {
     if (!placement_session_ready()) return;
     update_placement_creates();
     update_park_editor_moves();
+    placement_physics::server_tick();
     update_network_object_moves();
     update_placement_resizes();
     if (!placement_session_ready() || r.clearing || park_editor_owns_placements() || GetTickCount64() < r.next_poll) return;
@@ -498,6 +501,8 @@ void update_placement_poses() {
     auto& objects = r.document.maps[r.map]; bool changed{};
     for (auto& row : r.rows) {
         if (!row.spawned) continue;
+        // A plugin's physics moves it (placement_physics.h): where it falls is not where it is saved.
+        if (row.saved_id && placement_physics::claimed(row.saved_id)) continue;
         if (std::any_of(r.resizes.begin(), r.resizes.end(), [&](const auto& x) { return x.entity == row.entity; }))
             continue; // Its native scale is still 1x, or the resize is not yet read back.
         alignas(16) std::array<std::uint64_t, 2> reference{};
