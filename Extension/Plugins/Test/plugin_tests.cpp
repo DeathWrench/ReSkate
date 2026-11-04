@@ -23,6 +23,7 @@
 #include "Extension/Localization/text_overrides.h"
 #include <algorithm>
 #include <chrono>
+#include <thread>
 #include <cmath>
 #include <format>
 #include <fstream>
@@ -3336,9 +3337,80 @@ void the_sandbox_holds() {
     check(environment.logged("sandbox fine"), "Every way out is closed\n" + environment.all());
 }
 
+// ReSkate's own reading and compiling is not a plugin's running time (Limits::io_ms): a module that
+// takes far longer to compile than a call may run still loads, the time is let off only up to the
+// allowance, and a plugin that reads a file in a loop is stopped all the same.
+void reskates_own_reading_is_not_a_plugins_time() {
+    // About 1 MB of code in a function that never runs: it compiles for tens of milliseconds.
+    std::string big = "local function never()\n";
+    while (big.size() < 1'000'000 - 64) big += "    do local a = {1, 2, 3, x = 'y'} if a.x == 'z' then a[1] = a[2] + a[3] end end\n";
+    big += "end\nreturn {}\n";
+    // The loop after it gives the interrupt its safe points, where it looks at the clock.
+    const std::string main = R"(require("big") for i = 1, 1000 do end reskate.log("big loaded"))";
+    {
+        TestEnvironment environment;
+        Limits limits;
+        limits.call_ms = limits.hang_ms = 5;
+        Host host(environment, Side::client, limits);
+        host.apply({package("big-module", {{manifest_file, manifest()}, {"plugin/main.lua", main}, {"plugin/big.lua", big}})});
+        running(host, "big-module", environment);
+        check(environment.logged("big loaded"), "A module's compile is not counted against the load's 5 ms");
+    }
+    {
+        TestEnvironment environment;
+        Limits limits;
+        limits.call_ms = limits.hang_ms = 5;
+        limits.io_ms = 0;
+        Host host(environment, Side::client, limits);
+        host.apply({package("big-module-counted", {{manifest_file, manifest()}, {"plugin/main.lua", main}, {"plugin/big.lua", big}})});
+        stopped(host, "big-module-counted", "ran longer than 5 ms");
+    }
+    {
+        TestEnvironment environment;
+        Limits limits;
+        limits.call_ms = limits.hang_ms = 5;
+        limits.io_ms = 20;
+        Host host(environment, Side::client, limits);
+        host.apply({package("read-loop", {{manifest_file, manifest()}, {"plugin/main.lua", R"(while true do reskate.package.read("plugin/big.lua") end)"},
+                                          {"plugin/big.lua", big}})});
+        stopped(host, "read-loop", "ran longer than 5 ms");
+    }
+}
+
+// A call past call_ms is said, with where the script was, and goes on: one slow call (a hard disk,
+// Windows holding the game's thread) is no reason to stop a plugin. One past hang_ms is stopped,
+// saying where it was, and unload's own share of time still cuts its handlers off.
+void a_slow_call_is_said_and_a_hung_one_stopped() {
+    TestEnvironment environment;
+    Limits limits;
+    limits.call_ms = 5;
+    limits.hang_ms = 300;
+    Host host(environment, Side::client, limits);
+    host.apply({script("slow", R"(
+        local function spin(s) local t = os.clock() while os.clock() - t < s do end end
+        local n = 0
+        reskate.on("tick", function()
+            n += 1
+            if n == 1 then spin(0.03) end
+            if n == 3 then reskate.log("slow went on") end
+        end)
+    )"),
+                script("hung", R"(reskate.on("tick", function() while true do end end))")});
+    running(host, "slow", environment);
+    ticks(host, environment, 3);
+    running(host, "slow", environment);
+    check(environment.logged("[slow] the tick handler took") && environment.logged("over its 5 ms (at plugin/main.lua:") &&
+              environment.logged("ReSkate stops a plugin past 300 ms"),
+          "A slow call is said, with where it was\n" + environment.all());
+    check(environment.logged("slow went on"), "and the plugin goes on\n" + environment.all());
+    stopped(host, "hung", "the tick handler ran longer than 300 ms (at plugin/main.lua:1");
+}
+
 void a_runaway_plugin_is_stopped_and_the_rest_go_on() {
     TestEnvironment environment;
-    Host host(environment, Side::client);
+    Limits limits;
+    limits.hang_ms = limits.call_ms; // (a_slow_call_is_said_and_a_hung_one_stopped has the two apart)
+    Host host(environment, Side::client, limits);
     const auto start = std::chrono::steady_clock::now();
     host.apply({
         script("bystander", R"(local n = 0 reskate.on("tick", function() n += 1 if n == 30 then reskate.log("bystander ticked 30") end end))"),
@@ -3368,7 +3440,7 @@ void a_runaway_plugin_is_stopped_and_the_rest_go_on() {
     check(!environment.logged("survived the memory bomb"), "A memory bomb cannot be caught and carried on from");
     running(host, "tick_loop", environment);
     ticks(host, environment, 1);
-    stopped(host, "tick_loop", "the tick handler ran longer than 50 ms");
+    stopped(host, "tick_loop", "the tick handler ran longer than 50 ms (at plugin/main.lua:1");
     check(environment.logged("[tick_loop] stopped: the tick handler"), "A stop is logged, which the console shows");
     ticks(host, environment, 4); // five errors, with the tick above
     running(host, "errors", environment);
@@ -5444,6 +5516,79 @@ void plugins_animate_the_skater() {
                              "stop dancer"})
         check(environment.fake.called(call), std::string("The game was asked: ") + call + "\n" + environment.all());
     running(host, "dancer", environment);
+}
+
+// Clips and sounds read off the plugin's thread (reskate.animation.preload, reskate.audio.preload):
+// fn comes in a later tick, and once it says they're held, play finds them with their files gone. One
+// that can't be read or isn't one says why, at most limits_.preloads go at once, only the plugin's
+// own package is preloaded, and without its permission a plugin can't preload at all.
+void plugins_preload_clips_and_sounds() {
+    TestEnvironment environment;
+    Limits limits;
+    limits.preloads = 5;
+    Host host(environment, Side::client, limits);
+    dingosdk::anim_studio::Clip clip;
+    clip.joints = dingosdk::anim_studio::skeleton_joints;
+    clip.times = {0, 0.5f};
+    clip.frames.resize(clip.times.size() * clip.joints);
+    const auto bytes = dingosdk::anim_studio::clip_bytes(clip);
+    const std::string main = R"(
+        local function told(what) return function(ok, why) reskate.log(what .. " " .. tostring(ok) .. " " .. tostring(why)) end end
+        reskate.console.command("warm", "x", function()
+            assert(reskate.animation.preload("clips/spin.fas", told("spin")))
+            assert(reskate.audio.preload("sounds/beep.wav", told("beep")))
+            assert(reskate.animation.preload("clips/spin.fas", told("again")))
+            assert(reskate.animation.preload("notes.txt", told("notes")))
+            assert(reskate.audio.preload("sounds/missing.wav", told("missing")))
+            local ok, why = reskate.animation.preload("clips/other.fas")
+            assert(not ok and why:find("5 clips and sounds"), tostring(why))
+            assert(not pcall(reskate.animation.preload, "game:kickflip"), "a game clip isn't preloaded")
+            assert(not pcall(reskate.audio.preload, "motor"), "nor the motor")
+            assert(not pcall(reskate.animation.preload, "../other/spin.fas"), "its own package only")
+            reskate.log("asked")
+        end)
+        reskate.console.command("use", "x", function()
+            assert(reskate.animation.play("clips/spin.fas"))
+            assert(reskate.audio.play("sounds/beep.wav"))
+            reskate.log("used")
+        end)
+    )";
+    host.apply({package("preloader", {{manifest_file, manifest(R"("console", "skater.animation", "audio")")}, {"plugin/main.lua", main},
+                                      {"clips/spin.fas", std::string(bytes.begin(), bytes.end())}, {"sounds/beep.wav", wave_file(16000, 1000)},
+                                      {"notes.txt", "x"}})});
+    running(host, "preloader", environment);
+    host.run_console("warm");
+    check(environment.logged("[preloader] asked") && !environment.logged("spin "), "Nothing is called back in the call that asks\n" + environment.all());
+    const auto start = std::chrono::steady_clock::now();
+    const auto all_told = [&] {
+        for (const auto* line : {"spin ", "beep ", "again ", "notes ", "missing "})
+            if (!environment.logged(line)) return false;
+        return true;
+    };
+    while (!all_told() && std::chrono::steady_clock::now() - start < std::chrono::seconds(10)) {
+        ticks(host, environment, 1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check(environment.logged("spin true nil") && environment.logged("beep true nil") && environment.logged("again true nil"),
+          "Preloads are called back once held\n" + environment.all());
+    check(environment.logged("notes false it is not one") && environment.logged("missing false it cannot be read"),
+          "A preload that can't be held says why\n" + environment.all());
+    const auto directory = scratch / "mods" / "preloader";
+    std::filesystem::remove(directory / "clips" / "spin.fas");
+    std::filesystem::remove(directory / "sounds" / "beep.wav");
+    host.run_console("use");
+    check(environment.logged("[preloader] used"), "Preloaded clips and sounds play without their files\n" + environment.all());
+    running(host, "preloader", environment);
+
+    host.apply({script("no-preload", R"(
+        local ok, why = pcall(reskate.animation.preload, "clips/spin.fas")
+        assert(not ok and why:find("skater.animation"), tostring(why))
+        ok, why = pcall(reskate.audio.preload, "sounds/beep.wav")
+        assert(not ok and why:find("\"audio\""), tostring(why))
+        reskate.log("preloads refused")
+    )")});
+    running(host, "no-preload", environment);
+    check(environment.logged("preloads refused"), "Without the permission a plugin can't preload\n" + environment.all());
 }
 
 void plugins_call_and_hear_each_other() {
@@ -7770,6 +7915,8 @@ int main() {
         run(packages_json_and_modules);
         run(the_sandbox_holds);
         run(a_runaway_plugin_is_stopped_and_the_rest_go_on);
+        run(a_slow_call_is_said_and_a_hung_one_stopped);
+        run(reskates_own_reading_is_not_a_plugins_time);
         run(a_plugin_over_its_time_budget_is_stopped);
         run(a_plugin_reloads_when_its_files_change);
         run(the_skater_can_be_read_moved_and_the_world_probed);
@@ -7806,6 +7953,7 @@ int main() {
         run(plugins_server_copies_see_roles);
         run(plugins_server_copies_show_cards_and_polls);
         run(plugins_animate_the_skater);
+        run(plugins_preload_clips_and_sounds);
         run(plugins_play_their_own_sounds);
         run(plugins_play_ima_adpcm_sounds);
         run(plugins_play_any_number_of_different_sounds);
