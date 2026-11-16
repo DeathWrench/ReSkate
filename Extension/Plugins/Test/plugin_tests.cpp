@@ -719,6 +719,7 @@ struct FakeGame final : Game {
                                         l->grade, l->soft, l->scanlines, l->grain, l->dropouts, l->head_switching, l->tracking, l->smear, l->iris, l->rolling,
                                         l->text[0], l->text[1], l->text[2], l->text[3], l->text[4])
                           : std::format("look {} none", plugin));
+        if (l && l->edge_blur > 0) calls.push_back(std::format("look edge {} {:.2f} {:.2f}", plugin, l->edge_blur, l->edge_start));
         if (l && (l->bars_strength != 1 || l->hood_strength != 1 || l->grade_strength != 1 || l->soft_strength != 1 || l->scanlines_strength != 1 ||
                   l->grain_strength != 1 || l->dropouts_strength != 1 || l->head_switching_strength != 1 || l->smear_strength != 1))
             calls.push_back(std::format("look strengths {} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f} {:.2f}", plugin, l->bars_strength,
@@ -4132,6 +4133,33 @@ void a_runaway_plugin_is_stopped_and_the_rest_go_on() {
     check(total < 20, "and none of it hangs the host: " + std::to_string(total) + " s");
 }
 
+// The player's own limits (plugins::LimitChoices, as the host takes them): a slow plugin runs on
+// where the player has slow plugins left alone, or allowed longer; one already running takes the new
+// limits; and with ReSkate's own given back, it is stopped as before.
+void the_player_sets_how_strict_the_limits_are() {
+    TestEnvironment environment;
+    Limits lenient;
+    lenient.tick_ms = std::numeric_limits<double>::infinity();
+    lenient.errors = std::numeric_limits<int>::max();
+    Host host(environment, Side::client, lenient);
+    host.apply({script("busy", R"(reskate.on("tick", function() local s = os.clock() while os.clock() - s < 0.008 do end end))"),
+        script("faulty", R"(reskate.on("tick", function() error("again") end))")});
+    ticks(host, environment, 60 * 7);
+    running(host, "busy", environment);
+    running(host, "faulty", environment);
+    // Allowed 10 ms a tick, 8 ms is within it.
+    Limits longer;
+    longer.tick_ms = 10;
+    host.set_limits(longer);
+    ticks(host, environment, 60 * 7);
+    running(host, "busy", environment);
+    stopped(host, "faulty", "more than 5 errors");
+    // ReSkate's own again: the one running is held to them from then on.
+    host.set_limits({});
+    ticks(host, environment, 60 * 7);
+    stopped(host, "busy", "ms a tick for 5 s, over its 6 ms");
+}
+
 void a_plugin_over_its_time_budget_is_stopped() {
     TestEnvironment environment;
     Host host(environment, Side::client);
@@ -4893,6 +4921,10 @@ void plugins_reach_cruise_and_read_the_mouse() {
             rolling = 2, text = {"#rec", "0:00:02", nil, "4:05 PM", "OCT.20 2026"}}))
         assert(reskate.screen.slap() and reskate.screen.look(nil))
         assert(not pcall(reskate.screen.look, {bend = 2}), "a bend is 0 to 1")
+        -- Soft towards the edges, by itself or with the rest.
+        assert(reskate.screen.look({edge_blur = 0.7}) and reskate.screen.look({edge_blur = 0.5, edge_start = 0.25, hood = true}))
+        assert(not pcall(reskate.screen.look, {edge_blur = 1.5}), "an edge blur is 0 to 1")
+        assert(not pcall(reskate.screen.look, {edge_blur = 0.5, edge_start = 1}), "it starts short of the corners")
         assert(not pcall(reskate.screen.look, {text = {"far too long a line"}}), "12 characters")
         assert(not pcall(reskate.screen.look, {text = {"{}"}}), "the camcorder's characters")
         assert(not pcall(reskate.screen.look, {text = {"a", "b", "c", "d", "e", "f"}}), "5 lines")
@@ -4914,6 +4946,8 @@ void plugins_reach_cruise_and_read_the_mouse() {
     check(game.called("look filmer 0.80 110 0.35 truetruetruefalsefalsetruefalsefalsefalsefalsetrue 2.0 [#REC|0:00:02||4:05 PM|OCT.20 2026]") &&
               game.called("slap filmer") && game.called("look filmer none"),
           "A camcorder look on the screen, its text in capitals, a slap, and off\n" + environment.all());
+    check(game.called("look edge filmer 0.70 0.45") && game.called("look edge filmer 0.50 0.25"),
+          "A look soft towards its edges reaches the game, from 0.45 of the way out when not said" + std::string(1, 10) + environment.all());
     check(game.called("look strengths filmer 1.00 1.00 0.60 1.00 1.00 0.25 1.00 1.00 0.00"),
           "A look's effects at part strength reach the game, 1 for those not given\n" + environment.all());
     // Each needs its permission.
@@ -7522,6 +7556,7 @@ int main() {
         run(a_steam_id_reaches_the_game_exactly);
         run(reskates_own_reading_is_not_a_plugins_time);
         run(a_plugin_over_its_time_budget_is_stopped);
+        run(the_player_sets_how_strict_the_limits_are);
         run(a_plugin_reloads_when_its_files_change);
         run(the_skater_can_be_read_moved_and_the_world_probed);
         run(teleport_equipment_choices_keep_permissions_and_host_limits);
