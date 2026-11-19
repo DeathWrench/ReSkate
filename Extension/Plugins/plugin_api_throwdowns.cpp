@@ -107,7 +107,8 @@ struct KitApi {
     static Plugin& files_call(lua_State* L, const char* what) {
         auto& plugin = plugin_of(L);
         need(L, plugin, "files", what);
-        if (!within(plugin.services_.now_ms(), plugin.files_second_, plugin.file_calls_, 64)) luaL_error(L, "more than 64 file calls in a second");
+        if (!within(plugin.services_.now_ms(), plugin.files_second_, plugin.file_calls_, plugin.limits_.file_calls_per_second))
+            luaL_error(L, "more than %d file calls in a second", plugin.limits_.file_calls_per_second);
         return plugin;
     }
     // list(folder?): the names in it, folders ending in "/"; or nil, why.
@@ -128,13 +129,14 @@ struct KitApi {
         lua_pushlstring(L, text.data(), text.size());
         return 1;
     }
-    // write(path, text): at most 1 MB a file and 1000 files; the folders it names are made.
+    // write(path, text): at most 512 MB a file (64 MB until 2.1.5: a pack a plugin downloads and opens can be
+    // that big) and 50000 files; the folders it names are made.
     static int files_write(lua_State* L) {
         auto& plugin = files_call(L, "reskate.files.write");
         const auto path = data_path(L, 1, false);
         std::size_t length = 0;
         const char* text = luaL_checklstring(L, 2, &length);
-        if (length > files_most_bytes) return result(L, "a file is at most 1 MB");
+        if (length > files_most_bytes) return result(L, "a file is at most 512 MB");
         return result(L, game_of(plugin).files_write(plugin.id(), path, std::string_view(text, length)));
     }
     // remove(path): a file, or a folder with nothing in it.
@@ -296,6 +298,28 @@ struct KitApi {
             if (!(std::abs(a) <= 100)) luaL_argerror(L, 1, "a velocity is at most 100 m/s on each axis");
         return result(L, game_of(plugin).set_velocity(plugin.id(), v, lua_toboolean(L, 2) != 0));
     }
+    // held(): whether the skater is held now, for this plugin (reskate.skater.freeze). freeze says only
+    // that the hold was asked for: the game takes it a tick later, and may not (a teleport on its way,
+    // a level loading).
+    static int held(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.control", "reskate.skater.held");
+        lua_pushboolean(L, game_of(plugin).skater_held(plugin.id()));
+        return 1;
+    }
+    // fly(velocity): the skater this plugin holds (reskate.skater.freeze) moves at `velocity` (m/s, in
+    // the world, 150 an axis at most) for the next 300 ms, so call it every tick; nil lets go of it and
+    // the skater hovers, as held. The skater itself moves, every physics step: on every screen, with
+    // what can be hit loaded around it, and from where it is when it is let go.
+    static int fly(lua_State* L) {
+        auto& plugin = plugin_of(L);
+        need(L, plugin, "skater.control", "reskate.skater.fly");
+        if (lua_isnoneornil(L, 1)) return result(L, game_of(plugin).fly(plugin.id(), std::nullopt));
+        const auto v = position_of(L, 1, "a velocity");
+        for (const auto a : v)
+            if (!(std::abs(a) <= 150)) luaL_argerror(L, 1, "a velocity is at most 150 m/s on each axis");
+        return result(L, game_of(plugin).fly(plugin.id(), v));
+    }
     // flip_speed(factor): flip tricks in the air turn at factor times their speed (0.05 to 10, times the
     // player's own flip speed) for the next 300 ms, so call it every tick; 1 or nil ends it. The game
     // still finishes a slowed flip before the landing.
@@ -312,7 +336,7 @@ struct KitApi {
         return result(L, game_of(plugin).skater_hold(plugin.id(), lua_toboolean(L, 1) != 0));
     }
 
-    static constexpr std::size_t files_most_bytes = 1u << 20;
+    static constexpr std::size_t files_most_bytes = 512u << 20;
     static void install(Plugin& plugin, lua_State* L);
 };
 
@@ -326,6 +350,6 @@ void KitApi::install(Plugin&, lua_State* L) {
     lua_pop(L, 1);
     add_functions(L, "files", {{"list", files_list}, {"read", files_read}, {"write", files_write}, {"remove", files_remove}});
     add_functions(L, "ui", {{"dialog", dialog}, {"close_dialog", close_dialog}});
-    add_functions(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}, {"cruise", cruise}, {"set_velocity", set_velocity}, {"flip_speed", flip_speed}});
+    add_functions(L, "skater", {{"push", push}, {"push_wait", push_wait}, {"push_reset", push_reset}, {"hold", hold}, {"cruise", cruise}, {"set_velocity", set_velocity}, {"fly", fly}, {"held", held}, {"flip_speed", flip_speed}});
 }
 }

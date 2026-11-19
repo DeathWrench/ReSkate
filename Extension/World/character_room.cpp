@@ -39,11 +39,14 @@ constexpr std::uint32_t button_action = 0xa2b71c93, button_navigation = 0xb1e14c
 // UI/Legacy/Flow/State/StateNavigationChanged.
 constexpr std::uint32_t navigation_queue = 0xcc4776b5, navigation_current = 0xf3ba9cf8, navigation_queued = 0xf437b255;
 constexpr std::uint32_t navigation_changed_event = 0xcb03d3ec;
+// UI/Foundations/Layers/Backgrounds/EnterCasEnvironment and ExitCasEnvironment: global events with no
+// fields (their TypeNameHash, from the game's data, 2026-11-16). See show_set.
+constexpr std::uint32_t enter_cas_event = 1546104285u, exit_cas_event = 2164282401u;
 // UI manager -> model manager.
 constexpr std::uintptr_t ui_model_manager = 0x140;
 
-// The menu's tab bar has up to seven tabs; RB goes to the next one.
-constexpr int max_tab_presses = 7;
+// The menu's tab bar has up to seven tabs; RB goes to the next one. (Ten presses, for a menu with a page or two more.)
+constexpr int max_tab_presses = 10;
 constexpr std::uint64_t tab_press_ms = 400, tap_ms = 150, tap_end_ms = 400;
 constexpr std::uint64_t post_retry_ms = 250, step_deadline_ms = 4000;
 constexpr std::uint64_t page_settle_ms = 300, queue_settle_ms = 1500;
@@ -56,12 +59,17 @@ constexpr int max_scans = 3;
 constexpr std::uint64_t scan_gap_ms = 15000;
 // The way back to the world: the Skaters page's Back closes the menu. ToggleMenu is for a menu that is still open.
 constexpr std::array<std::string_view, 2> way_back{"Back", "ToggleMenu"};
+// How long the game is given to look for controllers again (wake_controller_reads) before the next press.
+constexpr std::uint64_t wake_settle_ms = 900;
 
-enum class Way { none, look, wait_closed, open, wait_open, tab, wait_tab, wait_skater };
+enum class Way { none, look, wait_closed, open, wait_open, tab, wait_tab, wake, wait_skater };
 
 struct State {
     std::mutex mutex;
     std::atomic<std::uintptr_t> navigation_type{};
+    std::atomic<std::uintptr_t> enter_type{}, exit_type{};
+    std::atomic<bool> set_wanted{}, set_sent{};
+    std::uint64_t next_set_post{};
     std::atomic<bool> scanning{};
     std::atomic<Phase> phase{Phase::idle};
     std::uint64_t generation{}; // a new skater (a respawn, a new map) makes the found event type stale
@@ -81,6 +89,12 @@ struct State {
     std::uint64_t leave_step_deadline{}, leave_deadline{};
     // Once there: when the room was last seen on screen (the menu on its Skaters page), and checked.
     std::uint64_t room_seen_at{}, next_room_check{};
+    // The game's reads of the stand-in pad when the last press began (overlay::script_reads), and whether the game was asked to
+    // look for controllers this walk: with no controller connected skate. reads none, and the presses reached nothing.
+    std::uint64_t reads_at_press{}, reads_at_open{};
+    bool woke{};
+    // What each press did, for the log when the walk fails ("1 same/unread, 2 changed, ...").
+    std::string trace;
     std::string failure;
 };
 State& state() { static auto* value = new State; return *value; }
@@ -164,11 +178,12 @@ bool announce(std::uintptr_t base, std::uintptr_t type) noexcept {
         return false;
     }
 }
-bool still_navigation_type(std::uintptr_t type) noexcept {
+bool still_type(std::uintptr_t type, std::uint32_t wanted) noexcept {
     std::uintptr_t record{};
     std::uint32_t hash{};
-    return memory::peek(type, record) && memory::peek(record, hash) && hash == navigation_changed_event;
+    return memory::peek(type, record) && memory::peek(record, hash) && hash == wanted;
 }
+bool still_navigation_type(std::uintptr_t type) noexcept { return still_type(type, navigation_changed_event); }
 std::string_view navigate(std::uintptr_t base, State& s, std::string_view name, bool warn = true) noexcept {
     std::string_view why;
     const auto type = s.navigation_type.load(std::memory_order_acquire);
@@ -189,12 +204,16 @@ void start_scan(State& s) noexcept {
     try {
         std::thread([generation = s.generation] {
             auto& l = state();
-            std::array<multiplayer::NativeTypeQuery, 1> query{{{navigation_changed_event, 0, 2}}};
+            std::array<multiplayer::NativeTypeQuery, 3> query{{{navigation_changed_event, 0, 2}, {enter_cas_event, 0, 2}, {exit_cas_event, 0, 2}}};
             (void)multiplayer::find_native_types(query, true);
             {
                 // A scan that ran through a new map found the type of the map before.
                 std::lock_guard lock(l.mutex);
-                if (l.generation == generation) l.navigation_type.store(query[0].object, std::memory_order_release);
+                if (l.generation == generation) {
+                    l.navigation_type.store(query[0].object, std::memory_order_release);
+                    l.enter_type.store(query[1].object, std::memory_order_release);
+                    l.exit_type.store(query[2].object, std::memory_order_release);
+                }
             }
             l.scanning.store(false);
         }).detach();
@@ -208,10 +227,18 @@ void press_rb() {
     const auto ticks = [](std::uint64_t ms) { return static_cast<std::uint32_t>((ms * 60 + 999) / 1000); };
     overlay::play_pad({{0, pressed}, {ticks(tap_ms), neutral}, {ticks(tap_end_ms), neutral}});
 }
+// The menu's page as the log says it: its buttons' navigations, cut short.
+std::string page_words(const std::string& page) { return page.empty() ? std::string("none (no menu page)") : page.substr(0, 160); }
 // The caller holds s.mutex.
 void fail(State& s, std::string_view why) {
     s.failure = std::format("The character room did not open: {}.", why);
     logging::log(Level::warning, Channel::skater, "Character room: {}", s.failure);
+    // Enough to tell next time which step it was: the presses and whether the game read them, and the page it stood on.
+    logging::log(Level::info, Channel::skater,
+                 "Character room: room walk details: step {}, {} RB presses ({}), the game read the stand-in pad {} times this walk{}, "
+                 "last page: {}.",
+                 static_cast<int>(s.way), s.tab_presses, s.trace.empty() ? std::string("none") : s.trace,
+                 overlay::script_reads() - s.reads_at_open, s.woke ? " (asked to look for controllers)" : "", page_words(s.seen_page));
     // A menu that this walk opened does not stay open. Without the event type the walk sent nothing.
     if (s.way != Way::none && s.navigation_type.load(std::memory_order_acquire)) s.leave_steps_left = static_cast<int>(way_back.size());
     s.way = Way::none;
@@ -255,7 +282,8 @@ void step_way(std::uintptr_t base, State& s, std::uint64_t now) {
         s.way = Way::none;
         s.room_seen_at = now;
         s.phase.store(Phase::arrived, std::memory_order_release);
-        logging::log(Level::info, Channel::skater, "Character room: the room is open (the menu's Skaters page).");
+        logging::log(Level::info, Channel::skater, "Character room: the room is open (the menu's Skaters page, {} RB presses{}).", s.tab_presses,
+                     s.woke ? ", after asking the game to look for controllers" : "");
     } else if (now > s.open_deadline) fail(s, "it took too long");
     else if (!s.navigation_type.load(std::memory_order_acquire)) {
         if (!s.scanning.load() && s.scans >= max_scans) fail(s, "the game's menu was not found");
@@ -282,14 +310,39 @@ void step_way(std::uintptr_t base, State& s, std::uint64_t now) {
         else if (!page_shown && now < s.way_deadline) {
         } else if (s.tab_presses >= max_tab_presses) fail(s, "the Skaters page did not open");
         else {
+            s.reads_at_press = overlay::script_reads();
             press_rb();
             ++s.tab_presses;
             s.page_at_press = page;
             go(s, Way::wait_tab, now, tab_wait_ms);
         }
     } else if (s.way == Way::wait_tab) {
+        const bool pressed = now > s.way_started + tab_press_ms;
+        const bool read = overlay::script_reads() != s.reads_at_press;
         if (!in_menu) fail(s, "the menu closed");
-        else if ((now > s.way_started + tab_press_ms && page != s.page_at_press) || now > s.way_deadline) go(s, Way::tab, now, tab_wait_ms);
+        else if (pressed && page != s.page_at_press) {
+            s.trace += std::format("{}{} changed", s.trace.empty() ? "" : ", ", s.tab_presses);
+            go(s, Way::tab, now, tab_wait_ms);
+        } else if (pressed && !read && !s.woke) {
+            // The press was never read: skate. polls no controller until it has seen one arrive (none is connected, or the
+            // player's pad is one it reads another way). Asked to look for controllers while the stand-in is still connected
+            // (it lingers after a press), it reads it from then on; the press is made again. (Packaboul's report: the room
+            // nearly never opened, now and then it did - when something had been plugged in.)
+            s.woke = true;
+            s.trace += std::format("{}{} unread", s.trace.empty() ? "" : ", ", s.tab_presses);
+            --s.tab_presses;
+            logging::log(Level::info, Channel::skater,
+                         "Character room: the game did not read the room walk's controller press (no controller connected?): asking it "
+                         "to look for controllers, then pressing again.");
+            overlay::wake_controller_reads();
+            go(s, Way::wake, now, wake_settle_ms);
+        } else if (now > s.way_deadline) {
+            s.trace += std::format("{}{} same{}", s.trace.empty() ? "" : ", ", s.tab_presses, read ? "" : "/unread");
+            go(s, Way::tab, now, tab_wait_ms);
+        }
+    } else if (s.way == Way::wake) {
+        if (!in_menu) fail(s, "the menu closed");
+        else if (now > s.way_deadline) go(s, Way::tab, now, tab_wait_ms);
     } else if (s.way == Way::wait_skater) {
         // No press here: it would leave the page.
         if (!in_menu) fail(s, "the menu closed");
@@ -332,6 +385,10 @@ void open() {
     s.scans = 0;
     s.next_scan = 0;
     s.failure.clear();
+    s.trace.clear();
+    s.woke = false;
+    s.tab_presses = 0;
+    s.reads_at_open = s.reads_at_press = overlay::script_reads();
     s.open_deadline = now + open_wait_ms;
     s.phase.store(Phase::opening, std::memory_order_release);
     go(s, Way::look, now, open_wait_ms);
@@ -347,6 +404,8 @@ void leave() noexcept {
     s.phase.store(Phase::leaving, std::memory_order_release);
 }
 Phase phase() noexcept { return state().phase.load(std::memory_order_acquire); }
+void show_set(bool on) noexcept { state().set_wanted.store(on, std::memory_order_release); }
+bool set_shown() noexcept { return state().set_sent.load(std::memory_order_acquire); }
 std::string failure() {
     auto& s = state();
     std::lock_guard lock(s.mutex);
@@ -362,6 +421,9 @@ void tick(std::uintptr_t base, std::uintptr_t skater, bool ready, bool prepare) 
             if (s.skater) {
                 ++s.generation;
                 s.navigation_type.store(0, std::memory_order_release);
+                s.enter_type.store(0, std::memory_order_release);
+                s.exit_type.store(0, std::memory_order_release);
+                s.set_sent.store(false, std::memory_order_release); // (a new map's room is as the game made it: not shown)
                 s.scans = 0;
                 if (s.way != Way::none) fail(s, "the map changed");
                 s.leave_steps_left = 0;
@@ -380,7 +442,21 @@ void tick(std::uintptr_t base, std::uintptr_t skater, bool ready, bool prepare) 
         const auto p = s.phase.load(std::memory_order_acquire);
         // The scan is not cheap: for a walk, or once a map ahead of one, a few times at most.
         const bool ahead = prepare && p == Phase::idle && s.scans == 0 && now > s.skater_since + 10000;
-        if ((ahead || p == Phase::opening || p == Phase::leaving) && !s.navigation_type.load(std::memory_order_acquire) && !s.scanning.load() &&
+        // The set, shown or taken away: the event is posted once, when its type is found.
+        const bool set_wanted = s.set_wanted.load(std::memory_order_acquire);
+        const bool set_due = set_wanted != s.set_sent.load(std::memory_order_acquire);
+        const auto set_type = (set_wanted ? s.enter_type : s.exit_type).load(std::memory_order_acquire);
+        if (set_due && set_type && now >= s.next_set_post) {
+            s.next_set_post = now + post_retry_ms;
+            if (!still_type(set_type, set_wanted ? enter_cas_event : exit_cas_event)) {
+                (set_wanted ? s.enter_type : s.exit_type).store(0, std::memory_order_release);
+                s.next_scan = 0;
+            } else if (multiplayer::native_ui_event_code_known(base) && announce(base, set_type)) {
+                s.set_sent.store(set_wanted, std::memory_order_release);
+                logging::log(Level::info, Channel::skater, "Character room: the set is {} (the game's own event, no menu).", set_wanted ? "shown" : "taken away");
+            }
+        }
+        if ((ahead || p == Phase::opening || p == Phase::leaving || (set_due && !set_type)) && !s.navigation_type.load(std::memory_order_acquire) && !s.scanning.load() &&
             now >= s.next_scan && s.scans < max_scans) {
             s.next_scan = now + scan_gap_ms;
             ++s.scans;

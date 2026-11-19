@@ -5,6 +5,7 @@
 #include "Extension/Skater/skater_movement.h"
 #include "plugin_session_feed.h"
 #include "plugin_content.h"
+#include "plugin_font.h"
 #include "Runtime/runtime_internal.h"
 #include "plugin_ui.h"
 #include "Engine/Game/World/park_rotation.h"
@@ -42,8 +43,10 @@
 #include "Extension/Throwdowns/custom_modes.h"
 #include "Extension/Throwdowns/throwdown_kit.h"
 #include "plugin_camera.h"
+#include "Extension/Multiplayer/Session/skater_copy.h"
 #include "Extension/Multiplayer/Session/session.h"
 #include "Extension/Multiplayer/Remote/stand_ins.h"
+#include "Extension/Multiplayer/Remote/native_audio.h"
 #include "Extension/Music/external_player.h"
 #include "Extension/Music/music_inject.h"
 #include "Extension/Music/spotify_station.h"
@@ -78,6 +81,8 @@
 #include "Extension/UI/Overlay/overlay.h"
 #include "Extension/UI/Overlay/game_map.h"
 #include "Extension/UI/Overlay/screen_look.h"
+#include "Extension/UI/Overlay/screen_shader.h"
+#include "Extension/UI/Overlay/world_shader.h"
 #include "Extension/UI/Overlay/viewmodel.h"
 #include "Extension/UI/Overlay/scripted_pad.h"
 #include "Engine/Game/Input/pad_output.h"
@@ -91,6 +96,8 @@
 #include "Extension/Customization/worn_items.h"
 #include "Extension/Multiplayer/Hud/game_ui_state.h"
 #include <shellapi.h>
+#include "Engine/Core/Platform/launcher_support.h"
+#include "Extension/Plugins/plugin_manifest.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -263,6 +270,20 @@ public:
     // hid pressed Start and saw nothing. So while a game menu is up the UI is shown again, and hidden
     // once more when the menu closes. Each client tick.
     void tick_hud() {
+        keep_hold();
+        // A room opened quietly: the game's interface stays hidden with its menu up, until the walk back
+        // is done (or the room failed); then it is as it was, or as the plugins that hide the HUD have it.
+        if (room_quiet_) {
+            const auto phase = character_room::phase();
+            const bool held = !room_owner_.empty() && (phase == character_room::Phase::opening || phase == character_room::Phase::arrived);
+            if (held || phase == character_room::Phase::leaving) return;
+            room_quiet_ = false;
+            const bool menu = multiplayer::native_pause_menu_open();
+            const bool hidden = room_ui_was_hidden_ || (!hud_hiders_.empty() && !hud_was_hidden_ && !menu);
+            hud_shown_for_menu_ = menu;
+            queue(overlay::DebugAction::set_game_ui_hidden, hidden);
+            return;
+        }
         if (hud_hiders_.empty() || hud_was_hidden_) return;
         const bool menu = multiplayer::native_pause_menu_open();
         if (menu == hud_shown_for_menu_) return;
@@ -333,6 +354,26 @@ public:
         }
     }
     void entity_remove(std::string_view plugin, std::uint32_t id) override { world_entities::remove(plugin, id); }
+    // Which of the game's prefabs a plugin may place: its light rigs and its menus' backdrops. Nothing
+    // with gameplay in it: a prefab can hold any logic the game has (a store, a challenge, a spawner).
+    std::string piece_set(std::string_view plugin, std::uint32_t id, std::string_view prefab, const std::array<float, 16>& matrix) override {
+        std::string name(prefab);
+        std::transform(name.begin(), name.end(), name.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const bool allowed = (name.starts_with("lighting/prefabs/") || name.starts_with("presentation/assets/prefabs/backgrounds/prefab_background_")) &&
+                             name.find("..") == std::string::npos;
+        if (!allowed) return "only the game's light rigs (lighting/prefabs/) and menu backdrops (presentation/assets/prefabs/backgrounds/prefab_background_) are set pieces";
+        return world_entities::set_piece(plugin, id, std::move(name), matrix);
+    }
+    void piece_remove(std::string_view plugin, std::uint32_t id) override { world_entities::remove_piece(plugin, id); }
+    std::string skater_copy(std::string_view plugin, std::optional<SkaterCopyPlace> place) override {
+        if (!place) return multiplayer::set_skater_copy(plugin, std::nullopt);
+        multiplayer::SkaterCopy copy;
+        copy.position = place->position;
+        copy.board = place->board;
+        return multiplayer::set_skater_copy(plugin, copy);
+    }
+    bool skater_copy_shown() override { return multiplayer::skater_copy_shown(); }
+    bool piece_ready(std::string_view plugin, std::uint32_t id) override { return world_entities::piece_ready(plugin, id); }
     void entity_clear(std::string_view plugin) override { world_entities::clear(plugin); }
     int entity_status(std::string_view plugin, std::uint32_t id) override { return static_cast<int>(world_entities::status(plugin, id)); }
     bool entities_ready(std::string_view plugin) override { return world_entities::ready(plugin); }
@@ -390,6 +431,11 @@ public:
             out.matrix = m;
         }
         return out;
+    }
+    std::vector<std::pair<std::string, double>> world_controls() override {
+        const auto c = local_profile_world_controls().choices;
+        return {{"fog", c.fog}, {"fog_distance", c.fog_distance}, {"sky_brightness", c.sky_brightness}, {"clouds", c.clouds},
+                {"wind_strength", c.wind_strength}, {"wind_direction", c.wind_direction}, {"traffic", c.traffic}, {"pedestrians", c.pedestrians}};
     }
     std::string set_environment(std::string_view kind, std::string_view key, std::string_view value) override {
         if (kind == "tod") return time_of_day(key);
@@ -643,6 +689,27 @@ public:
     std::string board_set(std::string_view plugin, int bone, const BoardBone& value, bool world) override {
         return board_pose::set(plugin, bone, {value.position, value.rotation, value.scale}, world ? board_pose::Space::world : board_pose::Space::local);
     }
+    std::string board_mount(std::string_view plugin, std::optional<BoardMount> mount) override {
+        const auto now = GetTickCount64();
+        if (!mounter_.empty() && mounter_ != plugin && now < mount_at_ + 300) return mount ? mounter_ + " places the board" : std::string{};
+        if (!mount) {
+            if (mounter_ == plugin) {
+                skater_animation::board_mount(std::nullopt);
+                mounter_.clear();
+            }
+            return {};
+        }
+        mounter_ = plugin;
+        mount_at_ = now;
+        skater_animation::BoardMount out;
+        out.place.position = mount->position;
+        out.place.rotation = mount->rotation;
+        out.with_skater = mount->with_skater;
+        out.weight = mount->weight;
+        for (const auto& bone : mount->bones) out.bones.push_back({static_cast<std::uint8_t>(bone.bone), bone.position, bone.rotation});
+        skater_animation::board_mount(out);
+        return {};
+    }
     std::string board_hide(std::string_view plugin, int bone, bool everyone) override { return board_pose::hide(plugin, bone, everyone); }
     void board_clear(std::string_view plugin, int bone) override { board_pose::clear(plugin, bone); }
     std::string board_scale(std::string_view plugin, int bone, std::optional<Vec3> size) override { return board_pose::scale(plugin, bone, size); }
@@ -687,15 +754,15 @@ public:
         if (!kept.declared) return std::nullopt;
         return VariantState{kept.installed, mods::chosen_variant(plugin), mods::variant_in_play(plugin)};
     }
-    std::string choose_variant(std::string_view plugin, const std::filesystem::path& package, std::string_view variant) override {
+    std::string choose_variant(std::string_view plugin, const std::filesystem::path& package, std::string_view variant, bool now) override {
         const auto state = variants(plugin, package);
         if (!state) return "its mod declares no variants";
         std::string name(variant);
         for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         if (std::find(state->installed.begin(), state->installed.end(), name) == state->installed.end()) return "its mod has no variant " + name;
-        if (live_mods::busy()) return "the mods are being applied";
+        if (now && live_mods::busy()) return "the mods are being applied";
         if (!mods::save_variant(plugin, name)) return "the choice could not be saved";
-        if (name != state->in_play) (void)live_mods::apply(true);
+        if (now && name != state->in_play) (void)live_mods::apply(true);
         return {};
     }
     // ---- outfit --------------------------------------------------------------------------------------
@@ -843,7 +910,9 @@ public:
         if (throwdowns::kit::flag::state().mode.starts_with(std::string(plugin) + "/")) throwdowns::kit::flag::leave();
     }
     // ---- files: <game>/Mods/.reskate_plugin_data/<plugin>/ (mod_list.h plugin_data_folder) -------------
-    static constexpr std::size_t most_file_bytes = 1u << 20, most_files = 1000;
+    // (1 MB a file and 1000 files until 2.1.5: a plugin that keeps a library of clips, or of anything it
+    // makes from the game, passed both.)
+    static constexpr std::size_t most_file_bytes = 512u << 20, most_files = 50000;
     // Before 2026-10-20 the folder was Mods/.reskate/data/<plugin>/, which a full merge deletes. The
     // merge moves what is still there first (mods::keep_plugin_data); a merge that kept its patch did
     // not run it, so the first look for a plugin's folder does.
@@ -859,8 +928,18 @@ public:
     // (through a junction someone made in it) is refused.
     static std::string data_file(std::string_view plugin, std::string_view path, std::filesystem::path& root, std::filesystem::path& file) {
         try {
-            root = game_folder() / mods::mods_folder / mods::plugin_data_folder / std::filesystem::path(std::string(plugin));
-            move_old_data();
+            // "<folder>:<path>": a folder beside the game the plugin's manifest names (the API checked it does).
+            if (const auto colon = path.find(':'); colon != std::string_view::npos) {
+                const auto name = path.substr(0, colon);
+                if (!granted_folder_name(name)) return "not a folder a plugin may be granted";
+                root = game_folder() / std::filesystem::path(std::string(name));
+                path = path.substr(colon + 1);
+                std::error_code status;
+                if (std::filesystem::exists(root, status) && !std::filesystem::is_directory(root, status)) return "a file is there, not a folder";
+            } else {
+                root = game_folder() / mods::mods_folder / mods::plugin_data_folder / std::filesystem::path(std::string(plugin));
+                move_old_data();
+            }
             file = path.empty() ? root : root / std::filesystem::path(std::string(path));
             std::error_code error;
             const auto real_root = std::filesystem::weakly_canonical(root, error);
@@ -914,12 +993,7 @@ public:
         if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
         std::error_code error;
         if (std::filesystem::is_directory(file, error)) return "a folder is there";
-        if (!std::filesystem::exists(file, error)) {
-            std::size_t count = 0;
-            if (std::filesystem::exists(root, error))
-                for (std::filesystem::recursive_directory_iterator it(root, error), end; !error && it != end; it.increment(error))
-                    if (it->is_regular_file(error) && ++count >= most_files) return "the data folder holds 1000 files already";
-        }
+        if (!std::filesystem::exists(file, error) && !room_for_a_file(root)) return "the folder holds 50000 files already";
         std::filesystem::create_directories(file.parent_path(), error);
         if (error) return "the folder cannot be made";
         auto temporary = file;
@@ -935,6 +1009,130 @@ public:
         }
         return {};
     }
+    // Whether `root` has room for one more file. Counting tens of thousands of files takes milliseconds,
+    // so a count is kept for five seconds and only counted up meanwhile.
+    bool room_for_a_file(const std::filesystem::path& root) {
+        auto& known = file_counts_[root.native()];
+        const auto now = GetTickCount64();
+        if (!known.counted_at || now - known.counted_at > 5000) {
+            std::error_code error;
+            known.files = 0;
+            if (std::filesystem::exists(root, error))
+                for (std::filesystem::recursive_directory_iterator it(root, error), end; !error && it != end; it.increment(error))
+                    if (it->is_regular_file(error)) ++known.files;
+            known.counted_at = now ? now : 1;
+        }
+        if (known.files >= most_files) return false;
+        ++known.files;
+        return true;
+    }
+    struct FileCount {
+        std::size_t files{};
+        std::uint64_t counted_at{};
+    };
+    std::map<std::wstring, FileCount> file_counts_;
+    static double seconds_of(std::filesystem::file_time_type written) {
+        // (Windows' file clock counts 100 ns from 1601; 11644473600 s lie between that and 1970.)
+        return static_cast<double>(written.time_since_epoch().count()) / 1e7 - 11644473600.0;
+    }
+    std::string files_info(std::string_view plugin, std::string_view path, FileInfo& found) override {
+        std::filesystem::path root, file;
+        if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
+        std::error_code error;
+        if (!std::filesystem::exists(file, error)) return "not found";
+        found.folder = std::filesystem::is_directory(file, error);
+        found.size = found.folder ? 0 : std::filesystem::file_size(file, error);
+        const auto written = std::filesystem::last_write_time(file, error);
+        if (error) return "it cannot be read";
+        found.modified = seconds_of(written);
+        return {};
+    }
+    std::string files_move(std::string_view plugin, std::string_view from, std::string_view to) override {
+        std::filesystem::path root, source, target_root, target;
+        if (auto why = data_file(plugin, from, root, source); !why.empty()) return why;
+        if (auto why = data_file(plugin, to, target_root, target); !why.empty()) return why;
+        std::error_code error;
+        if (!std::filesystem::exists(source, error)) return "not found";
+        if (std::filesystem::is_directory(target, error)) return "a folder is there";
+        if (!std::filesystem::exists(target, error) && target_root != root && !room_for_a_file(target_root)) return "the folder holds 50000 files already";
+        std::filesystem::create_directories(target.parent_path(), error);
+        if (error) return "the folder cannot be made";
+        // (In place of a file there, in one step where Windows can: what a saved file is replaced with.)
+        if (!MoveFileExW(source.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH))
+            return "it cannot be moved";
+        file_counts_.clear();
+        return {};
+    }
+    std::string files_copy(std::string_view plugin, std::string_view from, std::string_view to) override {
+        std::filesystem::path root, source, target_root, target;
+        if (auto why = data_file(plugin, from, root, source); !why.empty()) return why;
+        if (auto why = data_file(plugin, to, target_root, target); !why.empty()) return why;
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(source, error)) return "not found";
+        if (std::filesystem::file_size(source, error) > most_file_bytes) return std::format("the file is larger than {} MB", most_file_bytes >> 20);
+        if (std::filesystem::is_directory(target, error)) return "a folder is there";
+        if (!std::filesystem::exists(target, error) && !room_for_a_file(target_root)) return "the folder holds 50000 files already";
+        std::filesystem::create_directories(target.parent_path(), error);
+        if (error) return "the folder cannot be made";
+        if (!std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, error) || error) return "it cannot be copied";
+        return {};
+    }
+    std::string files_touch(std::string_view plugin, std::string_view path, double modified) override {
+        std::filesystem::path root, file;
+        if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(file, error)) return "not found";
+        const auto ticks = static_cast<std::filesystem::file_time_type::rep>((modified + 11644473600.0) * 1e7);
+        std::filesystem::last_write_time(file, std::filesystem::file_time_type(std::filesystem::file_time_type::duration(ticks)), error);
+        return error ? std::string("its time cannot be set") : std::string{};
+    }
+    std::string files_recycle(std::string_view plugin, const std::vector<std::string>& paths) override {
+        // SHFileOperation takes every path in one list, each ended by a zero and the list by another.
+        std::wstring list;
+        for (const auto& path : paths) {
+            std::filesystem::path root, file;
+            if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
+            std::error_code error;
+            if (file == root) return "the folder itself cannot be put in the Recycle Bin";
+            if (!std::filesystem::exists(file, error)) return path + ": not found";
+            list += file.native();
+            list.push_back(L'\0');
+        }
+        if (list.empty()) return {};
+        list.push_back(L'\0');
+        SHFILEOPSTRUCTW operation{};
+        operation.wFunc = FO_DELETE;
+        operation.pFrom = list.c_str();
+        // To the Recycle Bin, asking nothing and showing nothing; never deleted for good where there is no bin.
+        operation.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI | FOF_WANTNUKEWARNING;
+        if (SHFileOperationW(&operation) != 0 || operation.fAnyOperationsAborted) return "they could not be put in the Recycle Bin";
+        file_counts_.clear();
+        return {};
+    }
+    std::string files_hash(std::string_view plugin, std::string_view path, std::string& digest) override {
+        std::filesystem::path root, file;
+        if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(file, error)) return "not found";
+        try {
+            digest = launcher::sha256_file(file);
+        } catch (const std::exception&) {
+            return "the file cannot be read";
+        }
+        return digest.empty() ? std::string("the file cannot be read") : std::string{};
+    }
+    std::string files_place(std::string_view plugin, std::string_view path, std::filesystem::path& file, std::uint64_t& stamp) override {
+        std::filesystem::path root;
+        if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
+        std::error_code error;
+        stamp = 0;
+        if (!std::filesystem::is_regular_file(file, error)) return {};
+        const auto written = std::filesystem::last_write_time(file, error);
+        const auto size = error ? 0 : std::filesystem::file_size(file, error);
+        // (Never 0 for a file that is there.)
+        if (!error) stamp = (static_cast<std::uint64_t>(written.time_since_epoch().count()) * 1099511628211ull ^ size) | 1;
+        return {};
+    }
     std::string files_remove(std::string_view plugin, std::string_view path) override {
         std::filesystem::path root, file;
         if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
@@ -943,6 +1141,68 @@ public:
         if (std::filesystem::is_directory(file, error) && !std::filesystem::is_empty(file, error)) return "the folder is not empty";
         if (!std::filesystem::remove(file, error) || error) return "it cannot be removed";
         return {};
+    }
+    // ---- a zip that is a file: read and unpacked by plugin_zip_file.cpp ---------------------------------
+    std::string zip_list(std::string_view plugin, std::string_view path, std::vector<zip_file::Entry>& entries) override {
+        std::filesystem::path root, file;
+        if (auto why = data_file(plugin, path, root, file); !why.empty()) return why;
+        return zip_file::list(file, entries);
+    }
+    // The zip and the folder are placed here, and the folder's room counted, as for a file a plugin
+    // writes; reading the zip, checking what is in it and the writes are the thread's.
+    std::string files_unzip(std::string_view plugin, zip_file::Request request, std::shared_ptr<zip_file::Job> job) override {
+        zip_file::Place place;
+        std::filesystem::path root;
+        if (auto why = data_file(plugin, request.zip, root, place.zip); !why.empty()) return why;
+        if (auto why = data_file(plugin, request.folder, place.root, place.folder); !why.empty()) return why;
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(place.zip, error)) return "not found";
+        if (std::filesystem::exists(place.folder, error) && !std::filesystem::is_directory(place.folder, error)) return "a file is there, not a folder";
+        // How many more files the folder's top may hold. The thread's files are not counted as they
+        // land, so the count is taken again the next time it is asked for.
+        if (!room_for_a_file(place.root)) return "the folder holds 50000 files already";
+        auto& known = file_counts_[place.root.native()];
+        place.room = most_files - (known.files - 1);
+        known.counted_at = 0;
+        return zip_file::unpack_later(std::move(request), std::move(place), std::move(job));
+    }
+    // ---- picture: drawn by plugin_picture.cpp, off this thread -----------------------------------------
+    // Where a picture of the data folder is on disk; nothing for one that cannot be placed, and its
+    // step then draws nothing.
+    static std::filesystem::path data_picture(std::string_view plugin, std::string_view path) {
+        std::filesystem::path root, file;
+        return data_file(plugin, path, root, file).empty() ? file : std::filesystem::path{};
+    }
+    static void place_pictures(std::string_view plugin, std::vector<picture::Step>& steps) {
+        for (auto& step : steps) {
+            if (!step.picture.data.empty()) step.picture.file = data_picture(plugin, step.picture.data);
+            place_pictures(plugin, step.steps);
+        }
+    }
+    // The file is placed and counted here, as a file a plugin writes is; the drawing and the write
+    // (beside it, then moved into place) are the thread's.
+    std::string picture_make(std::string_view plugin, picture::Request request, std::shared_ptr<picture::Job> job) override {
+        std::filesystem::path root, file;
+        if (auto why = data_file(plugin, request.path, root, file); !why.empty()) return why;
+        std::error_code error;
+        if (std::filesystem::is_directory(file, error)) return "a folder is there";
+        if (!std::filesystem::exists(file, error) && !room_for_a_file(root)) return "the folder holds 50000 files already";
+        std::filesystem::create_directories(file.parent_path(), error);
+        if (error) return "the folder cannot be made";
+        place_pictures(plugin, request.steps);
+        picture::make_later(std::move(request), std::move(file), std::move(job));
+        return {};
+    }
+    std::optional<double> picture_text_width(std::string_view, const picture::File& font, std::string_view text, float size) override {
+        return picture::text_width(font.file, text, size);
+    }
+    std::optional<std::pair<std::uint32_t, std::uint32_t>> picture_size(std::string_view plugin, const picture::File& file) override {
+        return picture::size_of(file.data.empty() ? file.file : data_picture(plugin, file.data));
+    }
+    // A plugin's own font: DirectWrite reads it (plugin_font.h), once a file, and the overlay sets its
+    // texts by the same metrics (Extension/UI/Overlay/plugin_fonts.cpp).
+    std::shared_ptr<const plugin_ui::detail::FontMetrics> plugin_font_metrics(std::string_view, std::string_view, const std::filesystem::path& file) override {
+        return font::metrics(file);
     }
     // ---- ui.dialog ----------------------------------------------------------------------------------
     std::string dialog_open(std::string_view plugin, const DialogSpec& spec) override { return overlay::open_plugin_dialog(plugin, spec); }
@@ -993,6 +1253,16 @@ public:
         set_plugin_cruise(speed, may_slow);
         return {};
     }
+    bool skater_held(std::string_view plugin) override { return freezers_.contains(std::string(plugin)) && noclip_active(); }
+    std::string fly(std::string_view plugin, std::optional<Vec3> velocity) override {
+        if (!velocity) {
+            set_plugin_flight({}, false);
+            return {};
+        }
+        if (!freezers_.contains(std::string(plugin))) return "the skater is not held: reskate.skater.freeze(true) first";
+        set_plugin_flight(*velocity, true);
+        return {};
+    }
     std::string set_velocity(std::string_view, const Vec3& velocity, bool add) override {
         if (multiplayer_session_active() && !session_boosts_allowed()) return "the host has turned boosts off";
         if (multiplayer::local_throwdown_active() && !competition_stock_physics()) return "not while a throwdown runs";
@@ -1019,6 +1289,14 @@ public:
         const auto slam = skater_events::last_slam();
         if (!slam.at) return std::nullopt;
         return SlamNews{slam.force, slam.cause, static_cast<double>(GetTickCount64() - slam.at)};
+    }
+    std::string skydive() override {
+        if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
+        if (!input_allowed()) return "gameplay input is unavailable";
+        NoBailSkater skater;
+        if (!no_bail_skater(skater)) return "the local skater is unavailable";
+        no_bail_request_skydive();
+        return {};
     }
     std::string wipeout(float force) override {
         if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
@@ -1291,12 +1569,34 @@ public:
         s.bars = look->bars, s.hood = look->hood, s.grade = look->grade, s.soft = look->soft, s.scanlines = look->scanlines, s.grain = look->grain;
         s.dropouts = look->dropouts, s.head_switching = look->head_switching, s.tracking = look->tracking, s.smear = look->smear, s.iris = look->iris;
         s.rolling = look->rolling;
+        s.tone = look->tone, s.tone_dark = look->tone_dark, s.tone_bright = look->tone_bright;
+        s.tone_curve = look->tone_curve, s.tone_noise = look->tone_noise;
         s.strength = {look->bars_strength, look->hood_strength, look->grade_strength, look->soft_strength, look->scanlines_strength,
                       look->grain_strength, look->dropouts_strength, look->head_switching_strength, look->smear_strength};
         s.text = look->text;
         screen_look::set(s);
         return {};
     }
+    std::string screen_shader(std::string_view plugin, std::optional<ScreenShader> shader) override {
+        if (!shader) {
+            screen_shader::clear(plugin);
+            return {};
+        }
+        return screen_shader::set(plugin, shader->file, shader->bytes, shader->kind, shader->values);
+    }
+    std::string world_shader(std::string_view plugin, std::optional<WorldShader> shader) override {
+        if (!shader) {
+            world_shader::clear(plugin);
+            return {};
+        }
+        return world_shader::set(plugin, shader->file, shader->bytes, shader->kind, shader->values, shader->heights);
+    }
+    std::string world_shader_data(std::string_view plugin, std::shared_ptr<const std::string> bytes) override {
+        return world_shader::set_data(plugin, std::move(bytes));
+    }
+    void world_shader_anchor(std::string_view plugin, std::optional<Vec3> at) override { world_shader::set_anchor(plugin, at); }
+    std::optional<double> world_shader_cost(std::string_view plugin) override { return world_shader::cost_ms(plugin); }
+    double world_shader_clock() override { return world_shader::clock_seconds(); }
     // ---- viewmodel -----------------------------------------------------------------------------------
     std::string viewmodel_load(std::string_view plugin, const std::filesystem::path& file) override {
         if (!viewmodeler_.empty() && viewmodeler_ != plugin) return viewmodeler_ + " has the viewmodel";
@@ -1361,10 +1661,15 @@ public:
     static skater_animation::Shown shown_of(Shown shown) {
         return shown == Shown::others ? skater_animation::Shown::others : shown == Shown::me ? skater_animation::Shown::me : skater_animation::Shown::everyone;
     }
-    std::string skater_pose(std::string_view plugin, const std::vector<JointOffset>& offsets, float weight, Shown shown) override {
+    std::string skater_pose(std::string_view plugin, const std::vector<JointOffset>& offsets, float weight, Shown shown, bool still) override {
         const auto now = GetTickCount64();
         if (!poser_.empty() && poser_ != plugin && now < pose_at_ + 300) return offsets.empty() ? std::string{} : poser_ + " poses the skater";
         if (offsets.empty()) {
+            // (The others' own pose let go: the pose drawn here stays, and whose it is.)
+            if (shown == Shown::others) {
+                if (poser_ == plugin) skater_animation::pose({}, 1, skater_animation::Shown::others);
+                return {};
+            }
             if (poser_ == plugin) {
                 skater_animation::pose({}, 1);
                 poser_.clear();
@@ -1374,8 +1679,8 @@ public:
         poser_ = plugin;
         pose_at_ = now;
         std::vector<skater_animation::PoseOffset> out;
-        for (const auto& o : offsets) out.push_back({o.joint, o.rotation, o.scale, o.offset, o.place, o.keep_children});
-        skater_animation::pose(std::move(out), weight, shown_of(shown));
+        for (const auto& o : offsets) out.push_back({o.joint, o.rotation, o.scale, o.offset, o.place, o.scale_to, o.keep_children});
+        skater_animation::pose(std::move(out), weight, shown_of(shown), still);
         return {};
     }
     std::string camera_cycle(std::string_view plugin, CycleCamera state) override {
@@ -1481,6 +1786,22 @@ public:
     std::string tune(std::string_view plugin, std::string_view id, std::optional<double> value) override {
         return trainer::plugin_tune(plugin, id, value);
     }
+    std::string trainer_preset(std::string_view plugin, std::string_view name,
+                               std::optional<std::map<std::string, double, std::less<>>> values) override {
+        return trainer::plugin_preset(plugin, name, std::move(values));
+    }
+    static std::vector<float> pose_floats(const std::vector<anim_studio::Joint>& pose) {
+        std::vector<float> out;
+        out.reserve(pose.size() * 10);
+        for (const auto& j : pose) {
+            out.insert(out.end(), j.scale.begin(), j.scale.end());
+            out.insert(out.end(), j.rotation.begin(), j.rotation.end());
+            out.insert(out.end(), j.position.begin(), j.position.end());
+        }
+        return out;
+    }
+    std::vector<float> skater_local_pose() override { return pose_floats(skater_animation::local_pose()); }
+    std::vector<float> skater_drawn_pose() override { return pose_floats(skater_animation::drawn_pose()); }
     std::optional<JointPlace> skater_joint(std::uint64_t player, std::uint16_t joint) override {
         if (!player) {
             const auto at = skater_animation::joint(joint);
@@ -1538,7 +1859,8 @@ public:
         overlay::pad_tick();
         character_room::tick(base, component, component != 0, false);
         const auto room = character_room::phase();
-        skater_animation::show_in_room(!room_owner_.empty() && room == character_room::Phase::arrived);
+        skater_animation::show_in_room((!room_owner_.empty() && room == character_room::Phase::arrived) ||
+                                       (!set_owner_.empty() && set_skater_ && character_room::set_shown()));
     }
     // ---- general services for a game layer in Lua ------------------------------------------------------
     std::optional<SkaterTelemetry> skater_telemetry(std::string_view plugin) override {
@@ -1579,17 +1901,27 @@ public:
     }
     // Only while the game's own window is in front, as the pad is read: a key held in another
     // program is not the game's (a plugin's keys fired while the player typed elsewhere).
-    bool key_down(int virtual_key) override { return joystick::game_in_foreground() && overlay::key_down(virtual_key); }
+    // And not while chat, the console or a search box is typed in: reskate.input.key is read by
+    // plugins that never ask reskate.input.allowed, and a letter of a chat message opened their
+    // menus and drove their vehicles (binds were always held back there, take_presses above).
+    bool key_down(int virtual_key) override {
+        return joystick::game_in_foreground() && !overlay::text_entry_open() && overlay::key_down(virtual_key);
+    }
     int mouse_wheel() override { return overlay::take_mouse_wheel(); }
     // One read of the overlay's mouse a call, shared out: every plugin that read it in the last two
     // seconds gets the movement, so two plugins never take it from each other.
     std::string typed_text(bool capture) override { return overlay::take_plugin_text(capture); }
-    std::string room_open(std::string_view plugin) override {
+    std::string room_open(std::string_view plugin, bool quiet) override {
         if (!room_owner_.empty() && room_owner_ != plugin) return room_owner_ + " has the character room";
         if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
         const auto phase = character_room::phase();
         if (room_owner_ == plugin && (phase == character_room::Phase::opening || phase == character_room::Phase::arrived)) return {};
         room_owner_ = plugin;
+        if (quiet && !room_quiet_) {
+            room_quiet_ = true;
+            room_ui_was_hidden_ = base_ && multiplayer::sample_game_ui_state(base_).ui_hidden;
+            queue(overlay::DebugAction::set_game_ui_hidden, true);
+        }
         character_room::open();
         return {};
     }
@@ -1599,6 +1931,23 @@ public:
         skater_animation::show_in_room(false);
         character_room::leave();
     }
+    std::string room_show(std::string_view plugin, bool on, bool skater) override {
+        if (!on) {
+            if (set_owner_ != plugin) return {};
+            set_owner_.clear();
+            set_skater_ = false;
+            character_room::show_set(false);
+            return {};
+        }
+        if (!set_owner_.empty() && set_owner_ != plugin) return set_owner_ + " has the character room";
+        if (!room_owner_.empty() && room_owner_ != plugin) return room_owner_ + " has the character room";
+        if (multiplayer::local_throwdown_active()) return "not while a throwdown runs";
+        set_owner_ = plugin;
+        set_skater_ = skater;
+        character_room::show_set(true);
+        return {};
+    }
+    std::array<float, 3> room_place() override { return skater_animation::room_floor_spot(); }
     std::optional<RoomPose> room_pose(bool skater) override {
         if (!game_menu().open) return std::nullopt;
         const auto pose = skater_animation::preview_pose(skater);
@@ -1758,9 +2107,9 @@ public:
         if (!overlay::read_plugin_cursor(c)) return std::nullopt;
         return Cursor{c.x, c.y, c.wheel, c.left, c.right, c.middle, c.over_screen};
     }
-    std::optional<MouseMotion> mouse_motion(std::string_view plugin) override {
+    std::optional<MouseMotion> mouse_motion(std::string_view plugin, bool hold) override {
         overlay::MouseLook look;
-        const bool live = overlay::read_mouse_look(look);
+        const bool live = overlay::read_mouse_look(look, hold);
         const auto now = GetTickCount64();
         std::erase_if(mouse_readers_, [&](const auto& entry) { return now - entry.second.at > 2000; });
         for (auto& [who, reader] : mouse_readers_) {
@@ -1952,6 +2301,11 @@ public:
         return camera_shown_ ? std::string{} : camera_status_.empty() ? "waiting for the game's camera" : camera_status_;
     }
     void apply_camera(std::uintptr_t base, std::uintptr_t client, bool ready, bool phase) {
+        // A plugin's world shader only over a level in play, with no game menu open (world_shader.h); and in the
+        // replay editor, whose picture is the world, though the game counts it a menu.
+        const bool replay = base && multiplayer::replay_editor_open(base);
+        const bool in_menu = base && multiplayer::sample_game_ui_state(base).in_menu;
+        world_shader::allow(base && ((ready && !in_menu) || replay), in_menu && !replay);
         if (multiplayer::party_spectating()) {
             // Spectate has the lease now, and gives the game's camera back itself.
             camera_shown_ = camera_releasing_ = false;
@@ -1966,19 +2320,41 @@ public:
             camera_releasing_ = false;
         }
     }
+    std::string skater_surface_sound(std::string_view plugin, std::optional<std::uint32_t> word, std::uint32_t fields) override {
+        if (!surfacer_.empty() && surfacer_ != plugin) return "another plugin sets the skater's surface sound";
+        multiplayer::set_surface_sound(word.value_or(0), fields);
+        if (word) surfacer_ = std::string(plugin);
+        else surfacer_.clear();
+        return {};
+    }
     std::string freeze(std::string_view plugin, bool on) override {
         const bool before = !freezers_.empty();
         if (on) {
             if (!before && !session_noclip_allowed()) return "the host has turned noclip off";
             freezers_.insert(std::string(plugin));
         } else freezers_.erase(std::string(plugin));
+        // (A velocity the plugin was flying it at is left to run out, 300 ms at most: letting go takes
+        // the game a moment, and the skater is to leave the hold moving as it was, not stopped dead.)
         const bool now = !freezers_.empty();
+        set_noclip_hold(now);
         if (now == before) return {};
         const auto why = queue(overlay::DebugAction::set_noclip, now);
+        hold_asked_ = GetTickCount64();
         if (!why.empty() && now) freezers_.erase(std::string(plugin));
         return why;
     }
     bool frozen() const noexcept { return !freezers_.empty(); }
+    // A hold the game dropped is taken again: a teleport ends noclip ("A teleport started; flight
+    // stopped"), and so does a level's start, while the plugin still asks for the skater held. Before,
+    // a plugin that teleported the skater it held had it loose from then on, and asking again did
+    // nothing (it was held already, as far as this knew).
+    void keep_hold() {
+        if (freezers_.empty() || noclip_active()) return;
+        const auto now = GetTickCount64();
+        if (now - hold_asked_ < 250) return;
+        hold_asked_ = now;
+        (void)queue(overlay::DebugAction::set_noclip, true);
+    }
     std::vector<WornItem> outfit_worn() override {
         std::vector<WornItem> out;
         for (auto& w : worn_items::worn_outfit()) out.push_back({std::move(w.slot), std::move(w.item), std::move(w.title)});
@@ -2068,6 +2444,12 @@ public:
             screen_look::clear();
             looker_.clear();
         }
+        if (surfacer_ == plugin) {
+            multiplayer::set_surface_sound(0);
+            surfacer_.clear();
+        }
+        screen_shader::clear(plugin);
+        world_shader::clear(plugin);
         if (viewmodeler_ == plugin) {
             viewmodel::unload();
             viewmodeler_.clear();
@@ -2086,6 +2468,8 @@ public:
         }
         hide_nametags(plugin, false);
         if (room_owner_ == plugin) room_leave(plugin);
+        if (set_owner_ == plugin) (void)room_show(plugin, false, false);
+        (void)multiplayer::set_skater_copy(plugin, std::nullopt);
         if (const auto seen = telemetry_seen_.find(plugin); seen != telemetry_seen_.end()) telemetry_seen_.erase(seen);
         plugin_feed::release_tags(std::string(plugin));
         if (std::erase_if(binds_, [&](const auto& item) { return item.first.first == plugin; })) publish_binds();
@@ -2146,14 +2530,21 @@ private:
     std::vector<content::Mod> enabled_mods_;
     std::string reacher_; // the plugin holding the skater's arm (skater_reach)
     std::string poser_;   // the plugin turning the skater's joints (skater_pose)
+    std::string mounter_; // the plugin placing the whole board (board_mount)
+    std::uint64_t mount_at_{};
     std::string carrier_; // the plugin having the skater carry something (skater_carry)
     std::uint64_t carry_at_{};
     std::set<std::string, std::less<>> nametag_hiders_; // the plugins holding the nametags off (hide_nametags)
     std::string cycler_; // the plugin whose camera is in the camera height cycle (camera_cycle)
     std::uint64_t cycle_at_{};
     std::string room_owner_; // the plugin in the character room (room_open)
+    bool room_quiet_{};         // the game's interface is hidden for that room (tick_hud gives it back)
+    bool room_ui_was_hidden_{}; // as the interface was before
+    std::string set_owner_;  // the plugin that has the room's set shown without the menu (room_show)
+    bool set_skater_{};      // and whether its skater is drawn in it
     std::uint64_t pose_at_{};
     std::string looker_;  // the plugin whose look is on the screen (screen_look)
+    std::string surfacer_; // the plugin whose surface sound the local skater's sounds have
     std::string viewmodeler_; // the plugin whose viewmodel is loaded (viewmodel_load)
     std::uint64_t look_at_{};
     std::uint64_t reach_at_{};
@@ -2230,6 +2621,44 @@ private:
     static std::string reply(const std::string& answer) {
         return answer.starts_with("error") || answer.find("not") != std::string::npos ? answer : std::string{};
     }
+    std::string world_controls_text() override {
+        const auto c = local_profile_world_controls().choices;
+        std::string text;
+        const auto line = [&](std::string_view key, double value) {
+            if (value >= 0) text += std::format("{}={}\n", key, value);
+        };
+        line("fog", c.fog), line("fog_distance", c.fog_distance), line("sky_brightness", c.sky_brightness), line("clouds", c.clouds);
+        line("wind_strength", c.wind_strength), line("wind_direction", c.wind_direction);
+        for (const auto& [key, value] : c.atmosphere)
+            if (const auto* control = find_atmosphere_control(key)) text += key + "=" + atmosphere_value_text(*control, value) + "\n";
+        return text;
+    }
+    std::string set_atmosphere(const std::vector<std::pair<std::string, std::string>>& values) override {
+        for (const auto& [key, value] : values)
+            if (!set_local_atmosphere_control(key, value)) return key + " " + value + " was refused (no map, or not that value)";
+        return {};
+    }
+    std::string time_of_day_now() override {
+        static constexpr std::array<std::string_view, 8> times{"default", "morning", "noon", "afternoon", "evening", "night",
+                                                               "weatherday", "weathernight"};
+        const auto world = local_profile_world_layers();
+        if (world.map == WorldMap::none) return {};
+        unsigned forced{};
+        for (unsigned n = 1; n < times.size(); ++n) {
+            const auto prefix = std::string(world_map_key(world.map)) + "_tod_" + std::to_string(n) + "_";
+            const auto layer = std::find_if(world_layers().begin(), world_layers().end(),
+                                            [&](const auto& item) { return item.key.starts_with(prefix); });
+            if (layer == world_layers().end()) return "default";
+            const auto& choice = world.choices[static_cast<std::size_t>(layer - world_layers().begin())];
+            if (choice == "on") {
+                if (forced) return "default";
+                forced = n;
+            } else if (choice != "off") {
+                return "default";
+            }
+        }
+        return std::string(times[forced]);
+    }
     // As the console's `tod`: each map has seven time layers, "<map>_tod_<n>_<name>"; one is
     // forced on and the rest off, or all seven go back to the level's own choice.
     std::string time_of_day(std::string_view wanted) {
@@ -2264,6 +2693,7 @@ private:
     float camera_fov_{};
     bool camera_shown_{}, camera_releasing_{};
     std::set<std::string, std::less<>> freezers_;
+    ULONGLONG hold_asked_{}; // when noclip was last asked for, for a hold (keep_hold)
     std::set<std::string, std::less<>> hud_hiders_;
     bool hud_was_hidden_{};
     bool hud_shown_for_menu_{}; // the UI a plugin hid is shown for now: a game menu is up

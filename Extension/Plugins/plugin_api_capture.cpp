@@ -63,7 +63,7 @@ struct CaptureApi {
             request.most = static_cast<std::uint32_t>(number_option(L, 1, "frames", 2400, 1, 20000));
             request.seconds = number_option(L, 1, "seconds", 60, 1, 120);
         }
-        if (!within(plugin.services_.now_ms(), plugin.control_second_, plugin.controls_, 4)) return result(L, "asked more than 4 times in a second");
+        if (!within(plugin.services_.now_ms(), plugin.control_second_, plugin.controls_, Plugin::control_budget)) return result(L, "asked more than 20 times in a second");
         return result(L, game_of(plugin).capture_start(plugin.id(), request));
     }
     static int stop(lua_State* L) {
@@ -174,7 +174,8 @@ struct CaptureApi {
             lua_pop(L, 1);
         }
         lua_pop(L, 1);
-        if (!within(plugin.services_.now_ms(), plugin.files_second_, plugin.file_calls_, 64)) return result(L, "more than 64 file calls in a second");
+        if (!within(plugin.services_.now_ms(), plugin.files_second_, plugin.file_calls_, plugin.limits_.file_calls_per_second))
+            return result(L, "more than " + std::to_string(plugin.limits_.file_calls_per_second) + " file calls in a second");
         return result(L, game_of(plugin).capture_save(plugin.id(), request));
     }
 
@@ -347,7 +348,7 @@ struct CaptureApi {
                 if (items.back().empty()) luaL_argerror(L, 1, "an item's name is empty");
             }
         }
-        if (!within(plugin.services_.now_ms(), plugin.control_second_, plugin.controls_, 4)) return result(L, "asked more than 4 times in a second");
+        if (!within(plugin.services_.now_ms(), plugin.control_second_, plugin.controls_, Plugin::control_budget)) return result(L, "asked more than 20 times in a second");
         return result(L, game_of(plugin).outfit_on_top(plugin.id(), std::move(items)));
     }
     static int on_top_state(lua_State* L) {
